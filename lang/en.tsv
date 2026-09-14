@@ -12,6 +12,8 @@ byway %s — проверка окружения\n\n	byway %s — environment ch
 подключение автовыбор из %s ключей\n	connection  auto-pick out of %s keys\n
 сейчас      %s\n	now         %s\n
 xray        не запущен\n	xray        not running\n
+память      %s МБ, предел %s\n	memory      %s MB, limit %s\n
+не задан	not set
 таблица nft %s\n	nft table   %s\n
 fakeip      НЕ выдаётся на %s\n	fakeip      NOT issued for %s\n
 ПРИНЯТ\n	ACCEPTED\n
@@ -517,3 +519,5 @@ self_mark пересекается битами с mark %s -- взято %s	self
 byway возьмёт другое значение сам; задать своё: uci set byway.main.self_mark=0x400000	byway picks another value itself; to set your own: uci set byway.main.self_mark=0x400000
 резолвер задан именем, а bootstrap не задан — разрешать имя нечем, взяты поставочные адреса	the resolver is given by name, but no bootstrap is set -- there is nothing to resolve the name with, stock addresses taken
   вписать: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway	  set it: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway
+роутер сам до сайтов из списка не достаёт	the router itself cannot reach the sites on the list
+заворот своего трафика выключен: чужие качалки — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && byway plumb off && byway plumb on	routing the router's own traffic is off: other downloaders — zapret updates, your own scripts — hang on a fake address until they time out. To turn it on: uci set byway.main.router_via_vpn=1 && uci commit byway && byway plumb off && byway plumb on

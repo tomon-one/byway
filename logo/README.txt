@@ -19,7 +19,7 @@
 
 Пересобрать после правки знака:
 
-  python scripts\windows\logo-png.py
+  python3 scripts/pc/logo-png.py
 
 Вектор лежит на уровень выше и остаётся источником правды:
 
