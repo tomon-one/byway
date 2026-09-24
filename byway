@@ -99,12 +99,15 @@ set -e
 # Здесь и ниже лежит остаток третьего аудита -- стенды, панель, соседи по
 # роутеру, документация. Разбор: docs/audit/2026-09-07.md. Выйдет со следующим
 # выпуском, когда правок накопится на него.
-BYWAY_NUM="0.2.1"
+BYWAY_NUM="0.2.2"
 BYWAY_NAME="Causeway"
 BYWAY_VERSION="$BYWAY_NUM ($BYWAY_NAME)"
 # Откуда берутся обновления. Отдельной строкой, а не внутри адреса: тот,
 # кто держит свою сборку, меняет одно место.
 BYWAY_REPO="tomon-one/byway"
+# Версия Xray-core, на которой byway прогнан целиком: её ставит `byway engine
+# tested`. Та же в install.sh (XRAY_TESTED) -- править парой.
+XRAY_TESTED=26.7.28
 
 CONF=/etc/config/byway
 LISTS=/etc/byway
@@ -185,6 +188,21 @@ xray_ver_num() {
     printf '%s' "$XRAYVER"
 }
 [ -n "$XRAY" ] || XRAY=$(command -v xray || echo /usr/bin/xray)
+
+# Отказы движка, которые сами по себе человеку ничего не скажут: текст ошибки
+# Xray печатается как есть, а здесь -- что с ним делать. $1 -- вывод run -test.
+#
+# vless и trojan без TLS к публичному адресу Xray-core отвергает с 26.7.11
+# (validateOutboundTransportSecurity в infra/conf/xray.go; исключение --
+# частный адрес). byway поверх этого ничего не решает: ключ такой, какой
+# выдал сервер, и чинится он только на сервере.
+xray_hint() {
+    case "$1" in
+      *"without TLS"*)
+        warn "  Xray-core с 26.7.11 не пускает vless и trojan без TLS или reality к публичному адресу"
+        warn "  нужен ключ с security=tls или reality; без шифрования транспорта — только сервер в частной сети" ;;
+    esac
+}
 
 # Каким менеджером доставлять недостающее. apk с OpenWrt 25.12, opkg на 24.10
 # на прежних. Печатать «apk add» человеку с opkg -- значит дать команду, которая
@@ -3188,6 +3206,381 @@ cmd_update() {
     ( cd "$(dirname "$_src")" && sh install.sh )
 }
 
+# ── замена движка ──────────────────────────────────────────────────────────
+#
+# На какой вопрос отвечает: «как обновить Xray-core». update ставит только сам
+# byway, установщик кладёт движок лишь туда, где его нет, а совет «положить
+# рядом и указать путь» на роутере с 43 МБ раздела не работает: ядро весит
+# ~35 МБ, два рядом не встают (2026-09-04 раздел заняло на 100 %).
+#
+# Путь выбирается по месту на флеше:
+#   рядом -- места хватает на второе ядро: новое кладётся рядом, собирается
+#            конфиг под него, служба перезапускается один раз, старое
+#            удаляется ТОЛЬКО после того, как туннель поднялся на новом;
+#   через память -- не хватает: служба останавливается (память, которую
+#            держал движок, освобождается), новое распаковывается в /tmp и
+#            проверяется там же, и лишь потом старое уступает место на флеше.
+#            Путь назад -- архив прежней версии, скачанный ДО остановки:
+#            после неё GitHub может оказаться недоступен (он бывает в списке).
+#
+# Архив сверяется с SHA2-256 из .dgst того же выпуска. Это защита от битой
+# загрузки и подменённого посредника, а не подпись: .dgst лежит рядом с
+# архивом на том же GitHub.
+#
+# Туннель при замене падает: рядом -- на перезапуск, через память -- примерно
+# на минуту. Поэтому команда только ручная, ни сторож, ни автообновление её не
+# зовут.
+
+# Сборки XTLS на MIPS без сопроцессора не запускаются (там только hardfloat) --
+# та же функция в install.sh, править парой.
+eng_mips_nofpu() {
+    case "$(uname -m)" in mips*) ;; *) return 1 ;; esac
+    # Содержимое, а не [ -s ]: procfs отдаёт нулевой размер.
+    _ci=$(cat /proc/cpuinfo 2>/dev/null || true)
+    [ -n "$_ci" ] || return 1
+    case "$_ci" in *[Ff][Pp][Uu]*) return 1 ;; esac
+    return 0
+}
+
+# Имя файла выпуска под эту машину -- та же функция в install.sh, править
+# парой. DISTRIB_ARCH первым: uname -m на MIPS не различает порядок байтов.
+eng_asset() {
+    _da=""
+    [ -f /etc/openwrt_release ] &&
+        _da=$(sed -n "s/^DISTRIB_ARCH='\([^']*\)'.*/\1/p" /etc/openwrt_release | head -1)
+    case "$_da" in
+        aarch64*)          echo linux-arm64-v8a; return 0 ;;
+        mipsel_*)          echo linux-mips32le;  return 0 ;;
+        mips64el_*)        echo linux-mips64le;  return 0 ;;
+        mips64_*)          echo linux-mips64;    return 0 ;;
+        mips_*)            echo linux-mips32;    return 0 ;;
+        x86_64*)           echo linux-64;        return 0 ;;
+        i386*|i486*|i686*) echo linux-32;        return 0 ;;
+        riscv64*)          echo linux-riscv64;   return 0 ;;
+    esac
+    case "$(uname -m)" in
+        aarch64)          echo linux-arm64-v8a ;;
+        armv7l|armv7|arm) echo linux-arm32-v7a ;;
+        armv6l)           echo linux-arm32-v6 ;;
+        x86_64)           echo linux-64 ;;
+        i386|i486|i686)   echo linux-32 ;;
+        mips)             echo linux-mips32 ;;
+        mipsel)           echo linux-mips32le ;;
+        mips64)           echo linux-mips64 ;;
+        mips64el)         echo linux-mips64le ;;
+        riscv64)          echo linux-riscv64 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Загрузка: сперва через свой прокси-вход -- GitHub бывает в списке, а свой
+# трафик роутера без router_via_vpn до туннеля не доходит, -- потом напрямую.
+eng_dl() {   # аргументы curl как есть
+    _epx=$(u local_proxy_port); _epx=${_epx:-1603}
+    curl -fsSL -A "Mozilla/5.0" --proxy "http://127.0.0.1:$_epx" "$@" 2>/dev/null && return 0
+    curl -fsSL -A "Mozilla/5.0" "$@" 2>/dev/null
+}
+
+# Номер выпуска XTLS: stable -- releases/latest (у XTLS предвыпуском помечено
+# всё новее 26.3.27, и «latest» отдаёт мартовский), any -- самый свежий.
+eng_top() {   # 1 -- stable | any
+    if [ "$1" = stable ]; then
+        _evu=https://api.github.com/repos/XTLS/Xray-core/releases/latest
+    else
+        _evu="https://api.github.com/repos/XTLS/Xray-core/releases?per_page=1"
+    fi
+    eng_dl --max-time 25 "$_evu" |
+        sed -n 's/.*"tag_name"[^"]*"v\([^"]*\)".*/\1/p' | head -1
+}
+
+# Архив версии $1 в файл $2, со сверкой суммы. 0 -- лежит и сверен, 1 -- не
+# скачался, 2 -- сумма не сошлась или её нет. Файла при отказе не остаётся.
+eng_fetch() {   # 1 версия, 2 файл
+    _efu="https://github.com/XTLS/Xray-core/releases/download/v$1/Xray-$ENG_ASSET.zip"
+    rm -f "$2" "$2.dgst" 2>/dev/null || true
+    eng_dl --max-time 300 -o "$2" "$_efu" || { rm -f "$2" 2>/dev/null; return 1; }
+    eng_dl --max-time 30 -o "$2.dgst" "$_efu.dgst" || { rm -f "$2" "$2.dgst" 2>/dev/null; return 2; }
+    _efw=$(sed -n 's/^SHA2-256= *\([0-9a-f]\{64\}\).*/\1/p' "$2.dgst" | head -1)
+    _efg=$(sha256sum "$2" 2>/dev/null | cut -d' ' -f1)
+    rm -f "$2.dgst" 2>/dev/null || true
+    if [ -z "$_efw" ] || [ "$_efw" != "$_efg" ]; then
+        rm -f "$2" 2>/dev/null || true
+        return 2
+    fi
+    return 0
+}
+
+# Размер ядра внутри архива, байты. Пусто -- в архиве нет файла xray.
+eng_size() { unzip -l "$1" xray 2>/dev/null | awk '$NF=="xray"{print $1; exit}'; }
+
+# Ядро из архива $1 в путь $2: через временное имя, чтобы оборванная
+# распаковка не оставила под рабочим именем половину файла.
+eng_put() {   # 1 архив, 2 путь
+    rm -f "$2.new" 2>/dev/null || true
+    if unzip -p "$1" xray > "$2.new" 2>/dev/null && [ -s "$2.new" ] &&
+       chmod 755 "$2.new" && mv "$2.new" "$2"; then
+        return 0
+    fi
+    rm -f "$2.new" 2>/dev/null || true
+    return 1
+}
+
+# Самая частая причина «не скачалось» -- не сеть, а сам туннель: GitHub лежит
+# в списке, и когда туннель не работает (а менять ядро берутся как раз тогда),
+# до GitHub не достучаться ни через прокси-вход, ни напрямую -- резолвер
+# отдаёт подставной адрес. Снятая обвязка возвращает роутеру настоящий DNS;
+# перезапуск службы в ходе замены её поднимет обратно сам.
+eng_nonet() {
+    warn "  если GitHub в списке, а туннель не работает: byway plumb off — и повторить"
+    warn "  замена сама вернёт обвязку; если отказаться — вернуть: byway plumb on"
+}
+
+eng_free_kb() {   # свободно на разделе, где лежит /usr/local/bin, КБ
+    df -k /usr/local/bin 2>/dev/null | awk 'NR==2{print $4}'
+}
+eng_mem_kb() { awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null; }
+
+# Конфиг под движок $1 -- тем же cmd_gen, что и всегда: развилки по версии
+# (xray_ver_num) срабатывают на НОВОМ движке, и он же проверяет итог.
+eng_gen() {   # 1 путь к движку
+    ( XRAY=$1; XRAYVER=""; cmd_gen ) > "$_ed/gen.log" 2>&1
+}
+
+# Без выхода по set -e: на пути «через память» отказ здесь случается при
+# остановленной службе, и выход оставил бы дом без туннеля.
+eng_bin_set() {   # 1 путь
+    if ! { uci set byway.main.xray_bin="$1" && uci commit byway; } 2>/dev/null; then
+        warnf "путь к движку не записался в настройки: uci set byway.main.xray_bin=%s && uci commit byway" "$1"
+    fi
+    return 0
+}
+
+# Дождаться туннеля. 150 секунд -- тот же бюджет, что у автоотката
+# обновления: обвязку после старта поднимает фоновый цикл службы, и ему нужно
+# до ~65 с сверх запуска движка.
+eng_wait() {
+    for _ew in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+        sleep 10
+        alive_ok && return 0
+    done
+    return 1
+}
+
+cmd_engine() {
+    command -v unzip >/dev/null 2>&1 ||
+        dief "нет unzip — поставить: %s unzip" "$PKG_FIX"
+    command -v sha256sum >/dev/null 2>&1 ||
+        die "нет sha256sum — сверить архив нечем, замена не начата"
+    if eng_mips_nofpu; then
+        die "на этом процессоре сборки Xray-core с GitHub не запускаются — движок обновляется пакетом xray-core из фида"
+    fi
+    ENG_ASSET=$(eng_asset) ||
+        dief "неизвестно, какой файл выпуска брать для %s" "$(uname -m)"
+    _eold=$XRAY
+    _eov=""
+    [ -n "$_eold" ] && [ -x "$_eold" ] &&
+        _eov=$("$_eold" version 2>/dev/null | head -1 | awk '{print $2}' | tr -cd '0-9.')
+
+    _earg=${1:-}
+    case "$_earg" in
+      ''|--check)
+        if [ -n "$_eov" ]; then sayf "движок: Xray %s — %s" "$_eov" "$_eold"
+        else warn "движок не указан или не запускается (byway.main.xray_bin)"; fi
+        sayf "проверенная с byway: %s" "$XRAY_TESTED"
+        _env=$(eng_top any || true)
+        _esv=$(eng_top stable || true)
+        if [ -n "$_env" ]; then
+            sayf "самая свежая у XTLS: %s, стабильная: %s" "$_env" "${_esv:-?}"
+        else
+            warn "GitHub не ответил — свежую версию узнать не удалось"
+            eng_nonet
+        fi
+        _efk=$(eng_free_kb || echo 0); _emk=$(eng_mem_kb || echo 0)
+        sayf "на флеше свободно %s МБ, памяти доступно %s МБ" \
+            "$(( ${_efk:-0} / 1024 ))" "$(( ${_emk:-0} / 1024 ))"
+        say "  поставить: byway engine ВЕРСИЯ | tested | newest | stable"
+        return 0 ;;
+      tested) _env=$XRAY_TESTED ;;
+      newest) _env=$(eng_top any || true)
+              [ -n "$_env" ] || die "GitHub не ответил — номер свежей версии неизвестен, ничего не тронуто" ;;
+      stable) _env=$(eng_top stable || true)
+              [ -n "$_env" ] || die "GitHub не ответил — номер свежей версии неизвестен, ничего не тронуто" ;;
+      *)      _env=$_earg ;;
+    esac
+    case "$_env" in
+      *[!0-9.]*|.*|*.) dief "непонятная версия «%s» — нужен номер вида 26.9.9 либо tested, newest, stable" "$_earg" ;;
+    esac
+    [ "$_env" != "$_eov" ] || { sayf "стоит уже %s — менять нечего" "$_env"; return 0; }
+    [ -n "$_eov" ] ||
+        die "прежний движок не определился — ставить установщиком byway, а не заменой"
+
+    _enew=/usr/local/bin/xray-$_env
+    _elk=/var/run/byway-engine.lock
+    take_lock "$_elk" "$(_t 'замена движка')" || die "замена движка уже идёт"
+    _ed=/tmp/byway-engine.$$
+    rm -rf "$_ed" 2>/dev/null || true
+    mkdir -p "$_ed"
+    trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT INT TERM
+
+    # Архив в память: ~14 МБ. Меньше 40 МБ доступно -- живой движок рядом с
+    # архивом рискует OOM, а он и есть туннель дома.
+    _emk=$(eng_mem_kb || echo 0)
+    [ "${_emk:-0}" -ge 40960 ] ||
+        dief "памяти доступно %s МБ, для замены нужно не меньше 40 — ничего не тронуто" "$(( ${_emk:-0} / 1024 ))"
+
+    sayf "загрузка Xray-core %s (%s)" "$_env" "$ENG_ASSET"
+    _erc=0; eng_fetch "$_env" "$_ed/new.zip" || _erc=$?
+    case "$_erc" in
+      0) ;;
+      1) eng_nonet
+         dief "архив %s не скачался — ничего не тронуто" "$_env" ;;
+      *) dief "архив %s не сошёлся с суммой SHA2-256 из .dgst выпуска — отброшен, ничего не тронуто" "$_env" ;;
+    esac
+    _esz=$(eng_size "$_ed/new.zip")
+    [ -n "$_esz" ] || die "в архиве нет файла xray — ничего не тронуто"
+    say "архив сверен с суммой из выпуска"
+
+    # Рядом -- если на флеше есть весь размер ядра и 5 МБ сверху. Сжатие
+    # ubifs не угадать заранее, поэтому меряется по несжатому.
+    _efree=$(eng_free_kb || echo 0)
+    if [ "$(( ${_efree:-0} * 1024 ))" -ge "$(( _esz + 5242880 ))" ]; then
+        eng_side
+    else
+        eng_ram
+    fi
+}
+
+# Путь «рядом». Прежний движок не трогается до конца: откат -- вернуть путь.
+eng_side() {
+    say "места хватает — новое ядро кладётся рядом с прежним"
+    eng_put "$_ed/new.zip" "$_enew" || die "ядро не распаковалось на флеш — ничего не тронуто"
+    rm -f "$_ed/new.zip" 2>/dev/null || true
+    if ! "$_enew" version >/dev/null 2>&1; then
+        rm -f "$_enew" 2>/dev/null || true
+        die "новое ядро не запускается на этом железе — удалено, работает прежнее"
+    fi
+    if ! eng_gen "$_enew"; then
+        tail -6 "$_ed/gen.log" | sed 's/^/    /'
+        rm -f "$_enew" 2>/dev/null || true
+        eng_gen "$_eold" || true
+        die "новый движок не принял конфиг — удалён, работает прежний"
+    fi
+    eng_bin_set "$_enew"
+    warn "перезапуск службы: туннель пропадёт на несколько секунд"
+    /etc/init.d/byway restart >/dev/null 2>&1 || true
+    say "проверка туннеля на новом движке (до 2,5 минуты)"
+    if eng_wait; then
+        # Прежний удаляется, только если он наш: /usr/bin/xray -- файл пакета,
+        # и снос его в обход менеджера оставил бы пакет с дырой.
+        case "$_eold" in
+          /usr/local/bin/xray-*) rm -f "$_eold" 2>/dev/null || true
+                                 sayf "прежний движок удалён: %s" "$_eold" ;;
+          *) sayf "прежний движок %s — из пакета, оставлен; снять можно пакетным менеджером" "$_eold" ;;
+        esac
+        logf 'движок заменён: %s -> %s' "$_eov" "$_env"
+        sayf "готово: Xray %s, на флеше свободно %s МБ" "$_env" "$(( $(eng_free_kb || echo 0) / 1024 ))"
+        return 0
+    fi
+    warn "туннель на новом движке не поднялся — возврат прежнего"
+    eng_bin_set "$_eold"
+    eng_gen "$_eold" || true
+    /etc/init.d/byway restart >/dev/null 2>&1 || true
+    rm -f "$_enew" 2>/dev/null || true
+    logf 'движок: %s не поднялся, возвращён %s' "$_env" "$_eov"
+    dief "возвращён %s; новое ядро удалено" "$_eov"
+}
+
+# Путь «через память». После остановки службы -- никаких die: любой отказ
+# обязан кончаться запуском службы, иначе дом остаётся без туннеля.
+eng_ram() {
+    case "$_eold" in
+      /usr/local/bin/xray-*) ;;
+      *) dief "места на второе ядро нет, а прежнее (%s) — из пакета; снять пакет самому и поставить заново: byway engine %s" "$_eold" "$_env" ;;
+    esac
+    sayf "места на второе ядро нет (свободно %s МБ) — замена через память" "$(( ${_efree:-0} / 1024 ))"
+    # Путь назад -- архив прежней версии, и он берётся СЕЙЧАС, пока туннель
+    # жив. Нет его -- замена не начинается.
+    sayf "загрузка прежней версии %s — путь назад" "$_eov"
+    _erc=0; eng_fetch "$_eov" "$_ed/old.zip" || _erc=$?
+    [ "$_erc" = 0 ] ||
+        dief "архив прежней версии %s не получен — без пути назад замена не начата" "$_eov"
+
+    warn "остановка службы: туннель пропадёт примерно на минуту"
+    /etc/init.d/byway stop >/dev/null 2>&1 || true
+    # Сторож не должен «чинить» остановленную службу посреди замены. Метку
+    # снимает plumb on при запуске.
+    : > "$PLUMB_DOWN" 2>/dev/null || true
+    sleep 2
+    _emk=$(eng_mem_kb || echo 0)
+    if [ "$(( ${_emk:-0} * 1024 ))" -lt "$(( _esz + 20971520 ))" ]; then
+        warnf "памяти после остановки мало: %s МБ" "$(( ${_emk:-0} / 1024 ))"
+        eng_ram_back
+    fi
+    _etmp=$_ed/xray
+    if ! unzip -p "$_ed/new.zip" xray > "$_etmp" 2>/dev/null || ! chmod 755 "$_etmp" ||
+       ! "$_etmp" version >/dev/null 2>&1; then
+        warn "новое ядро не распаковалось или не запускается"
+        eng_ram_back
+    fi
+    rm -f "$_ed/new.zip" 2>/dev/null || true
+    if ! eng_gen "$_etmp"; then
+        tail -6 "$_ed/gen.log" | sed 's/^/    /'
+        eng_gen "$_eold" || true
+        warn "новый движок не принял конфиг"
+        eng_ram_back
+    fi
+    # Точка невозврата: прежнее ядро уступает место.
+    rm -f "$_eold" 2>/dev/null || true
+    if ! cp "$_etmp" "$_enew.new" 2>/dev/null || ! chmod 755 "$_enew.new" ||
+       ! mv "$_enew.new" "$_enew"; then
+        rm -f "$_enew.new" "$_enew" 2>/dev/null || true
+        warn "новое ядро не легло на флеш"
+        eng_ram_restore
+    fi
+    rm -f "$_etmp" 2>/dev/null || true
+    eng_bin_set "$_enew"
+    /etc/init.d/byway start >/dev/null 2>&1 || true
+    say "проверка туннеля на новом движке (до 2,5 минуты)"
+    if eng_wait; then
+        rm -f "$_ed/old.zip" 2>/dev/null || true
+        logf 'движок заменён: %s -> %s' "$_eov" "$_env"
+        sayf "готово: Xray %s, на флеше свободно %s МБ" "$_env" "$(( $(eng_free_kb || echo 0) / 1024 ))"
+        return 0
+    fi
+    /etc/init.d/byway stop >/dev/null 2>&1 || true
+    rm -f "$_enew" 2>/dev/null || true
+    warn "туннель на новом движке не поднялся"
+    eng_ram_restore
+}
+
+# Отказ ДО удаления прежнего ядра: оно на месте, достаточно запустить.
+eng_ram_back() {
+    /etc/init.d/byway start >/dev/null 2>&1 || true
+    die "служба запущена с прежним движком — ничего не заменено"
+}
+
+# Отказ ПОСЛЕ удаления: прежнее ядро -- из архива, скачанного до остановки.
+eng_ram_restore() {
+    sayf "возврат %s из архива" "$_eov"
+    if eng_put "$_ed/old.zip" "$_eold"; then
+        eng_bin_set "$_eold"
+        eng_gen "$_eold" || true
+        /etc/init.d/byway start >/dev/null 2>&1 || true
+        logf 'движок: %s не встал, возвращён %s' "$_env" "$_eov"
+        dief "возвращён %s" "$_eov"
+    fi
+    # Сюда -- только если флеш не принял и прежнее ядро. Службу всё равно
+    # запускаем: без движка она не поднимется, но и dnsmasq не останется
+    # смотреть в мёртвый порт -- обвязку без движка plumb не ставит.
+    /etc/init.d/byway start >/dev/null 2>&1 || true
+    # Архив прежнего -- единственное, что осталось: ловушка его не трогает.
+    trap - EXIT INT TERM
+    rm -rf "$_elk" 2>/dev/null || true
+    logf 'движок: НИ НОВОЕ, НИ ПРЕЖНЕЕ ядро не легло на флеш -- туннеля нет'
+    dief "ни новое, ни прежнее ядро не легло на флеш — туннеля нет. Архив прежнего: %s (в памяти, до перезагрузки); поставить: unzip -p %s xray > %s && chmod 755 %s && /etc/init.d/byway start" \
+        "$_ed/old.zip" "$_ed/old.zip" "$_eold" "$_eold"
+}
+
 # ── отчёт для обращения ────────────────────────────────────────────────────
 #
 # На какой вопрос отвечает: «приложи вывод» -- и человек не знает, чего именно
@@ -3697,7 +4090,9 @@ PROBE
     printf '  %-12s %-22s ' "$N_TYPE/$N_SEC" "$N_HOST:$N_PORT"
     if ! "$XRAY" run -test -c "$CFG" >/dev/null 2>&1; then
         printf "$(_t 'конфиг отвергнут ядром\n')"
-        "$XRAY" run -test -c "$CFG" 2>&1 | tail -2 | sed 's/^/      /'
+        _e=$("$XRAY" run -test -c "$CFG" 2>&1 || true)
+        printf '%s\n' "$_e" | tail -2 | sed 's/^/      /'
+        xray_hint "$_e"
         return 1
     fi
     "$XRAY" run -c "$CFG" > "$LOG" 2>&1 &
@@ -3728,7 +4123,7 @@ PROBE
 cmd_gen() {
     # Замок на время сборки. Панель и cron могут позвать gen одновременно, а
     # черновик у них один: в конфиг попадал бы наполовину записанный JSON.
-    _lock=/tmp/byway-gen.lock
+    _lock=/var/run/byway-gen.lock
     take_lock "$_lock" сборка || die "сборка не освободилась за 30 секунд"
     # Ловушку ставим на номер СВОЕГО процесса. Без проверки её снимала бы
     # любая подстановка $( ) и любая подоболочка: ash выполняет EXIT-ловушку
@@ -3766,7 +4161,7 @@ cmd_gen() {
         _rlb=$(uci -q get "byway.$_rn.label" || true)
         _rf=$ROUTES_DIR/$_rn.lst
         if [ ! -s "$_rf" ]; then
-            warnf "направление «%s»: список %s пуст, пропускаю" "$_rn" "$_rf"
+            warnf "направление «%s»: список %s пуст, пропущено" "$_rn" "$_rf"
             continue
         fi
         _rurl=$(route_key "$_rlb" || true)
@@ -3777,7 +4172,7 @@ cmd_gen() {
         # Подоболочка: один негодный ключ не должен уносить с собой сборку
         # целиком -- у остальных направлений и главного ключа своя жизнь.
         if ! ( parse_node "$_rurl" >/dev/null 2>&1 ); then
-            warnf "направление «%s»: ключ не разбирается, пропускаю" "$_rn"
+            warnf "направление «%s»: ключ не разбирается, пропущено" "$_rn"
             continue
         fi
         parse_node "$_rurl" >/dev/null 2>&1
@@ -3993,6 +4388,23 @@ $_rs
     # которые и уходит неопознанный пакет. Пусто, когда заворот выключен.
     SELFSO=""
     [ "$(u router_via_vpn)" = "1" ] && SELFSO=", \"streamSettings\": { \"sockopt\": { \"mark\": $(self_mark_dec) } }"
+    # Как direct превращает домен в адрес. С 26.9.8 место этому -- в sockopt,
+    # а freedom.domainStrategy движок переносит туда сам с предупреждением
+    # «deprecated and will be removed» (infra/conf/xray.go). Удалят -- поле
+    # отбросится МОЛЧА, run -test примет, и direct начнёт отдавать домен
+    # системному резолверу, то есть dnsmasq, то есть обратно нам же. Старым
+    # движкам sockopt.domainStrategy на freedom не заменял его собственного
+    # поля, поэтому развилка, а не одна форма на всех.
+    xray_ver_num >/dev/null
+    DIRECT_SET=", \"settings\": { \"domainStrategy\": \"UseIP\" }"
+    _dso=""
+    if [ "$XRAYVER" -ge 260908 ]; then
+        DIRECT_SET=""
+        _dso="\"domainStrategy\": \"UseIP\""
+    fi
+    [ "$(u router_via_vpn)" = "1" ] && _dso="${_dso:+$_dso, }\"mark\": $(self_mark_dec)"
+    DIRECTSO=""
+    [ -n "$_dso" ] && DIRECTSO=", \"streamSettings\": { \"sockopt\": { $_dso } }"
     RD_PORT=$(redir_port "конфига движка")
     # Вход односемейным быть не может, пока в цепочке output стоит правило
     # для fakeip6: ядро для локально порождённого пакета подставляет ::1, и
@@ -4257,7 +4669,7 @@ HEAD
 
   "outbounds": [
 $PROXIES,$ROUTE_OUT
-    { "tag": "direct", "protocol": "freedom", "settings": { "domainStrategy": "UseIP" }$SELFSO },
+    { "tag": "direct", "protocol": "freedom"$DIRECT_SET$DIRECTSO },
     { "tag": "dns-out", "protocol": "dns"$SELFSO },
     { "tag": "block", "protocol": "blackhole" }
   ],
@@ -4449,6 +4861,7 @@ END
     else
         warnf "движок отверг конфиг, черновик остался в %s:" "$TMP"
         printf '%s\n' "$_test" | tail -5 | sed 's/^/    /'
+        xray_hint "$_test"
         rm -rf "$_lock" 2>/dev/null || true
         exit 1
     fi
@@ -4641,14 +5054,18 @@ set_elements() {
 # Общий для сборки и для обвязки. У сборки замок был с самого начала, у
 # обвязки не было вовсе, хотя хозяев у неё пятеро: служба при старте, её же
 # фоновый цикл попыток, reload от procd, сторож из cron и человек в консоли.
-# ⚠️ Замок лежит в /tmp, а /tmp на роутере общий: писать туда может не только
-# root, и первым делом -- dnsmasq, самая вероятная точка входа снаружи. Чужой
-# процесс, создавший каталог замка и держащий живой pid, запирает нас навсегда:
-# сборка конфига не идёт, обвязка не поднимается, а stop_service из-за этого не
-# возвращает dnsmasq провайдеру -- дом остаётся с резолвером в мёртвый порт.
+# ⚠️ Замки лежат в /var/run, а не в /tmp. /tmp на роутере общий (1777): писать
+# туда может не только root, и первым делом -- dnsmasq, самая вероятная точка
+# входа снаружи. Чужой процесс, создавший каталог замка и держащий живой pid,
+# запирал бы нас навсегда: сборка конфига не идёт, обвязка не поднимается, а
+# stop_service из-за этого не возвращает dnsmasq провайдеру -- дом остаётся с
+# резолвером в мёртвый порт. /var/run (на OpenWrt -- /tmp/run) принадлежит root
+# с правами 755: dnsmasq, ntpd и прочие со своими пользователями создать там
+# ничего не могут. Проверено на 25.12, 2026-09-24.
 #
-# Поэтому проверяем не только ЖИВОСТЬ владельца, но и то, что каталог наш: у
-# чужого владельца забираем силой и говорим вслух. Владелец определяется по
+# Проверка владельца ниже при этом остаётся: она дешёвая, а замок от прежней
+# версии byway мог остаться и в /tmp по старому пути -- тот уже никому не
+# мешает. Чужой каталог -- забираем силой и говорим вслух. Владелец определяется по
 # файлу внутри, а не по правам каталога: busybox stat есть не везде.
 take_lock() {   # путь замка, о чём говорить человеку
     if ! mkdir "$1" 2>/dev/null; then
@@ -4656,7 +5073,7 @@ take_lock() {   # путь замка, о чём говорить человек
         # Замок без нашей метки -- чужой. Не ждём его: он может не уйти
         # никогда, а цена ожидания -- дом без резолвера.
         if [ ! -f "$1/byway" ]; then
-            warnf "замок «%s» занят не нами -- забираю" "$2"
+            warnf "замок «%s» занят не нами -- забран" "$2"
             rm -rf "$1" 2>/dev/null || true
             mkdir "$1" 2>/dev/null || return 1
             : > "$1/byway" 2>/dev/null || true
@@ -5568,9 +5985,9 @@ cmd_plumb() {
     # Не die, а return: cmd_plumb зовут из cmd_watch через `if`, а die делает
     # exit -- занятый замок обрывал бы весь прогон сторожа вместе с учётом
     # журналов и обновлением списков.
-    _plock=/tmp/byway-plumb.lock
+    _plock=/var/run/byway-plumb.lock
     take_lock "$_plock" обвязка || {
-        warn "обвязка занята другим прогоном -- пропускаю"
+        warn "обвязка занята другим прогоном -- пропущено"
         return 1
     }
     trap 'rm -rf "$_plock" 2>/dev/null; true' EXIT INT TERM
@@ -6043,7 +6460,9 @@ CHK
         return 0
     fi
     printf "$(_t 'ОТВЕРГНУТ\n')"
-    "$XRAY" run -test -c "$CFG" 2>&1 | tail -1 | sed 's/.*> /    /'
+    _e=$("$XRAY" run -test -c "$CFG" 2>&1 || true)
+    printf '%s\n' "$_e" | tail -1 | sed 's/.*> /    /'
+    xray_hint "$_e"
     : > "$CFG"
     return 1
 }
@@ -6866,6 +7285,7 @@ case "${1:-}" in
   export) shift; cmd_export "$@" ;;
   report) shift; cmd_report "$@" ;;
   update) shift; cmd_update "$@" ;;
+  engine) shift; cmd_engine "$@" ;;
   clear)  shift; cmd_clear "$@" ;;
   import) shift; cmd_import "$@" ;;
   version|--version|-v) echo "byway $BYWAY_VERSION" ;;
@@ -6899,6 +7319,7 @@ case "${1:-}" in
     _help 'presets' 'обновить готовые списки'
     _help 'top [N]' 'чем реально пользуются'
     _help 'update [--check|--force]' 'посмотреть, есть ли новая версия, и поставить её; --force ставит и ту же'
+    _help 'engine [ВЕРСИЯ|tested|newest|stable]' 'версия движка Xray-core и её замена; без аргумента — что стоит и что есть'
     _help 'report [файл]' 'собрать отчёт для обращения, без ключа от VPN'
     _help 'export [файл]' 'выгрузить настройки; --no-key — без ключа от VPN'
     _help 'import ФАЙЛ' 'принять настройки из выгрузки'

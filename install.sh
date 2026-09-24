@@ -57,6 +57,10 @@ t() {
     [ "$LANG_EN" = 1 ] || { printf %s "$1"; return 0; }
     case "$1" in
       "── Проверка окружения ──") printf %s "── Checking the environment ──" ;;
+      "сумма выпуска (.dgst) не получена — архив отброшен") printf %s "the release sum (.dgst) was not obtained — archive discarded" ;;
+      "архив не сошёлся с суммой SHA2-256 из выпуска — отброшен") printf %s "the archive does not match the SHA2-256 sum from the release — discarded" ;;
+      "архив сверен с суммой из выпуска") printf %s "archive matches the sum from the release" ;;
+      "нет sha256sum — архив движка не сверен с суммой выпуска") printf %s "no sha256sum — the core archive is not checked against the release sum" ;;
       "-- по умолчанию:") printf %s "-- default:" ;;
       "── Установка ──") printf %s "── Installing ──" ;;
       "── Готово ──") printf %s "── Done ──" ;;
@@ -183,7 +187,7 @@ FATAL=0   # непоправимое: система не того поколе�
 # а не «последняя»: установщик и файлы, которые он кладёт, обязаны быть одного
 # тега, иначе панель окажется новее программы или наоборот.
 REPO=tomon-one/byway
-VER=0.2.1
+VER=0.2.2
 # Версия движка, на которой byway проверялся целиком -- на живом роутере, с
 # поднятым туннелем и реальным трафиком. Правится вместе с выпуском: протухшая
 # «проверенная» хуже её отсутствия.
@@ -193,6 +197,7 @@ VER=0.2.1
 # подряд с pre=true), поэтому `releases/latest` отдаёт мартовский стабильный.
 # Отсюда и два разных варианта в вопросе: «самый свежий» и «стабильный» у
 # Xray -- это РАЗНЫЕ вещи, и человек должен выбирать зная это.
+# Та же версия -- в byway (XRAY_TESTED, для `byway engine tested`): править парой.
 XRAY_TESTED=26.7.28
 
 # Стояла ли программа ДО этого запуска. Спрашиваем сейчас, потому что после
@@ -777,9 +782,27 @@ xray_from_github() {
     _z=/tmp/xray.$$.zip
     rm -f "$_z" 2>/dev/null || true
     sayf "установка Xray-core %s (%s)" "$_ver" "$_as"
-    dl --max-time 300 -o "$_z" \
-       "$(gh "https://github.com/XTLS/Xray-core/releases/download/v$_ver/Xray-$_as.zip")" ||
+    _zu="https://github.com/XTLS/Xray-core/releases/download/v$_ver/Xray-$_as.zip"
+    dl --max-time 300 -o "$_z" "$(gh "$_zu")" ||
         { warn "не скачался"; rm -f "$_z"; return 1; }
+    # Сверка с SHA2-256 из .dgst того же выпуска: от битой загрузки и от
+    # посредника, отдавшего не то, -- а зеркало gh-proxy здесь ЧУЖОЕ. Не
+    # подпись: .dgst лежит рядом с архивом. Нет sha256sum -- ставим как
+    # раньше, но говорим вслух: отказ в установке тут хуже непроверенного.
+    if command -v sha256sum >/dev/null 2>&1; then
+        _zw=$(dl --max-time 30 "$(gh "$_zu.dgst")" |
+              sed -n 's/^SHA2-256= *\([0-9a-f]\{64\}\).*/\1/p' | head -1)
+        _zg=$(sha256sum "$_z" 2>/dev/null | cut -d' ' -f1)
+        if [ -z "$_zw" ]; then
+            warn "сумма выпуска (.dgst) не получена — архив отброшен"; rm -f "$_z"; return 1
+        fi
+        if [ "$_zw" != "$_zg" ]; then
+            warn "архив не сошёлся с суммой SHA2-256 из выпуска — отброшен"; rm -f "$_z"; return 1
+        fi
+        say "архив сверен с суммой из выпуска"
+    else
+        warn "нет sha256sum — архив движка не сверен с суммой выпуска"
+    fi
 
     mkdir -p /usr/local/bin
     # Убираем и обломок: unzip мог успеть записать часть файла, а это

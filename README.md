@@ -18,7 +18,7 @@
 
 > ### ⚠️ Прочитайте до установки
 >
-> **Версия 0.2.1.** byway каждый день работает на
+> **Версия 0.2.2.** byway каждый день работает на
 > одном роутере: 1500 доменов, 300 подсетей, семья, которая сразу замечает
 > поломку. Но всё ещё на **одном** — другого железа у автора не было.
 >
@@ -157,7 +157,7 @@ byway хуже честного отказа.
 **Способ 1 — одной строкой:**
 
 ```sh
-sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.2.1/install.sh)"
+sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.2.2/install.sh)"
 ```
 
 **Способ 2 — через зеркало,** если `raw.githubusercontent.com` недоступен.
@@ -168,7 +168,7 @@ root — берите архив третьим способом и читайт
 
 ```sh
 wget -T 10 -O /tmp/byway-install.sh \
-  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.2.1/install.sh" \
+  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.2.2/install.sh" \
   && sh /tmp/byway-install.sh
 ```
 
@@ -176,8 +176,8 @@ wget -T 10 -O /tmp/byway-install.sh \
 
 ```sh
 cd /tmp
-wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.2.1.tar.gz
-tar xzf byway.tar.gz && cd byway-0.2.1
+wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.2.2.tar.gz
+tar xzf byway.tar.gz && cd byway-0.2.2
 sh install.sh
 ```
 
@@ -408,6 +408,7 @@ dnsmasq → DNS-вход Xray-core → подставной адрес для д
 | `byway presets` | обновить готовые списки |
 | `byway top [N]` | чем реально пользуются |
 | `byway update [--check]` | посмотреть, есть ли новая версия, и поставить её |
+| `byway engine [ВЕРСИЯ]` | версия ядра Xray-core и её замена |
 | `byway report [файл]` | отчёт для обращения: состояние и диагностика, без ключа |
 | `byway export [файл]` | выгрузить настройки; `--no-key` — без ключа |
 | `byway import ФАЙЛ` | принять настройки из выгрузки |
@@ -443,7 +444,7 @@ byway update --force     # переставить ту же версию зан�
 
 ```sh
 sh -c "$(curl -fsSL --proxy http://127.0.0.1:1603 \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.2.1/install.sh)"
+  https://raw.githubusercontent.com/tomon-one/byway/v0.2.2/install.sh)"
 ```
 
 **Проверка версии и установка — разные вещи, и следят они по-разному.**
@@ -511,43 +512,36 @@ Xray-core, собранный softfloat, и работает — установ�
 `mipsel_24kc`.
 
 **Стоит держать свежее ядро.** Xray-core развивается быстро: чинят транспорты,
-добавляют новые. Если в фиде версия старая, бинарник кладут рядом руками и
-указывают путь.
+добавляют новые. Версия меняется одной командой:
+
+```sh
+byway engine              # что стоит, что проверено с byway, что есть у XTLS
+byway engine 26.9.9       # поставить эту версию
+byway engine tested       # версия, на которой byway прогнан целиком
+byway engine newest       # самая свежая, включая предвыпуски
+```
+
+Архив сверяется с суммой SHA2-256 из выпуска. Хватает места на второе ядро —
+новое кладётся рядом, а прежнее удаляется только после того, как туннель
+поднялся на новом. Не хватает (у роутера с 40 МБ под изменения — обычное
+дело) — замена идёт через память: туннель пропадает примерно на минуту, а путь
+назад — архив прежней версии, скачанный заранее. Не поднялся туннель на новом
+ядре — прежнее возвращается само.
+
+`byway update` ядро не трогает: он обновляет только byway.
+
+**На MIPS без блока дробных вычислений** `byway engine` откажет: сборки XTLS
+там не запускаются. Движок обновляется пакетом — `apk upgrade xray-core` либо
+`opkg upgrade xray-core`.
 
 **Если после обновления ядра перестал собираться конфиг** — byway проверяет
 каждую сборку самим движком, поэтому несовместимость не проходит молча: конфиг
-не заменяется, работает прежний. Так уже было с транспортами `h2` и `quic`:
-движок их больше не принимает и отвечает, что они «removed and migrated to
-XHTTP». Что делать:
-
-```sh
-V=26.7.28                       # версия, на которой работало
-A=Xray-linux-arm64-v8a.zip      # см. ниже, как узнать свою
-wget -O /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/v$V/$A"
-unzip -o /tmp/xray.zip xray -d /usr/local/bin && rm -f /tmp/xray.zip
-mv /usr/local/bin/xray "/usr/local/bin/xray-$V" && chmod 755 "/usr/local/bin/xray-$V"
-uci set byway.main.xray_bin="/usr/local/bin/xray-$V" && uci commit byway
-/etc/init.d/byway restart
-```
-
-Архив качается **в память** (`/tmp`), а не на флеш: рядом с распакованным
-бинарником он занял бы место, которого у роутера может не быть.
-
-Имя архива — под вашу архитектуру: `arm64-v8a`, `arm32-v7a`, `mips32`,
-`mips32le`, `mips64le`, `64`, `32` (полный список — в файлах выпуска Xray-core).
-Узнать свою:
-
-```sh
-sed -n "s/^DISTRIB_ARCH='\([^']*\)'.*/\1/p" /etc/openwrt_release
-```
-
-⚠️ **Не `uname -m`:** на MIPS он отвечает `mips` и для прямого порядка байтов,
-и для обратного, а сборки Xray-core для них разные — взятая наугад просто не
-запустится. Прошивка знает точнее, и byway спрашивает именно её. **На MIPS без
-блока дробных вычислений этот рецепт не сработает вовсе** — там движок берут
-из фида: `apk add xray-core` либо `opkg install xray-core`. **Два ядра рядом помещаются не
-всегда:** бинарник весит около 18 МБ на флеше, старое лучше удалить сразу
-после того, как новое заработало.
+не заменяется, работает прежний, а `byway engine` в таком случае прежнее ядро и
+оставляет. Так уже было с транспортами `h2` и `quic`: движок их больше не
+принимает и отвечает, что они «removed and migrated to XHTTP». С 26.7.11
+Xray-core не пускает и vless или trojan без TLS либо reality к публичному
+адресу — byway говорит об этом прямо. Вернуться на версию, на которой
+работало: `byway engine 26.7.28`.
 
 И [напишите об этом](https://github.com/tomon-one/byway/issues): если ядро
 изменило то, что byway генерирует, это чинится в byway, а не обходится каждым
@@ -570,7 +564,7 @@ DRY_RUN=1 byway-uninstall    # показать, что было бы сдела
 
 ```sh
 wget -O /tmp/byway-uninstall \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.2.1/uninstall.sh
+  https://raw.githubusercontent.com/tomon-one/byway/v0.2.2/uninstall.sh
 sh /tmp/byway-uninstall
 ```
 

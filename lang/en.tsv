@@ -339,9 +339,9 @@ kill switch: dnsmasq не принял список, домены осталис
 убрать файл, если направление удалено	remove the file if the route is gone
 наполнить список -- пустое направление не делает ничего	fill the list -- an empty route does nothing
 направление «%s» ведёт в «%s»	route «%s» leads to «%s»
-направление «%s»: список %s пуст, пропускаю	route «%s»: the list %s is empty, skipping
+направление «%s»: список %s пуст, пропущено	route «%s»: the list %s is empty, skipping
 направление «%s»: ключа с меткой «%s» среди добавленных нет	route «%s»: none of the added keys is labelled «%s»
-направление «%s»: ключ не разбирается, пропускаю	route «%s»: the key does not parse, skipping
+направление «%s»: ключ не разбирается, пропущено	route «%s»: the key does not parse, skipping
 направлений со своим выходом: %s	routes with their own exit: %s
 есть	yes
 провайдер	ISP
@@ -360,7 +360,7 @@ IPv6 поднят, а перехват только по IPv4	IPv6 is up, interc
 включить обратно или убрать файл из /etc/byway/presets	switch it back on, or remove the file from /etc/byway/presets
 замок «%s» остался от прерванного прогона -- снят	the "%s" lock is left over from an interrupted run -- releasing it
 %s уже идёт -- ожидание	%s is already running -- waiting
-обвязка занята другим прогоном -- пропускаю	the plumbing is busy with another run -- skipping
+обвязка занята другим прогоном -- пропущено	the plumbing is busy with another run -- skipping
 метка сменилась (%s -> %s) — переписываю правило firewall	the mark has changed (%s -> %s) — rewriting the firewall rule
   подсетей: %s	  subnets: %s
 своих подсетей	own subnets
@@ -424,7 +424,7 @@ byway не поднимется ни сейчас, ни после переза�
 переложить правила: byway plumb off && byway plumb on	reapply the rules: byway plumb off && byway plumb on
 уровень журнала «%s» не годится, взят warning	log level "%s" is not usable, falling back to warning
 клиент со своим DNS проходит мимо туннеля	a client with its own DNS bypasses the tunnel
-замок «%s» занят не нами -- забираю	lock "%s" is held by someone else -- taking it over
+замок «%s» занят не нами -- забран	lock "%s" is held by someone else -- taking it over
 \n  \033[1;33mсобрано, но byway ВЫКЛЮЧЕН\033[0m — туннеля не будет\n	\n  \033[1;33mbuilt, but byway is OFF\033[0m — there will be no tunnel\n
   включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart\n	  turn it on: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart\n
 dnsmasq не тронут — byway ещё не запущен, так и должно быть	dnsmasq is untouched — byway has not been started yet, which is correct
@@ -521,3 +521,62 @@ byway возьмёт другое значение сам; задать своё
   вписать: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway	  set it: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway
 роутер сам до сайтов из списка не достаёт	the router itself cannot reach the sites on the list
 заворот своего трафика выключен: чужие качалки — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && byway plumb off && byway plumb on	routing the router's own traffic is off: other downloaders — zapret updates, your own scripts — hang on a fake address until they time out. To turn it on: uci set byway.main.router_via_vpn=1 && uci commit byway && byway plumb off && byway plumb on
+  Xray-core с 26.7.11 не пускает vless и trojan без TLS или reality к публичному адресу	  since 26.7.11 Xray-core refuses vless and trojan without TLS or reality to a public address
+  нужен ключ с security=tls или reality; без шифрования транспорта — только сервер в частной сети	  a key with security=tls or reality is needed; no transport encryption only works for a server on a private network
+замена движка	engine replacement
+путь к движку не записался в настройки: uci set byway.main.xray_bin=%s && uci commit byway	the engine path was not saved to the settings: uci set byway.main.xray_bin=%s && uci commit byway
+нет unzip — поставить: %s unzip	unzip is missing — install it: %s unzip
+нет sha256sum — сверить архив нечем, замена не начата	sha256sum is missing — nothing to verify the archive with, replacement not started
+на этом процессоре сборки Xray-core с GitHub не запускаются — движок обновляется пакетом xray-core из фида	Xray-core builds from GitHub do not run on this CPU — the engine is updated with the xray-core package from the feed
+неизвестно, какой файл выпуска брать для %s	unknown which release file to use for %s
+движок: Xray %s — %s	engine: Xray %s — %s
+движок не указан или не запускается (byway.main.xray_bin)	the engine is not set or does not run (byway.main.xray_bin)
+проверенная с byway: %s	tested with byway: %s
+самая свежая у XTLS: %s, стабильная: %s	newest from XTLS: %s, stable: %s
+GitHub не ответил — свежую версию узнать не удалось	GitHub did not answer — the newest version is unknown
+на флеше свободно %s МБ, памяти доступно %s МБ	%s MB free on flash, %s MB of memory available
+  поставить: byway engine ВЕРСИЯ | tested | newest | stable	  to install: byway engine VERSION | tested | newest | stable
+GitHub не ответил — номер свежей версии неизвестен, ничего не тронуто	GitHub did not answer — the newest version number is unknown, nothing touched
+непонятная версия «%s» — нужен номер вида 26.9.9 либо tested, newest, stable	unclear version "%s" — a number like 26.9.9 or tested, newest, stable is needed
+стоит уже %s — менять нечего	%s is already installed — nothing to replace
+прежний движок не определился — ставить установщиком byway, а не заменой	the current engine was not recognised — install with the byway installer, not by replacement
+замена движка уже идёт	an engine replacement is already running
+памяти доступно %s МБ, для замены нужно не меньше 40 — ничего не тронуто	%s MB of memory available, the replacement needs at least 40 — nothing touched
+загрузка Xray-core %s (%s)	downloading Xray-core %s (%s)
+архив %s не скачался — ничего не тронуто	the %s archive did not download — nothing touched
+архив %s не сошёлся с суммой SHA2-256 из .dgst выпуска — отброшен, ничего не тронуто	the %s archive does not match the SHA2-256 sum from the release .dgst — discarded, nothing touched
+в архиве нет файла xray — ничего не тронуто	the archive has no xray file — nothing touched
+архив сверен с суммой из выпуска	archive matches the sum from the release
+места хватает — новое ядро кладётся рядом с прежним	there is enough space — the new engine goes next to the current one
+ядро не распаковалось на флеш — ничего не тронуто	the engine did not unpack to flash — nothing touched
+новое ядро не запускается на этом железе — удалено, работает прежнее	the new engine does not run on this hardware — removed, the current one keeps working
+новый движок не принял конфиг — удалён, работает прежний	the new engine rejected the config — removed, the current one keeps working
+перезапуск службы: туннель пропадёт на несколько секунд	restarting the service: the tunnel drops for a few seconds
+проверка туннеля на новом движке (до 2,5 минуты)	checking the tunnel on the new engine (up to 2.5 minutes)
+прежний движок удалён: %s	previous engine removed: %s
+прежний движок %s — из пакета, оставлен; снять можно пакетным менеджером	previous engine %s comes from a package and is kept; remove it with the package manager
+готово: Xray %s, на флеше свободно %s МБ	done: Xray %s, %s MB free on flash
+туннель на новом движке не поднялся — возврат прежнего	the tunnel did not come up on the new engine — restoring the previous one
+возвращён %s; новое ядро удалено	%s restored; the new engine removed
+места на второе ядро нет, а прежнее (%s) — из пакета; снять пакет самому и поставить заново: byway engine %s	no space for a second engine, and the current one (%s) comes from a package; remove the package yourself and install again: byway engine %s
+места на второе ядро нет (свободно %s МБ) — замена через память	no space for a second engine (%s MB free) — replacing via memory
+загрузка прежней версии %s — путь назад	downloading the current version %s — the way back
+архив прежней версии %s не получен — без пути назад замена не начата	the archive of the current version %s was not obtained — without a way back the replacement is not started
+остановка службы: туннель пропадёт примерно на минуту	stopping the service: the tunnel drops for about a minute
+памяти после остановки мало: %s МБ	too little memory after stopping: %s MB
+новое ядро не распаковалось или не запускается	the new engine did not unpack or does not run
+новый движок не принял конфиг	the new engine rejected the config
+новое ядро не легло на флеш	the new engine did not fit on flash
+туннель на новом движке не поднялся	the tunnel did not come up on the new engine
+служба запущена с прежним движком — ничего не заменено	the service is started with the previous engine — nothing replaced
+возврат %s из архива	restoring %s from the archive
+возвращён %s	%s restored
+ни новое, ни прежнее ядро не легло на флеш — туннеля нет. Архив прежнего: %s (в памяти, до перезагрузки); поставить: unzip -p %s xray > %s && chmod 755 %s && /etc/init.d/byway start	neither the new nor the previous engine fit on flash — no tunnel. Archive of the previous one: %s (in memory, until reboot); install: unzip -p %s xray > %s && chmod 755 %s && /etc/init.d/byway start
+движок заменён: %s -> %s	engine replaced: %s -> %s
+движок: %s не поднялся, возвращён %s	engine: %s did not come up, %s restored
+движок: %s не встал, возвращён %s	engine: %s did not install, %s restored
+движок: НИ НОВОЕ, НИ ПРЕЖНЕЕ ядро не легло на флеш -- туннеля нет	engine: NEITHER the new NOR the previous engine fit on flash -- no tunnel
+версия движка Xray-core и её замена; без аргумента — что стоит и что есть	Xray-core engine version and its replacement; without an argument — what is installed and what is available
+engine [ВЕРСИЯ|tested|newest|stable]	engine [VERSION|tested|newest|stable]
+  если GitHub в списке, а туннель не работает: byway plumb off — и повторить	  if GitHub is in the list and the tunnel does not work: byway plumb off — and retry
+  замена сама вернёт обвязку; если отказаться — вернуть: byway plumb on	  the replacement restores the plumbing itself; if you give up — restore it: byway plumb on

@@ -19,7 +19,7 @@ your VPN, the rest goes direct. The engine is
 
 > ### ⚠️ Read this before installing
 >
-> **Version 0.2.1.** byway runs every day on one
+> **Version 0.2.2.** byway runs every day on one
 > router: 1500 domains, 300 subnets, and a family that notices breakage
 > immediately. But still just **one** — the author had no other hardware.
 >
@@ -167,7 +167,7 @@ Worth knowing before installing, not after.
 **Way 1 — one line:**
 
 ```sh
-sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.2.1/install.sh)"
+sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.2.2/install.sh)"
 ```
 
 **Way 2 — through a mirror,** if `raw.githubusercontent.com` is unreachable.
@@ -178,7 +178,7 @@ inside a root install, take the archive the third way and read it first.
 
 ```sh
 wget -T 10 -O /tmp/byway-install.sh \
-  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.2.1/install.sh" \
+  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.2.2/install.sh" \
   && sh /tmp/byway-install.sh
 ```
 
@@ -186,8 +186,8 @@ wget -T 10 -O /tmp/byway-install.sh \
 
 ```sh
 cd /tmp
-wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.2.1.tar.gz
-tar xzf byway.tar.gz && cd byway-0.2.1
+wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.2.2.tar.gz
+tar xzf byway.tar.gz && cd byway-0.2.2
 sh install.sh
 ```
 
@@ -423,6 +423,7 @@ is on the "Overview" tab.
 | `byway presets` | refresh the ready-made lists |
 | `byway top [N]` | what is actually used |
 | `byway update [--check]` | see whether a new version exists, and install it |
+| `byway engine [VERSION]` | the Xray-core engine version and its replacement |
 | `byway report [file]` | a report for a bug thread: state and diagnostics, no key |
 | `byway export [file]` | export settings; `--no-key` leaves the VPN key out |
 | `byway import FILE` | apply settings from an export |
@@ -456,7 +457,7 @@ than `wget` (busybox's wget cannot do proxies):
 
 ```sh
 sh -c "$(curl -fsSL --proxy http://127.0.0.1:1603 \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.2.1/install.sh)"
+  https://raw.githubusercontent.com/tomon-one/byway/v0.2.2/install.sh)"
 ```
 
 An update does not touch settings or lists. Clear the browser cache afterwards —
@@ -529,43 +530,38 @@ Xray-core built soft-float and it works — the installer recognises such a CPU
 **before** downloading and takes the feed instead of spending 35 MB of your link
 and flash. Verified on `mipsel_24kc`.
 
-**It is worth keeping the engine fresh.** Xray-core moves fast: transports get fixed
-and added. If the feed's version is old, put the binary next to it by hand and
-point at the path.
+**It is worth keeping the engine fresh.** Xray-core moves fast: transports get
+fixed and added. The version is changed with one command:
+
+```sh
+byway engine              # what is installed, what byway was tested with, what XTLS has
+byway engine 26.9.9       # install this version
+byway engine tested       # the version byway was fully tested on
+byway engine newest       # the newest one, pre-releases included
+```
+
+The archive is checked against the SHA2-256 sum from the release. If there is
+room for a second engine, the new one goes next to it, and the previous one is
+removed only after the tunnel is up on the new one. If there is not (routine for
+a router with 40 MB for changes), the replacement goes through memory: the
+tunnel drops for about a minute, and the way back is an archive of the previous
+version downloaded in advance. If the tunnel does not come up on the new
+engine, the previous one comes back by itself.
+
+`byway update` does not touch the engine: it updates byway only.
+
+**On MIPS without an FPU** `byway engine` refuses: XTLS builds do not run
+there. The engine is updated with the package — `apk upgrade xray-core` or
+`opkg upgrade xray-core`.
 
 **If the config stopped building after an engine update** — byway verifies every
 build with the engine itself, so an incompatibility does not pass silently: the
-config is simply not replaced and the previous one keeps working. That already
-happened with the `h2` and `quic` transports: the engine no longer accepts them
-and says they were "removed and migrated to XHTTP". What to do:
-
-```sh
-V=26.7.28                       # the version that worked
-A=Xray-linux-arm64-v8a.zip      # see below how to find yours
-wget -O /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/v$V/$A"
-unzip -o /tmp/xray.zip xray -d /usr/local/bin && rm -f /tmp/xray.zip
-mv /usr/local/bin/xray "/usr/local/bin/xray-$V" && chmod 755 "/usr/local/bin/xray-$V"
-uci set byway.main.xray_bin="/usr/local/bin/xray-$V" && uci commit byway
-/etc/init.d/byway restart
-```
-
-The archive is downloaded **into memory** (`/tmp`), not onto flash: next to the
-unpacked binary it would take room the router may not have.
-
-Pick the archive for your architecture (`arm64-v8a`, `mips`, `mipsle` and so on
-— see the release's file list). To find yours:
-
-```sh
-sed -n "s/^DISTRIB_ARCH='\([^']*\)'.*/\1/p" /etc/openwrt_release
-```
-
-⚠️ **Not `uname -m`:** on MIPS it answers `mips` for both byte orders, while
-the Xray-core builds for them differ — one picked blind simply will not start. The
-firmware knows better, and that is what byway asks. **On MIPS without
-an FPU this recipe does not work at all** — there the engine comes from the
-feed: `apk add xray-core` or `opkg install xray-core`. **Two engines do not
-always fit side by side:** the binary is about 18 MB on flash, so remove the old
-one as soon as the new one works.
+config is not replaced, the previous one keeps working, and `byway engine`
+keeps the previous engine in that case. That already happened with the `h2` and
+`quic` transports: the engine no longer accepts them and says they were
+"removed and migrated to XHTTP". Since 26.7.11 Xray-core also refuses vless or
+trojan without TLS or reality to a public address — byway says so plainly. To
+go back to the version that worked: `byway engine 26.7.28`.
 
 And [tell us about it](https://github.com/tomon-one/byway/issues): if the engine
 changed what byway generates, that is fixed in byway rather than worked around
@@ -587,7 +583,7 @@ DRY_RUN=1 byway-uninstall    # show what would be done, change nothing
 only appears at install time. Take it from the archive of the same tag:
 
 ```sh
-wget -O /tmp/byway-uninstall   https://raw.githubusercontent.com/tomon-one/byway/v0.2.1/uninstall.sh
+wget -O /tmp/byway-uninstall   https://raw.githubusercontent.com/tomon-one/byway/v0.2.2/uninstall.sh
 sh /tmp/byway-uninstall
 ```
 
