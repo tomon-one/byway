@@ -527,7 +527,7 @@ byway возьмёт другое значение сам; задать своё
 путь к движку не записался в настройки: uci set byway.main.xray_bin=%s && uci commit byway	the engine path was not saved to the settings: uci set byway.main.xray_bin=%s && uci commit byway
 нет unzip — поставить: %s unzip	unzip is missing — install it: %s unzip
 нет sha256sum — сверить архив нечем, замена не начата	sha256sum is missing — nothing to verify the archive with, replacement not started
-на этом процессоре сборки Xray-core с GitHub не запускаются — движок обновляется пакетом xray-core из фида	Xray-core builds from GitHub do not run on this CPU — the engine is updated with the xray-core package from the feed
+на этом процессоре сборки Xray-core с GitHub не запускаются — движок обновляется пакетом OpenWrt: apk upgrade xray-core либо opkg upgrade xray-core	Xray-core builds from GitHub do not run on this CPU — the engine is updated as an OpenWrt package: apk upgrade xray-core or opkg upgrade xray-core
 неизвестно, какой файл выпуска брать для %s	no known release file for %s
 ядро Xray не указано или не запускается (byway.main.xray_bin)	Xray core is not set or does not start (byway.main.xray_bin)
 стоит Xray %s; есть ли новее — неизвестно: GitHub не ответил	Xray %s is installed; whether there is a newer one is unknown: GitHub did not answer
@@ -582,7 +582,7 @@ GitHub не ответил — номер свежей версии неизве
 движок: %s не поднялся, возвращён %s	engine: %s did not come up, %s restored
 движок: %s не встал, возвращён %s	engine: %s did not install, %s restored
 движок: НИ НОВОЕ, НИ ПРЕЖНЕЕ ядро не легло на флеш -- туннеля нет	engine: NEITHER the new NOR the previous engine fit on flash -- no tunnel
-версия движка Xray-core и её замена; без аргумента — установленная и доступные версии	Xray-core engine version and its replacement; without an argument — the installed and available versions
+есть ли обновление ядра Xray-core, и его замена; без аргумента — ещё и подробности	whether an Xray-core update exists, and the replacement; without an argument — details too
 engine [ВЕРСИЯ|tested|newest|stable]	engine [VERSION|tested|newest|stable]
   если GitHub в списке, а туннель не работает: byway plumb off — и повторить	  if GitHub is in the list and the tunnel does not work: byway plumb off — and retry
   замена сама вернёт перехват; если отказаться — вернуть: byway plumb on	  the replacement restores interception itself; if you give up — restore it: byway plumb on

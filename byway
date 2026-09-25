@@ -3447,7 +3447,7 @@ cmd_engine() {
     command -v sha256sum >/dev/null 2>&1 ||
         die "нет sha256sum — сверить архив нечем, замена не начата"
     if eng_mips_nofpu; then
-        die "на этом процессоре сборки Xray-core с GitHub не запускаются — движок обновляется пакетом xray-core из фида"
+        die "на этом процессоре сборки Xray-core с GitHub не запускаются — движок обновляется пакетом OpenWrt: apk upgrade xray-core либо opkg upgrade xray-core"
     fi
     ENG_ASSET=$(eng_asset) ||
         dief "неизвестно, какой файл выпуска брать для %s" "$(uname -m)"
@@ -7417,7 +7417,7 @@ case "${1:-}" in
     _help 'presets' 'обновить готовые списки'
     _help 'top [N]' 'чем реально пользуются'
     _help 'update [--check|--force]' 'проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же'
-    _help 'engine [ВЕРСИЯ|tested|newest|stable]' 'версия движка Xray-core и её замена; без аргумента — установленная и доступные версии'
+    _help 'engine [ВЕРСИЯ|tested|newest|stable]' 'есть ли обновление ядра Xray-core, и его замена; без аргумента — ещё и подробности'
     _help 'lang [ru|en]' 'язык вывода и панели; английский словарь докачивается при переключении'
     _help 'report [файл]' 'собрать отчёт для обращения, без ключа от VPN'
     _help 'export [файл]' 'выгрузить настройки; --no-key — без ключа от VPN'
