@@ -316,6 +316,32 @@ return view.extend({
 		o = ss.option(form.DummyValue, '_updmsg', _('Ответ'));
 		o.cfgvalue = function () { return updMsg; };
 
+		/* ── Ядро Xray ────────────────────────────────────────────────── */
+
+		/* Та же причина, что у обновления: замена ядра -- это скачивание
+		   десятка мегабайт, проверка суммы и перезапуск службы, минута и
+		   дольше. Панель только показывает версии и готовую команду; ставит
+		   byway engine из консоли, и откатывается он там же сам. */
+		ss = block('_engine', _('Ядро Xray'),
+			_('Какое ядро стоит, какое проверено с этой версией byway и что есть свежее у XTLS. Заменить можно командой byway engine из консоли: ядро скачивается, сверяется по сумме, а если туннель на нём не поднялся — byway возвращает прежнее.'));
+
+		var engMsg = bwui.output('');
+		o = ss.option(form.Button, '_engcheck', _('Проверить'));
+		o.inputstyle = 'action';
+		o.inputtitle = _('Проверить версии ядра');
+		o.onclick = function () {
+			bwui.say(engMsg, _('идёт проверка…'));
+			return fs.exec(bwui.BYWAY, [ 'engine', '--check' ]).then(function (r) {
+				bwui.say(engMsg, bwui.plain((r.stdout || '') + (r.stderr || ''))
+					.replace(/^\[.\]\s*/gm, '').trim() || _('нет ответа'));
+			}).catch(function () {
+				bwui.say(engMsg, _('Спросить не вышло — byway ничего не ответил.'));
+			});
+		};
+
+		o = ss.option(form.DummyValue, '_engmsg', _('Ответ'));
+		o.cfgvalue = function () { return engMsg; };
+
 		/* ── Полное состояние ─────────────────────────────────────────── */
 
 		ss = block('_full', _('Полное состояние'),
