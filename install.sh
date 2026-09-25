@@ -57,124 +57,112 @@ t() {
     [ "$LANG_EN" = 1 ] || { printf %s "$1"; return 0; }
     case "$1" in
       "── Проверка окружения ──") printf %s "── Checking the environment ──" ;;
-      "сумма выпуска (.dgst) не получена — архив отброшен") printf %s "the release sum (.dgst) was not obtained — archive discarded" ;;
-      "архив не сошёлся с суммой SHA2-256 из выпуска — отброшен") printf %s "the archive does not match the SHA2-256 sum from the release — discarded" ;;
-      "архив сверен с суммой из выпуска") printf %s "archive matches the sum from the release" ;;
-      "нет sha256sum — архив движка не сверен с суммой выпуска") printf %s "no sha256sum — the core archive is not checked against the release sum" ;;
+      "контрольная сумма выпуска (.dgst) не получена — архив отброшен") printf %s "the release checksum (.dgst) could not be fetched — archive discarded" ;;
+      "архив не сошёлся с контрольной суммой SHA2-256 из выпуска — отброшен") printf %s "the archive does not match the SHA2-256 checksum from the release — discarded" ;;
+      "архив сверен с контрольной суммой из выпуска") printf %s "archive matches the release checksum" ;;
+      "нет sha256sum — архив движка не сверен с контрольной суммой выпуска") printf %s "no sha256sum — the core archive is not checked against the release checksum" ;;
       "-- по умолчанию:") printf %s "-- default:" ;;
       "── Установка ──") printf %s "── Installing ──" ;;
       "── Готово ──") printf %s "── Done ──" ;;
       "не похоже на OpenWrt — byway рассчитан на него") printf %s "this does not look like OpenWrt — byway is built for it" ;;
-      "поставки рядом нет — загрузка с GitHub") printf %s "no delivery next to the script — downloading it from GitHub" ;;
-      "тега v%s ещё нет — взята ветка main") printf %s "there is no v%s tag yet — taking the main branch" ;;
-      "поставка распакована: %s") printf %s "delivery unpacked: %s" ;;
-      "не удалось получить поставку — скачать архив с github.com/%s и запустить install.sh из него") printf %s "could not get the delivery — download the archive from github.com/%s and run install.sh from it" ;;
+      "рядом со скриптом нет файлов byway — загрузка с GitHub") printf %s "no byway files next to the script — downloading from GitHub" ;;
+      "выпуска v%s ещё нет — взята разрабатываемая версия (main)") printf %s "release v%s does not exist yet — using the development version (main)" ;;
+      "файлы byway загружены в %s") printf %s "byway files unpacked into %s" ;;
+      "не удалось загрузить файлы byway — скачать архив с github.com/%s и запустить install.sh из него") printf %s "could not download the byway files — download the archive from github.com/%s and run install.sh from it" ;;
       "движок записан в настройки: %s") printf %s "the core is recorded in the settings: %s" ;;
       "движок не найден: byway установлен, но служба не поднимется") printf %s "core not found: byway is installed, but the service will not start" ;;
       "  указать путь: uci set byway.main.xray_bin=/путь/к/xray && uci commit byway") printf %s "  set the path: uci set byway.main.xray_bin=/path/to/xray && uci commit byway" ;;
       "движок не поднялся — смотреть: logread -e byway") printf %s "the core did not come up — see: logread -e byway" ;;
       "движок уже указан в настройках: %s") printf %s "the core is already set in the settings: %s" ;;
-      "не удалось положить %s — проверить место на флеше и права") printf %s "could not put %s in place — check free flash and permissions" ;;
-      "рядом лежит НЕПОЛНАЯ поставка, не хватает:%s") printf %s "the delivery next to the script is INCOMPLETE, missing:%s" ;;
-      "  берётся целая с GitHub — то, что лежит рядом, использовано не будет") printf %s "  taking a whole one from GitHub — what is next to the script will not be used" ;;
+      "не удалось записать %s — проверить место на флеше и права") printf %s "could not write %s — check free flash and permissions" ;;
+      "файлы byway рядом со скриптом неполные, не хватает:%s") printf %s "byway files next to the script are INCOMPLETE, missing:%s" ;;
+      "  полный набор загружается с GitHub, файлы рядом не используются") printf %s "  downloading the full set from GitHub; local files are ignored" ;;
       "конфиг не пересобрался — движок остаётся на прежнем") printf %s "the config was not rebuilt — the core stays on the previous one" ;;
       "перезапуск службы — туннель прервётся на несколько секунд") printf %s "restarting the service — the tunnel will drop for a few seconds" ;;
-      "служба перезапущена на новой версии") printf %s "the service is restarted on the new version" ;;
-      "служба не перезапустилась — сделать это руками: /etc/init.d/byway restart") printf %s "the service did not restart — do it by hand: /etc/init.d/byway restart" ;;
+      "служба перезапущена на новой версии") printf %s "the service restarted on the new version" ;;
       "Обновлено. Если открыта панель — обновить страницу с очисткой кэша (Ctrl+F5).") printf %s "Updated. If the panel is open, reload the page with a cache reset (Ctrl+F5)." ;;
+      "Обновлено.") printf %s "Updated." ;;
       "нет %s -- установка") printf %s "no %s -- installing" ;;
-      "не поставился %s: доставить вручную") printf %s "%s did not install: add it by hand" ;;
+      "не поставился %s: поставить вручную") printf %s "%s did not install: install it by hand" ;;
       "нет утилиты %s -- это не похоже на рабочий OpenWrt") printf %s "no %s tool -- this does not look like a working OpenWrt" ;;
       "нет модулей ядра:%s -- установка") printf %s "kernel modules missing:%s -- installing" ;;
       "модули так и не встали:%s") printf %s "the modules are still not there:%s" ;;
-      "  без них перехват не работает; поставить вручную:") printf %s "  without them interception does not work; install by hand:" ;;
-      "не знаю, какой файл выпуска брать для %s") printf %s "I do not know which release file to take for %s" ;;
-      "на флеше %s МБ, движку нужно около 25 -- берётся из прошивки") printf %s "%s MB on flash, the core needs about 25 -- taking it from the feed" ;;
+      "  без них трафик в туннель не направляется; поставить вручную:") printf %s "  without them no traffic goes into the tunnel; install by hand:" ;;
+      "нет подходящего файла выпуска для %s") printf %s "no matching release file for %s" ;;
+      "на флеше свободно %s МБ, движку нужно около 25 -- ставится из пакетов OpenWrt") printf %s "%s MB free on flash, the core needs about 25 -- installing from OpenWrt packages" ;;
       "нет unzip, распаковать нечем") printf %s "no unzip, nothing to unpack with" ;;
-      "не удалось спросить у GitHub последнюю версию") printf %s "could not ask GitHub for the latest version" ;;
-      "последний выпуск: %s") printf %s "latest release: %s" ;;
       "установка Xray-core %s (%s)") printf %s "installing Xray-core %s (%s)" ;;
       "не скачался") printf %s "download failed" ;;
       "не распаковался") printf %s "unpacking failed" ;;
-      "скачанный движок не запускается на этом железе -- берётся из прошивки") printf %s "the downloaded core does not run on this hardware -- taking it from the feed" ;;
+      "скачанный движок не запускается на этом железе -- ставится из пакетов OpenWrt") printf %s "the downloaded core does not run on this hardware -- installing from OpenWrt packages" ;;
       "движок готов: %s") printf %s "core ready: %s" ;;
-      "Движок Xray-core не найден. Откуда взять:") printf %s "Xray-core was not found. Where should it come from:" ;;
-      "     2) с GitHub -- свежее, около 35 МБ на флеше") printf %s "     2) GitHub -- newer, about 35 MB of flash" ;;
-      "     3) никак -- путь укажу сам потом") printf %s "     3) neither -- I will set the path myself later" ;;
       "Выбор") printf %s "Choice" ;;
-      "        latest  -- последний СТАБИЛЬНЫЙ выпуск (по умолчанию)") printf %s "        latest  -- the latest STABLE release (default)" ;;
-      "        tested  -- на которой byway проверялся: %s") printf %s "        tested  -- the one byway was verified on: %s" ;;
-      "                   это ПРЕДВЫПУСК: XTLS помечает так всё свежее стабильного") printf %s "                   it is a PRE-RELEASE: XTLS marks everything newer than stable that way" ;;
-      "        26.3.27 -- или любая другая, номером") printf %s "        26.3.27 -- or any other, by number" ;;
-      "Версия") printf %s "Version" ;;
       "движок не ставится: указать путь после установки") printf %s "the core is not installed: set the path afterwards" ;;
       "движок не ставится: система не подходит, см. выше") printf %s "the core is not installed: this system does not qualify, see above" ;;
       "система не подходит -- ничего не установлено") printf %s "this system does not qualify -- nothing has been installed" ;;
       "GitHub напрямую не отвечает — его адреса запрашиваются по DoH") printf %s "GitHub does not answer directly — resolving its addresses over DoH" ;;
       "адреса получены — соединение напрямую, минуя подменённый DNS") printf %s "addresses resolved — going direct, bypassing the spoofed DNS" ;;
       "GitHub недоступен, а зеркало запрещено (NO_MIRROR=1) — установка не пойдёт") printf %s "GitHub is unreachable and the mirror is forbidden (NO_MIRROR=1) — the install will not proceed" ;;
-      "ни напрямую, ни по адресам из DoH — через зеркало gh-proxy") printf %s "neither directly nor by the DoH addresses — going through the gh-proxy mirror" ;;
-      "  это ЧУЖОЙ посредник: он видит, что вы качаете, и может отдать не то.") printf %s "  it is a THIRD PARTY: it sees what you download and may serve you something else." ;;
-      "  запретить: NO_MIRROR=1 sh install.sh (тогда установка просто не пойдёт)") printf %s "  to forbid it: NO_MIRROR=1 sh install.sh (the install will then simply not proceed)" ;;
-      "ответ «%s» непонятен -- взят вариант 1") printf %s "did not understand the answer «%s» -- taking option 1" ;;
-      "     2) с GitHub -- НЕ для этого процессора: MIPS выкладывают только с аппаратной плавающей точкой") printf %s "     2) from GitHub -- NOT for this CPU: MIPS is published hard-float only" ;;
+      "GitHub недоступен ни напрямую, ни по адресам из DoH — загрузка через зеркало gh-proxy") printf %s "GitHub is unreachable both directly and via DoH addresses — downloading through the gh-proxy mirror" ;;
+      "  это СТОРОННИЙ сервер: он видит загружаемое и может подменить файлы.") printf %s "  it is a THIRD-PARTY server: it sees what is downloaded and may tamper with the files." ;;
+      "  запретить: запустить заново, поставив NO_MIRROR=1 перед командой, — установка тогда остановится") printf %s "  to forbid it: run again with NO_MIRROR=1 in front of the command — the install will then stop" ;;
       "на этом процессоре сборка с GitHub не запустится: MIPS там только с аппаратной плавающей точкой, а сопроцессора здесь нет") printf %s "the GitHub build will not run on this CPU: MIPS is published hard-float only, and there is no FPU here" ;;
-      "  из прошивки приезжает та же версия, собранная softfloat") printf %s "  the feed ships the same version built soft-float -- taking that one" ;;
+      "  из пакетов OpenWrt ставится сборка без аппаратной плавающей точки") printf %s "  the OpenWrt package is built soft-float" ;;
       "Движок Xray-core. Какую версию поставить:") printf %s "Xray-core. Which version to install:" ;;
       "     1) проверенную с byway -- %s  (по умолчанию)") printf %s "     1) the one verified with byway -- %s  (default)" ;;
       "     2) самую свежую, включая предвыпуски") printf %s "     2) the newest one, pre-releases included" ;;
       "     3) самую свежую стабильную") printf %s "     3) the newest stable one" ;;
-      "     4) никакую -- путь укажу сам потом") printf %s "     4) none -- I will set the path myself later" ;;
+      "     4) не ставить -- путь к своему xray указать потом") printf %s "     4) don't install -- set the path to your own xray later" ;;
       "     либо впишите номер версии, например 26.3.27") printf %s "     or type a version number, for example 26.3.27" ;;
       "версия: %s") printf %s "version: %s" ;;
-      "ответ «%s» непонятен -- взята проверенная версия") printf %s "did not understand the answer «%s» -- taking the verified version" ;;
-      "не удалось спросить у GitHub номер версии -- берётся из прошивки") printf %s "could not ask GitHub for a version number -- taking the firmware one" ;;
-      "Движок Xray-core. На этом процессоре сборки с GitHub не запускаются,") printf %s "Xray-core. Builds from GitHub do not run on this CPU," ;;
-      "поэтому он берётся из прошивки:") printf %s "so it is taken from the firmware:" ;;
-      "     1) поставить из прошивки  -- по умолчанию") printf %s "     1) install from the firmware  -- default" ;;
-      "     2) никакой -- путь укажу сам потом") printf %s "     2) none -- I will set the path myself later" ;;
-      "непонятный номер версии «%s»") printf %s "unclear version number «%s»" ;;
-      "установка xray-core из прошивки") printf %s "installing xray-core from the feed" ;;
-      "Xray-core не поставился из прошивки") printf %s "Xray-core did not install from the firmware" ;;
+      "ответ «%s» непонятен -- взята проверенная версия") printf %s "unrecognized answer "%s" -- using the verified version" ;;
+      "не удалось узнать номер версии на GitHub -- ставится из пакетов OpenWrt") printf %s "could not get the version number from GitHub -- installing from OpenWrt packages" ;;
+      "Движок Xray-core. Сборки с GitHub на этом процессоре не запускаются —") printf %s "Xray-core. GitHub builds do not run on this CPU —" ;;
+      "доступна только версия из пакетов OpenWrt:") printf %s "only the OpenWrt package is available:" ;;
+      "     1) поставить из пакетов OpenWrt  -- по умолчанию") printf %s "     1) install from OpenWrt packages  -- default" ;;
+      "     2) не ставить -- путь к своему xray указать потом") printf %s "     2) don't install -- set the path to your own xray later" ;;
+      "непонятный номер версии «%s»") printf %s "invalid version number "%s"" ;;
+      "установка xray-core из пакетов OpenWrt") printf %s "installing xray-core from OpenWrt packages" ;;
+      "Xray-core не поставился из пакетов OpenWrt") printf %s "Xray-core did not install from OpenWrt packages" ;;
       "  и указать путь: uci set byway.main.xray_bin=/путь/к/xray") printf %s "  and point byway at it: uci set byway.main.xray_bin=/path/to/xray" ;;
       "Поставить base64? Нужен только для ключей vmess:// и ss://") printf %s "Install base64? Needed only for vmess:// and ss:// keys" ;;
-      "  весь вывод пакетного менеджера: cat %s") printf %s "  the package manager said it all here: cat %s" ;;
-      "не поставился: ключи vmess и ss разобрать не выйдет") printf %s "did not install: vmess and ss keys will not parse" ;;
+      "  весь вывод пакетного менеджера: cat %s") printf %s "  full package manager output: cat %s" ;;
+      "base64 не поставился: ключи vmess и ss не разобрать") printf %s "base64 did not install: vmess and ss keys cannot be parsed" ;;
       "base64 не ставится -- ключи vless, trojan и socks работают без него") printf %s "base64 is skipped -- vless, trojan and socks keys work without it" ;;
-      "на разделе изменений %s МБ, а движку нужно около 30 -- сюда он не встанет") printf %s "%s MB on the overlay partition, and the engine needs about 30 -- it will not fit here" ;;
+      "на флеше свободно %s МБ, а движку нужно около 30 -- он не поместится") printf %s "%s MB free on flash, the core needs about 30 -- it will not fit" ;;
       "  это не поправить настройкой: нужен роутер с большим флешем либо extroot на USB") printf %s "  no setting fixes this: you need a router with more flash, or extroot on USB" ;;
       "на флеше меньше 2 МБ свободно") printf %s "less than 2 MB free on flash" ;;
       "и главное: у роутера нет маршрута наружу — почти всё выше поэтому") printf %s "and the main thing: the router has no default route — that explains most of the above" ;;
       "  проверить: ifstatus wan, ip route, ip link") printf %s "  check: ifstatus wan, ip route, ip link" ;;
-      "и главное: наружу не пускает — почти всё выше поэтому") printf %s "and the main thing: something blocks the way out — that explains most of the above" ;;
+      "и главное: выход в интернет закрыт — почти всё выше поэтому") printf %s "and the main thing: internet access is blocked — that explains most of the above" ;;
       "  проверить: firewall, ping 1.1.1.1, traceroute") printf %s "  check: firewall, ping 1.1.1.1, traceroute" ;;
       "и главное: DNS не отвечает — почти всё выше поэтому") printf %s "and the main thing: DNS does not answer — that explains most of the above" ;;
       "  проверить: cat /etc/resolv.conf, /etc/init.d/dnsmasq restart") printf %s "  check: cat /etc/resolv.conf, /etc/init.d/dnsmasq restart" ;;
-      "в cron легло НЕ ВСЁ — проверить: crontab -l") printf %s "not everything made it into cron — check: crontab -l" ;;
+      "в cron добавлено НЕ ВСЁ — проверить: crontab -l") printf %s "not everything made it into cron — check: crontab -l" ;;
       "  нет задачи byway watch: не будет ни проверки версии, ни обновления списков") printf %s "  the byway watch job is missing: no version check and no list updates" ;;
       "  нет задачи byway stat: учёт использования собираться не будет") printf %s "  the byway stat job is missing: usage accounting will not be collected" ;;
-      "firewall4 не найден, а byway работает только на нём — это OpenWrt 22.03 и новее") printf %s "firewall4 is not present, and byway runs on nothing else — that means OpenWrt 22.03 or newer" ;;
-      "  на 21.02 и старше файрволом заведует firewall3 с iptables: другой механизм,") printf %s "  on 21.02 and older the firewall is firewall3 on iptables: a different machine," ;;
-      "  правило по метке туда не встанет, и туннель не получат ни гости, ни зоны") printf %s "  a mark-based rule will not go in there, and neither guests nor zones with an" ;;
-      "  с политикой input REJECT. Половина работающего byway хуже честного отказа.") printf %s "  input REJECT policy would get the tunnel. Half a byway is worse than a plain no." ;;
-      "  своя версия: cat /etc/openwrt_release") printf %s "  your own version: cat /etc/openwrt_release" ;;
+      "нужна OpenWrt 22.03 или новее: byway работает только с firewall4, а его здесь нет") printf %s "OpenWrt 22.03 or newer is required: byway only works with firewall4, which is missing here" ;;
+      "  на 21.02 и старше другой файрвол (iptables): туннель не получат гостевые сети — наполовину рабочий byway не ставится") printf %s "  21.02 and older use a different firewall (iptables): guest networks would not get the tunnel — byway does not install half-working" ;;
+      "  узнать свою версию: cat /etc/openwrt_release") printf %s "  check your version: cat /etc/openwrt_release" ;;
       "  ${PKG:-apk} update && ${PKG:-apk} ${PKG_ADD:-add} xray-core -- либо положить бинарник вручную") printf %s "  ${PKG:-apk} update && ${PKG:-apk} ${PKG_ADD:-add} xray-core -- or drop the binary in by hand" ;;
       "  uci set byway.main.xray_bin=/путь/к/xray && uci commit byway") printf %s "  uci set byway.main.xray_bin=/path/to/xray && uci commit byway" ;;
-      "не хватает %s условий — доставить перечисленное и запустить снова") printf %s "%s conditions are missing — install what is listed and run again" ;;
+      "проблем: %s — устранить перечисленное выше и запустить установку снова") printf %s "%s problem(s) found — fix what is listed above and run the installer again" ;;
       "всё на месте") printf %s "everything is in place" ;;
-      "программа и служба") printf %s "the program and the service" ;;
-      "программа и служба, автозапуск включён") printf %s "the program and the service, autostart enabled" ;;
-      "служба не встала в автозапуск -- после перезагрузки туннеля не будет; поправить: /etc/init.d/byway enable") printf %s "the service did not get into autostart -- after a reboot there will be no tunnel; fix: /etc/init.d/byway enable" ;;
+      "программа и служба установлены") printf %s "program and service installed" ;;
+      "программа и служба установлены, автозапуск включён") printf %s "program and service installed, autostart enabled" ;;
+      "служба не добавлена в автозапуск -- после перезагрузки туннеля не будет; поправить: /etc/init.d/byway enable") printf %s "the service was not added to autostart -- after a reboot there will be no tunnel; fix: /etc/init.d/byway enable" ;;
       "конфигурация уже есть, остаётся без изменений") printf %s "the configuration already exists and is left alone" ;;
-      "конфигурация создана из шаблона") printf %s "the configuration is created from the template" ;;
+      "конфигурация создана из шаблона") printf %s "configuration created from the template" ;;
       "списки на месте") printf %s "the lists are in place" ;;
-      "словари перевода: %s") printf %s "translation dictionaries: %s" ;;
       "панель LuCI: Сервисы → Byway") printf %s "LuCI panel: Services → Byway" ;;
       "каталога luci рядом нет — панель не установлена") printf %s "there is no luci directory next to the script — the panel is not installed" ;;
-      "пути внесены в keep-список прошивки") printf %s "the paths are added to the firmware keep-list" ;;
+      "LuCI на роутере нет — панель не ставится, управление из консоли: byway menu") printf %s "LuCI is not installed on the router — the panel is skipped; manage byway from the console: byway menu" ;;
+      "Веб-панель в LuCI — настройка byway из браузера, около 150 КБ на флеше. Ставить?") printf %s "Web panel in LuCI — byway settings in the browser, about 150 KB of flash. Install it?" ;;
+      "панель LuCI убрана") printf %s "the LuCI panel is removed" ;;
+      "файлы byway переживут обновление прошивки (/etc/sysupgrade.conf)") printf %s "byway files will survive a firmware upgrade (/etc/sysupgrade.conf)" ;;
       "byway доступен по имени из любой оболочки") printf %s "byway is available by name from any shell" ;;
-      "задачи в cron: журнал состояния и учёт использования") printf %s "cron jobs: the state log and the usage count" ;;
-      "правило firewall для помеченного трафика создано") printf %s "the firewall rule for marked traffic is created" ;;
+      "задачи в cron: проверка состояния, обновлений и списков; учёт использования") printf %s "cron jobs: state, update and list checks; usage accounting" ;;
+      "правило firewall для гостевых сетей создано") printf %s "firewall rule for guest networks created" ;;
       *) printf %s "$1" ;;
     esac
 }
@@ -323,9 +311,9 @@ gh_probe() {
     }
     # Зеркало ЧУЖОЕ: публичный gh-proxy, тот же, что у Zapret-Manager. Мы его
     # не держим и не проверяем, что он отдаёт, -- поэтому говорим вслух.
-    warn "ни напрямую, ни по адресам из DoH — через зеркало gh-proxy"
-    warn "  это ЧУЖОЙ посредник: он видит, что вы качаете, и может отдать не то."
-    warn "  запретить: NO_MIRROR=1 sh install.sh (тогда установка просто не пойдёт)"
+    warn "GitHub недоступен ни напрямую, ни по адресам из DoH — загрузка через зеркало gh-proxy"
+    warn "  это СТОРОННИЙ сервер: он видит загружаемое и может подменить файлы."
+    warn "  запретить: запустить заново, поставив NO_MIRROR=1 перед командой, — установка тогда остановится"
     GH=$MIRROR/
 }
 
@@ -486,7 +474,7 @@ for c in curl; do
     command -v "$c" >/dev/null 2>&1 && continue
     sayf "нет %s -- установка" "$c"
     add_pkg "$c" && command -v "$c" >/dev/null 2>&1 ||
-        { warnf "не поставился %s: доставить вручную" "$c"; pkg_why; BAD=$((BAD + 1)); }
+        { warnf "не поставился %s: поставить вручную" "$c"; pkg_why; BAD=$((BAD + 1)); }
 done
 
 # Поставка рядом со скриптом. Её может не быть вовсе: README предлагает
@@ -535,7 +523,7 @@ fetch_src() {
     # а не на ветку»).
     _urls=$(gh "https://github.com/$REPO/archive/refs/tags/v$VER.tar.gz")
     if [ "$(http_code "$_urls")" = 404 ]; then
-        warnf "тега v%s ещё нет — взята ветка main" "$VER"
+        warnf "выпуска v%s ещё нет — взята разрабатываемая версия (main)" "$VER"
         _urls=$(gh "https://github.com/$REPO/archive/refs/heads/main.tar.gz")
     fi
     for _u in $_urls; do
@@ -555,14 +543,14 @@ fetch_src() {
 
 if ! have_src; then
     if [ "$_got" -gt 0 ]; then
-        warnf "рядом лежит НЕПОЛНАЯ поставка, не хватает:%s" "$_miss"
-        warn "  берётся целая с GitHub — то, что лежит рядом, использовано не будет"
+        warnf "файлы byway рядом со скриптом неполные, не хватает:%s" "$_miss"
+        warn "  полный набор загружается с GitHub, файлы рядом не используются"
     else
-        say "поставки рядом нет — загрузка с GitHub"
+        say "рядом со скриптом нет файлов byway — загрузка с GitHub"
     fi
     fetch_src ||
-        dief "не удалось получить поставку — скачать архив с github.com/%s и запустить install.sh из него" "$REPO"
-    sayf "поставка распакована: %s" "$SRC"
+        dief "не удалось загрузить файлы byway — скачать архив с github.com/%s и запустить install.sh из него" "$REPO"
+    sayf "файлы byway загружены в %s" "$SRC"
 fi
 
 for c in uci nft ip; do
@@ -582,11 +570,9 @@ done
 # устарела. Довод за отказ: человек получил бы туннель себе и не получил
 # гостям, и пошёл бы искать поломку в своих настройках.
 if ! command -v fw4 >/dev/null 2>&1; then
-    warn "firewall4 не найден, а byway работает только на нём — это OpenWrt 22.03 и новее"
-    warn "  на 21.02 и старше файрволом заведует firewall3 с iptables: другой механизм,"
-    warn "  правило по метке туда не встанет, и туннель не получат ни гости, ни зоны"
-    warn "  с политикой input REJECT. Половина работающего byway хуже честного отказа."
-    warn "  своя версия: cat /etc/openwrt_release"
+    warn "нужна OpenWrt 22.03 или новее: byway работает только с firewall4, а его здесь нет"
+    warn "  на 21.02 и старше другой файрвол (iptables): туннель не получат гостевые сети — наполовину рабочий byway не ставится"
+    warn "  узнать свою версию: cat /etc/openwrt_release"
     BAD=$((BAD + 1))
     # Отдельная отметка, а не просто счётчик. Остальные недостачи установщик
     # берётся доставить сам, а эту -- нет: firewall4 не пакет, а поколение
@@ -642,7 +628,7 @@ if [ -n "$MISSING_MODS" ]; then
     if [ -n "$MISSING_MODS" ]; then
         warnf "модули так и не встали:%s" "$MISSING_MODS"
         pkg_why
-        warn "  без них перехват не работает; поставить вручную:"
+        warn "  без них трафик в туннель не направляется; поставить вручную:"
         warn "  ${PKG:-apk} update && ${PKG:-apk} ${PKG_ADD:-add} kmod-nft-tproxy kmod-nft-socket"
         BAD=$((BAD + 1))
     fi
@@ -742,10 +728,10 @@ xray_from_github() {
     gh_ready
     if mips_nofpu; then
         warn "на этом процессоре сборка с GitHub не запустится: MIPS там только с аппаратной плавающей точкой, а сопроцессора здесь нет"
-        warn "  из прошивки приезжает та же версия, собранная softfloat"
+        warn "  из пакетов OpenWrt ставится сборка без аппаратной плавающей точки"
         return 1
     fi
-    _as=$(xray_asset) || { warnf "не знаю, какой файл выпуска брать для %s" "$(uname -m)"; return 1; }
+    _as=$(xray_asset) || { warnf "нет подходящего файла выпуска для %s" "$(uname -m)"; return 1; }
 
     # Место проверяем ДО скачивания. Бинарник около 35 МБ несжатого, и на
     # роутере с 43-мегабайтным флешем он либо влезает, либо нет -- узнать об
@@ -760,7 +746,7 @@ xray_from_github() {
     # Пустой ответ df -- это «не знаю», а не «ноль»: тогда качаем и проверяем
     # делом, а не отказываем заранее.
     if [ -n "$_free" ] && [ "$_free" -lt 25 ]; then
-        warnf "на флеше %s МБ, движку нужно около 25 -- берётся из прошивки" "$_free"
+        warnf "на флеше свободно %s МБ, движку нужно около 25 -- ставится из пакетов OpenWrt" "$_free"
         return 1
     fi
 
@@ -794,14 +780,14 @@ xray_from_github() {
               sed -n 's/^SHA2-256= *\([0-9a-f]\{64\}\).*/\1/p' | head -1)
         _zg=$(sha256sum "$_z" 2>/dev/null | cut -d' ' -f1)
         if [ -z "$_zw" ]; then
-            warn "сумма выпуска (.dgst) не получена — архив отброшен"; rm -f "$_z"; return 1
+            warn "контрольная сумма выпуска (.dgst) не получена — архив отброшен"; rm -f "$_z"; return 1
         fi
         if [ "$_zw" != "$_zg" ]; then
-            warn "архив не сошёлся с суммой SHA2-256 из выпуска — отброшен"; rm -f "$_z"; return 1
+            warn "архив не сошёлся с контрольной суммой SHA2-256 из выпуска — отброшен"; rm -f "$_z"; return 1
         fi
-        say "архив сверен с суммой из выпуска"
+        say "архив сверен с контрольной суммой из выпуска"
     else
-        warn "нет sha256sum — архив движка не сверен с суммой выпуска"
+        warn "нет sha256sum — архив движка не сверен с контрольной суммой выпуска"
     fi
 
     mkdir -p /usr/local/bin
@@ -816,7 +802,7 @@ xray_from_github() {
     # Проверяем, что оно вообще запускается на этом железе: неверно угаданная
     # архитектура даёт не ошибку скачивания, а «Exec format error» потом.
     if ! "/usr/local/bin/xray-$_ver" version >/dev/null 2>&1; then
-        warn "скачанный движок не запускается на этом железе -- берётся из прошивки"
+        warn "скачанный движок не запускается на этом железе -- ставится из пакетов OpenWrt"
         rm -f "/usr/local/bin/xray-$_ver"
         return 1
     fi
@@ -861,10 +847,10 @@ elif ! command -v xray >/dev/null 2>&1 && [ ! -x /usr/bin/xray ] &&
     if mips_nofpu; then
         # На этом процессоре варианты с GitHub невозможны в принципе -- не
         # предлагаем их вовсе, вместо того чтобы отказывать после выбора.
-        say "Движок Xray-core. На этом процессоре сборки с GitHub не запускаются,"
-        say "поэтому он берётся из прошивки:"
-        line "     1) поставить из прошивки  -- по умолчанию"
-        line "     2) никакой -- путь укажу сам потом"
+        say "Движок Xray-core. Сборки с GitHub на этом процессоре не запускаются —"
+        say "доступна только версия из пакетов OpenWrt:"
+        line "     1) поставить из пакетов OpenWrt  -- по умолчанию"
+        line "     2) не ставить -- путь к своему xray указать потом"
         _c=$(askv "Выбор" 1)
         case "$_c" in
           2) warn "движок не ставится: указать путь после установки"
@@ -877,7 +863,7 @@ elif ! command -v xray >/dev/null 2>&1 && [ ! -x /usr/bin/xray ] &&
         linef "     1) проверенную с byway -- %s  (по умолчанию)" "$XRAY_TESTED"
         line "     2) самую свежую, включая предвыпуски"
         line "     3) самую свежую стабильную"
-        line "     4) никакую -- путь укажу сам потом"
+        line "     4) не ставить -- путь к своему xray указать потом"
         line "     либо впишите номер версии, например 26.3.27"
         _c=$(askv "Выбор" 1)
         _ver=""
@@ -909,7 +895,7 @@ elif ! command -v xray >/dev/null 2>&1 && [ ! -x /usr/bin/xray ] &&
         # аудитом, заход 3.
         if [ "$_c" != 9 ]; then
             if [ -z "$_ver" ]; then
-                warn "не удалось спросить у GitHub номер версии -- берётся из прошивки"
+                warn "не удалось узнать номер версии на GitHub -- ставится из пакетов OpenWrt"
                 _c=1
             elif sayf "версия: %s" "$_ver"; xray_from_github; then
                 _c=0
@@ -919,10 +905,10 @@ elif ! command -v xray >/dev/null 2>&1 && [ ! -x /usr/bin/xray ] &&
         fi
     fi
     if [ "$_c" = 1 ]; then
-        say "установка xray-core из прошивки"
+        say "установка xray-core из пакетов OpenWrt"
         add_pkg xray-core || true   # см. про set -e у вызова для модулей
         command -v xray >/dev/null 2>&1 || [ -x /usr/bin/xray ] || {
-            warn "Xray-core не поставился из прошивки"
+            warn "Xray-core не поставился из пакетов OpenWrt"
             # Сперва самая частая причина, и она не в сети. Движок -- это
             # около тридцати мегабайт распакованными, а на дешёвых роутерах
             # раздел под изменения бывает и меньше четырёх: у 8 МБ флеша
@@ -935,7 +921,7 @@ elif ! command -v xray >/dev/null 2>&1 && [ ! -x /usr/bin/xray ] &&
             # Судим по факту отказа плюс по остатку.
             _fe=$(free_mb)
             if [ -n "$_fe" ] && [ "$_fe" -lt 15 ]; then
-                warnf "на разделе изменений %s МБ, а движку нужно около 30 -- сюда он не встанет" "$_fe"
+                warnf "на флеше свободно %s МБ, а движку нужно около 30 -- он не поместится" "$_fe"
                 warn "  это не поправить настройкой: нужен роутер с большим флешем либо extroot на USB"
             else
                 pkg_why
@@ -966,7 +952,7 @@ if ! have_base64; then
     if ask "Поставить base64? Нужен только для ключей vmess:// и ss://" n; then
         add_pkg coreutils-base64 || true   # см. про set -e у вызова для модулей
         have_base64 ||
-            { warn "не поставился: ключи vmess и ss разобрать не выйдет"; pkg_why; }
+            { warn "base64 не поставился: ключи vmess и ss не разобрать"; pkg_why; }
     else
         say "base64 не ставится -- ключи vless, trojan и socks работают без него"
     fi
@@ -992,11 +978,11 @@ if [ "$BAD" -gt 0 ]; then
             warn "и главное: DNS не отвечает — почти всё выше поэтому"
             warn "  проверить: cat /etc/resolv.conf, /etc/init.d/dnsmasq restart"
         elif ! wget -q -T5 -O /dev/null http://downloads.openwrt.org/ 2>/dev/null; then
-            warn "и главное: наружу не пускает — почти всё выше поэтому"
+            warn "и главное: выход в интернет закрыт — почти всё выше поэтому"
             warn "  проверить: firewall, ping 1.1.1.1, traceroute"
         fi
     fi
-    dief "не хватает %s условий — доставить перечисленное и запустить снова" "$BAD"
+    dief "проблем: %s — устранить перечисленное выше и запустить установку снова" "$BAD"
 fi
 say "всё на месте"
 
@@ -1018,7 +1004,7 @@ put() {  # $1 откуда, $2 куда, $3 права
     # слова. Ни то ни другое не годится: говорим, что не легло и почему
     # смотреть.
     rm -f "$2.new" 2>/dev/null || true
-    dief "не удалось положить %s — проверить место на флеше и права" "$2"
+    dief "не удалось записать %s — проверить место на флеше и права" "$2"
 }
 put "$SRC/byway" /usr/local/bin/byway 755
 put "$SRC/etc-init.d-byway" /etc/init.d/byway 755
@@ -1045,10 +1031,10 @@ md5sum /usr/local/bin/byway 2>/dev/null | cut -d' ' -f1 > /etc/byway/.binmd5 || 
 # Безопасно делать до настройки: при `enabled=0` служба ничего не поднимает.
 /etc/init.d/byway enable >/dev/null 2>&1 || true
 if /etc/init.d/byway enabled 2>/dev/null; then
-    say "программа и служба, автозапуск включён"
+    say "программа и служба установлены, автозапуск включён"
 else
-    say "программа и служба"
-    warn "служба не встала в автозапуск -- после перезагрузки туннеля не будет; поправить: /etc/init.d/byway enable"
+    say "программа и служба установлены"
+    warn "служба не добавлена в автозапуск -- после перезагрузки туннеля не будет; поправить: /etc/init.d/byway enable"
 fi
 
 # Конфигурацию не перетираем: в ней ключ и настройки человека.
@@ -1105,20 +1091,45 @@ for l in domains subnets; do
 done
 say "списки на месте"
 
-# Словари перевода кладём всегда: они маленькие, а без них переключение
-# языка молча не сработает -- byway просто продолжит говорить по-русски.
+# Словарь -- ТОЛЬКО выбранного языка (владелец 2026-09-25). У русского файла
+# нет: ключи и есть русский текст. Английский при выборе русского стирается,
+# если остался от прежней установки. Сменить язык потом -- byway lang en:
+# он докачает словарь под эту же версию.
 if [ -d "$SRC/lang" ]; then
     for l in "$SRC"/lang/*.tsv; do
-        [ -f "$l" ] && cp "$l" /etc/byway/lang/ && chmod 644 "/etc/byway/lang/$(basename "$l")"
+        [ -f "$l" ] || continue
+        if [ "$(basename "$l" .tsv)" = "$_wl" ]; then
+            cp "$l" /etc/byway/lang/ && chmod 644 "/etc/byway/lang/$(basename "$l")"
+        else
+            rm -f "/etc/byway/lang/$(basename "$l")" 2>/dev/null || true
+        fi
     done
-    # xargs, а не tr: перевод строки в конце вывода ls превращался в пробел,
-    # и строка печаталась как «словари перевода: en.tsv » -- с висящим
-    # пробелом перед концом. Мелочь, но её видит каждый, кто ставит.
-    _dl2=$(ls /etc/byway/lang/ 2>/dev/null | xargs echo)
-    sayf "словари перевода: %s" "$_dl2"
 fi
 
-if [ -d "$SRC/luci" ]; then
+# Панель -- по вопросу и только там, где есть LuCI. Прежде ставилась всегда:
+# без LuCI на флеше оставалось ~150 КБ мёртвых файлов, а отчёт говорил
+# «панель LuCI: Сервисы → Byway». Умолчание -- «да», кроме повторного запуска,
+# где панели нет: значит, от неё уже отказывались.
+PANEL=0
+if [ ! -f /www/luci-static/resources/luci.js ]; then
+    say "LuCI на роутере нет — панель не ставится, управление из консоли: byway menu"
+elif [ -d "$SRC/luci" ]; then
+    _pdef=y
+    [ "$WAS_INSTALLED" = 1 ] && [ ! -d /www/luci-static/resources/view/byway ] && _pdef=n
+    ask "Веб-панель в LuCI — настройка byway из браузера, около 150 КБ на флеше. Ставить?" "$_pdef" && PANEL=1
+else
+    warn "каталога luci рядом нет — панель не установлена"
+fi
+_PANEL_FILES="/www/luci-static/resources/view/byway /www/luci-static/resources/byway /usr/share/luci/menu.d/luci-app-byway.json /usr/share/rpcd/acl.d/luci-app-byway.json"
+if [ "$PANEL" = 0 ] && [ -d /www/luci-static/resources/view/byway ]; then
+    # shellcheck disable=SC2086
+    rm -rf $_PANEL_FILES 2>/dev/null || true
+    for c in /tmp/luci-indexcache*; do [ -e "$c" ] && : > "$c"; done
+    /etc/init.d/rpcd restart >/dev/null 2>&1 || true
+    say "панель LuCI убрана"
+fi
+
+if [ "$PANEL" = 1 ]; then
     mkdir -p /www/luci-static/resources/view/byway /www/luci-static/resources/byway
     # Общие модули панели: словарь и внешний вид. Их подключают все вкладки
     # через 'require byway.<имя>', и путь тут не про вкус, а про то, где LuCI
@@ -1128,6 +1139,15 @@ if [ -d "$SRC/luci" ]; then
             cp "$SRC/luci/$_m.js" "/www/luci-static/resources/byway/$_m.js" &&
             chmod 644 "/www/luci-static/resources/byway/$_m.js"
     done
+    # Словарь панели -- тоже только выбранного языка: при русском строки
+    # перевода вырезаются, модуль остаётся (его подключают все вкладки).
+    # Строки перевода -- ровно те, что начинаются с двух табов и кавычки.
+    if [ "$LANG_EN" != 1 ] && [ -f /www/luci-static/resources/byway/lang.js ]; then
+        _tb=$(printf '\t')
+        sed "/^$_tb$_tb\"/d" /www/luci-static/resources/byway/lang.js > /tmp/byway-lang.js.$$ &&
+            mv /tmp/byway-lang.js.$$ /www/luci-static/resources/byway/lang.js &&
+            chmod 644 /www/luci-static/resources/byway/lang.js
+    fi
     for v in overview settings lists maint advanced; do
         [ -f "$SRC/luci/$v.js" ] &&
             cp "$SRC/luci/$v.js" "/www/luci-static/resources/view/byway/$v.js" && chmod 644 "/www/luci-static/resources/view/byway/$v.js"
@@ -1147,8 +1167,6 @@ if [ -d "$SRC/luci" ]; then
     for c in /tmp/luci-indexcache*; do [ -e "$c" ] && : > "$c"; done
     /etc/init.d/rpcd restart >/dev/null 2>&1 || true
     say "панель LuCI: Сервисы → Byway"
-else
-    warn "каталога luci рядом нет — панель не установлена"
 fi
 
 # Пути в keep-список прошивки: без этого sysupgrade снесёт byway, а правку
@@ -1160,7 +1178,7 @@ for P in /etc/byway/ /etc/init.d/byway /etc/rc.d/S90byway /etc/rc.d/K10byway \
          /usr/local/bin/byway /usr/local/bin/byway-uninstall          /usr/bin/byway /usr/bin/byway-uninstall; do
     grep -qxF "$P" /etc/sysupgrade.conf 2>/dev/null || echo "$P" >> /etc/sysupgrade.conf
 done
-say "пути внесены в keep-список прошивки"
+say "файлы byway переживут обновление прошивки (/etc/sysupgrade.conf)"
 
 # /usr/local/bin в PATH OpenWrt НЕ входит: /etc/profile задаёт его жёстко
 # строкой /usr/sbin:/usr/bin:/sbin:/bin. Без этого последнее, что видит
@@ -1208,9 +1226,9 @@ if [ "${NEED_CRON:-0}" = "1" ]; then
     crontab -l 2>/dev/null | grep -q "byway watch" && _cw=1
     crontab -l 2>/dev/null | grep -q "byway stat"  && _cs=1
     if [ "$_cw$_cs" = "11" ]; then
-        say "задачи в cron: журнал состояния и учёт использования"
+        say "задачи в cron: проверка состояния, обновлений и списков; учёт использования"
     else
-        warn "в cron легло НЕ ВСЁ — проверить: crontab -l"
+        warn "в cron добавлено НЕ ВСЁ — проверить: crontab -l"
         [ "$_cw" = 1 ] || warn "  нет задачи byway watch: не будет ни проверки версии, ни обновления списков"
         [ "$_cs" = 1 ] || warn "  нет задачи byway stat: учёт использования собираться не будет"
     fi
@@ -1233,7 +1251,7 @@ if [ -z "$(uci -q get firewall.bywaytproxy 2>/dev/null)" ]; then
     uci -q set firewall.bywaytproxy.target='ACCEPT'
     uci commit firewall
     /etc/init.d/firewall reload >/dev/null 2>&1 || true
-    say "правило firewall для помеченного трафика создано"
+    say "правило firewall для гостевых сетей создано"
 fi
 
 echo
@@ -1275,7 +1293,11 @@ if [ "$WAS_INSTALLED" = 1 ] && [ -n "$(uci -q get byway.main.node_url 2>/dev/nul
             warn "движок не поднялся — смотреть: logread -e byway"
         fi
     fi
-    say "Обновлено. Если открыта панель — обновить страницу с очисткой кэша (Ctrl+F5)."
+    if [ "$PANEL" = 1 ]; then
+        say "Обновлено. Если открыта панель — обновить страницу с очисткой кэша (Ctrl+F5)."
+    else
+        say "Обновлено."
+    fi
 elif [ "$LANG_EN" = 1 ]; then
 # Метка в кавычках -- ОБЯЗАТЕЛЬНО. Без них оболочка разбирает тело как
 # обычную строку: обратные кавычки внутри становятся подстановкой команды,
@@ -1292,7 +1314,7 @@ _H "  1  The VPN key — web UI, Services → Byway → Overview, or by command:
 _C "uci set byway.main.node_url='vless://…'"
 _C "uci set byway.main.enabled=1"
 _C "uci commit byway"
-_H "  2  Start it now — at every later boot it starts on its own:"
+_H "  2  Start now — after that it starts automatically at boot:"
 _C "/etc/init.d/byway start"
 _H "  3  Lists — AFTER the tunnel is up:"
 _C "uci add_list byway.main.preset=byway"
@@ -1324,7 +1346,7 @@ _H "  1  Ключ VPN — в панели «Сервисы → Byway → Осн�
 _C "uci set byway.main.node_url='vless://…'"
 _C "uci set byway.main.enabled=1"
 _C "uci commit byway"
-_H "  2  Запустить сейчас — при загрузке роутера дальше сам:"
+_H "  2  Запуск сейчас — дальше служба стартует при загрузке роутера:"
 _C "/etc/init.d/byway start"
 _H "  3  Списки — ПОСЛЕ того, как туннель поднялся:"
 _C "uci add_list byway.main.preset=byway"

@@ -30,11 +30,11 @@ t() {
     [ "$LANG_EN" = 1 ] || { printf %s "$1"; return 0; }
     case "$1" in
       "── 1. Сеть возвращается в исходное ──") printf %s "── 1. The network goes back to how it was ──" ;;
-      "byway уже нет — следы убираются вручную") printf %s "byway is gone already — the leftovers are cleaned by hand" ;;
-      "обвязку снять не вышло с первого раза -- повтор через пять секунд") printf %s "removing the plumbing failed on the first try -- retrying in five seconds" ;;
-      "обвязка НЕ снята: правила nft, маршрут и резолвер могли остаться. Снять руками: byway plumb off") printf %s "the plumbing is NOT removed: nft rules, the route and the resolver may have stayed. Remove by hand: byway plumb off" ;;
+      "программы byway уже нет — остатки убираются по одному") printf %s "the byway program is already gone — removing its leftovers one by one" ;;
+      "сетевые правила byway не сняты с первой попытки -- повтор через 5 секунд") printf %s "byway's network rules were not removed on the first try -- retrying in 5 seconds" ;;
+      "сетевые правила byway (nft, маршрут) НЕ сняты — уйдут при перезагрузке роутера: reboot") printf %s "byway's network rules (nft, route) were NOT removed — they go away when the router reboots: reboot" ;;
       "dnsmasq всё ещё смотрит в byway — исправляется") printf %s "dnsmasq still points at byway — fixing that" ;;
-      "dnsmasq возвращён провайдеру") printf %s "dnsmasq is back on the provider" ;;
+      "DNS роутера больше не идёт через byway") printf %s "the router's DNS no longer goes through byway" ;;
       "── 2. Служба ──") printf %s "── 2. The service ──" ;;
       "остановлена и снята с автозапуска") printf %s "stopped and removed from autostart" ;;
       "── 3. Задачи cron ──") printf %s "── 3. Cron jobs ──" ;;
@@ -45,23 +45,23 @@ t() {
       "── 5. Файлы ──") printf %s "── 5. Files ──" ;;
       "очистить кэш меню LuCI:") printf %s "clear the LuCI menu cache:" ;;
       "программа и панель удалены") printf %s "the program and the panel are removed" ;;
-      "пути убраны из keep-списка прошивки") printf %s "the paths are removed from the firmware keep-list" ;;
+      "пути byway убраны из /etc/sysupgrade.conf") printf %s "byway paths removed from /etc/sysupgrade.conf" ;;
       "── 6. Настройки и списки ──") printf %s "── 6. Settings and lists ──" ;;
       "удалены, включая ключ VPN") printf %s "removed, the VPN key included" ;;
       "── 6. Настройки и списки ОСТАВЛЕНЫ ──") printf %s "── 6. Settings and lists are KEPT ──" ;;
       "    /etc/config/byway и /etc/byway/ на месте") printf %s "    /etc/config/byway and /etc/byway/ are still there" ;;
       "    удалить вместе с ключом: byway-uninstall --purge") printf %s "    remove them together with the key: byway-uninstall --purge" ;;
       "это был сухой прогон — на роутере ничего не изменилось") printf %s "that was a dry run — nothing on the router changed" ;;
-      "Готово. Интернет работает, туннеля нет.") printf %s "Done. The internet works, there is no tunnel." ;;
-      "Что НЕ трогалось: движок Xray-core, zapret, настройки сети.") printf %s "What was NOT touched: the Xray-core engine, zapret, your network settings." ;;
-      "Что НЕ трогалось: zapret, настройки сети.") printf %s "What was NOT touched: zapret, your network settings." ;;
+      "Готово. byway удалён, интернет идёт напрямую.") printf %s "Done. byway is removed, traffic goes direct." ;;
+      "Что НЕ трогалось: движок Xray-core, настройки сети.") printf %s "What was NOT touched: the Xray core, your network settings." ;;
+      "Что НЕ трогалось: настройки сети.") printf %s "What was NOT touched: your network settings." ;;
       "движок удалён: %s шт.") printf %s "the core is removed: %s file(s)" ;;
-      "движок по своему пути оставлен: %s") printf %s "the core at your own path is left alone: %s" ;;
-      "движок из прошивки оставлен -- он мог стоять до byway и нужен не только ему") printf %s "the core from the firmware is left alone -- it may predate byway and may be used by something else" ;;
+      "движок по пути, указанному вручную, оставлен: %s") printf %s "the core at the manually set path is kept: %s" ;;
+      "движок из пакетов OpenWrt оставлен -- он мог стоять до byway и нужен не только ему") printf %s "the core from OpenWrt packages is kept -- it may predate byway and may be used by something else" ;;
       "  снять вручную: %s") printf %s "  remove by hand: %s" ;;
       "было бы сделано:") printf %s "would be done:" ;;
       "СУХОЙ ПРОГОН: ничего не меняется") printf %s "DRY RUN: nothing is being changed" ;;
-      "вычеркнуть из /etc/sysupgrade.conf строк: ") printf %s "strike out of /etc/sysupgrade.conf lines: " ;;
+      "вычеркнуть из /etc/sysupgrade.conf строк: ") printf %s "lines to remove from /etc/sysupgrade.conf: " ;;
       *) printf %s "$1" ;;
     esac
 }
@@ -114,13 +114,13 @@ if [ -x /usr/local/bin/byway ]; then
     elif /usr/local/bin/byway plumb off >/dev/null 2>&1; then
         :
     else
-        warn "обвязку снять не вышло с первого раза -- повтор через пять секунд"
+        warn "сетевые правила byway не сняты с первой попытки -- повтор через 5 секунд"
         sleep 5
         /usr/local/bin/byway plumb off >/dev/null 2>&1 ||
-            warn "обвязка НЕ снята: правила nft, маршрут и резолвер могли остаться. Снять руками: byway plumb off"
+            warn "сетевые правила byway (nft, маршрут) НЕ сняты — уйдут при перезагрузке роутера: reboot"
     fi
 else
-    warn "byway уже нет — следы убираются вручную"
+    warn "программы byway уже нет — остатки убираются по одному"
     # ВОЗВРАЩАЕМ прежние адреса, а не стираем список. Стереть целиком можно
     # ровно в одном случае -- когда есть снимок и в нём записано, что именно
     # вернуть. Снимка чаще всего НЕТ: обычная уборка удаляет его последней
@@ -239,7 +239,7 @@ if [ "$DRY" != "1" ] && [ "${_lst#* $_own }" != "$_lst" ]; then
     do_ uci commit dhcp
     do_ /etc/init.d/dnsmasq restart
 fi
-say "dnsmasq возвращён провайдеру"
+say "DNS роутера больше не идёт через byway"
 
 echo
 say "── 2. Служба ──"
@@ -337,7 +337,7 @@ if [ -f /etc/sysupgrade.conf ]; then
         grep -v "$KEEP_RE" /etc/sysupgrade.conf > /tmp/su.n || true
         mv /tmp/su.n /etc/sysupgrade.conf
     fi
-    say "пути убраны из keep-списка прошивки"
+    say "пути byway убраны из /etc/sysupgrade.conf"
 fi
 
 echo
@@ -374,10 +374,10 @@ if [ "$PURGE" = "1" ]; then
     # Свой путь, указанный человеком вручную, не наш -- о нём только говорим.
     case "$_xb" in
       ''|/usr/local/bin/xray-*) : ;;
-      *) [ -e "$_xb" ] && warnf "движок по своему пути оставлен: %s" "$_xb" ;;
+      *) [ -e "$_xb" ] && warnf "движок по пути, указанному вручную, оставлен: %s" "$_xb" ;;
     esac
     if [ -x /usr/bin/xray ]; then
-        warn "движок из прошивки оставлен -- он мог стоять до byway и нужен не только ему"
+        warn "движок из пакетов OpenWrt оставлен -- он мог стоять до byway и нужен не только ему"
         warnf "  снять вручную: %s" "${PKG:-apk} ${PKG_DEL:-del} xray-core"
     fi
 else
@@ -390,10 +390,10 @@ echo
 if [ "$DRY" = "1" ]; then
     warn "это был сухой прогон — на роутере ничего не изменилось"
 else
-    say "Готово. Интернет работает, туннеля нет."
+    say "Готово. byway удалён, интернет идёт напрямую."
     if [ "$PURGE" = "1" ]; then
-        say "Что НЕ трогалось: zapret, настройки сети."
+        say "Что НЕ трогалось: настройки сети."
     else
-        say "Что НЕ трогалось: движок Xray-core, zapret, настройки сети."
+        say "Что НЕ трогалось: движок Xray-core, настройки сети."
     fi
 fi

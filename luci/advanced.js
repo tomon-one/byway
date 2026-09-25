@@ -60,24 +60,24 @@ return view.extend({
 		o.default = 'warning';
 
 		o = s.option(form.Value, 'probe_interval',
-			_('Как часто мерить ключи'),
+			_('Интервал проверки ключей'),
 			_('Только для режима автовыбора: с каким шагом Xray-core проверяет задержку до каждого ключа. Чаще — быстрее заметит отвал, но больше лишнего трафика.'));
 		o.placeholder = '3m';
 
 		/* ── Внутреннее ── */
 		/* Язык один на панель и на консоль: byway.main.lang читают обе. */
 		o = s.option(form.ListValue, 'lang', _('Язык'),
-			_('Язык панели и вывода команды byway в консоли. Непереведённые строки остаются русскими.'));
+			_('Язык панели и вывода команды byway в консоли. Английский словарь byway скачивает с GitHub при переключении.'));
 		o.value('ru', 'Русский');
 		o.value('en', 'English');
 		o.default = 'ru';
 
-		o = s.option(form.Value, 'xray_bin', _('Движок Xray-core'),
-			_('Пусто — брать тот, что установлен пакетом. Свой путь имеет смысл, когда нужна версия, совпадающая с сервером.'));
+		o = s.option(form.Value, 'xray_bin', _('Путь к ядру Xray'),
+			_('Путь вписывает byway engine при замене ядра. Пусто — ядро из пакета.'));
 		o.placeholder = '/usr/bin/xray';
 
-		o = s.option(form.Flag, 'guard', _('Восстанавливать перехват'),
-			_('Раз в пять минут проверяется, на месте ли правила перехвата при работающем движке, и если их снесли снаружи — они ставятся обратно. Сносят их не только руками: чужой скрипт, обновление пакета firewall4, соседняя служба. Снятый вручную перехват (byway plumb off) сторож не трогает до перезагрузки.'));
+		o = s.option(form.Flag, 'guard', _('Восстановление перехвата'),
+			_('Раз в пять минут byway проверяет, на месте ли его правила в файрволе, и возвращает их, если их сняли (чужой скрипт, обновление firewall4, другая служба). Снятые вручную командой byway plumb off не возвращаются до перезагрузки.'));
 		o.default = '1';
 		o.rmempty = false;
 
@@ -85,7 +85,24 @@ return view.extend({
 	},
 
 	handleSaveApply: function (ev) {
+		var langBefore = uci.get('byway', 'main', 'lang') || 'ru';
 		return this.super('handleSaveApply', [ ev ]).then(function () {
+			/* Язык сменили -- словарь выбранного может отсутствовать:
+			   установщик кладёт только тот, что выбран при установке.
+			   byway lang докачивает английский или стирает лишний, а страница
+			   перечитывается, чтобы подхватить новый словарь панели. */
+			var langNow = uci.get('byway', 'main', 'lang') || 'ru';
+			if (langNow !== langBefore)
+				return fs.exec(bwui.BYWAY, [ 'lang', langNow ]).then(function (r) {
+					if (r.code !== 0)
+						ui.addNotification(null, [
+							E('p', {}, _('Словарь не установлен — язык остался прежним.')),
+							E('pre', { 'style': 'white-space:pre-wrap' },
+								[ bwui.plain((r.stdout || '') + (r.stderr || '')) ])
+						], 'error');
+					else
+						location.reload();
+				});
 			/* Что перезапускать -- решает procd: он видит uci commit byway и
 			   зовёт reload, а тот сверяет собранный конфиг с прежним и трогает
 			   службу только при отличии. Здесь остаётся показать ошибку
@@ -99,7 +116,7 @@ return view.extend({
 				var out = bwui.plain((r.stdout || '') + (r.stderr || ''));
 				if (r.code !== 0) {
 					ui.addNotification(null, [
-						E('p', {}, _('Настройки не подошли — работает прежняя рабочая.')),
+						E('p', {}, _('Настройки не приняты — работают прежние.')),
 						E('pre', { 'style': 'white-space:pre-wrap' }, [ out ])
 					], 'error');
 					return;

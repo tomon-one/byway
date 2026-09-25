@@ -359,7 +359,8 @@ Where things go:
 | the procd service | `/etc/init.d/byway` |
 | settings | `/etc/config/byway` |
 | lists, engine config, logs | `/etc/byway/` |
-| the panel | `/www/luci-static/resources/byway/` and `.../view/byway/` |
+| the panel — asked by the installer, only when LuCI is present | `/www/luci-static/resources/byway/` and `.../view/byway/` |
+| dictionaries — the chosen language only | `/etc/byway/lang/` |
 
 **If Xray-core did not come up, interception is not enabled either.** The house is
 left with the internet and without the tunnel, rather than without DNS — that is
@@ -424,6 +425,7 @@ is on the "Overview" tab.
 | `byway top [N]` | what is actually used |
 | `byway update [--check]` | see whether a new version exists, and install it |
 | `byway engine [VERSION]` | the Xray-core engine version and its replacement |
+| `byway lang ru\|en` | output and panel language; the English dictionary is downloaded when switching |
 | `byway report [file]` | a report for a bug thread: state and diagnostics, no key |
 | `byway export [file]` | export settings; `--no-key` leaves the VPN key out |
 | `byway import FILE` | apply settings from an export |

@@ -507,14 +507,7 @@ return view.extend({
 			_('Выключить — интернет останется, VPN не будет.'));
 		o.rmempty = false;
 
-		o = s.option(form.ListValue, 'on_failure', _('Если VPN не поднялся'),
-			_('Сервер не отвечает, ключ устарел. Пустить напрямую — дом остаётся с интернетом, но трафик для VPN идёт мимо него. Не пускать — закроется то, что ходило через VPN: в режиме «по спискам» это список, в режиме «всё через VPN» — весь выход наружу. Вход в роутер не задет.'));
-		o.value('open', _('Пустить напрямую'));
-		o.value('closed', _('Не пускать'));
-		o.default = 'open';
-		o.rmempty = false;
-
-		o = s.option(form.ListValue, 'conn_mode', _('Откуда взять ключ'),
+		o = s.option(form.ListValue, 'conn_mode', _('Способ подключения'),
 			_('byway понимает vless, vmess, trojan, shadowsocks и socks. Автоматически — Xray-core замеряет задержку и ведёт трафик через самый быстрый живой ключ.'));
 		o.value('key', _('Один ключ'));
 		o.value('sub', _('Загрузка из подписки'));
@@ -573,7 +566,7 @@ return view.extend({
 		/* Выбор активного ключа сделан ОТДЕЛЬНЫМ виджетом, а не второй опцией
 		   с именем node_url. Две опции с одним именем LuCI не допускает: вторая
 		   ломает первую, и поле «Ключ» в режиме «один ключ» просто исчезало. */
-		o = s.option(form.DummyValue, '_active', _('Каким подключаться'));
+		o = s.option(form.DummyValue, '_active', _('Активный ключ'));
 		o.depends('conn_mode', 'selector');
 		o.cfgvalue = function () { return ' '; };
 		o.renderWidget = function () {
@@ -588,7 +581,7 @@ return view.extend({
 			var stored = keyList();
 			if (!stored.length) {
 				box.appendChild(E('em', { 'style': 'opacity:.6' },
-					_('Ключи добавляются ниже или загружаются из подписки.')));
+					_('Ключи добавляются выше или загружаются из подписки.')));
 				return;
 			}
 			var cur = uci.get('byway', 'main', 'node_url') || '';
@@ -621,10 +614,17 @@ return view.extend({
 		o.remove = keepHidden;
 
 		o = s.option(form.Value, 'conn_label', _('Название подключения'),
-			_('Показывается в проверке вместо имени из ключа.'));
+			_('Показывается в строке «Подключение» вверху страницы.'));
 		o.placeholder = _('свой конфиг');
 		o.depends('conn_mode', 'outbound');
 		o.remove = keepHidden;
+
+		o = s.option(form.ListValue, 'on_failure', _('Если VPN не поднялся'),
+			_('Когда сервер не отвечает или ключ устарел. «Пустить напрямую» — интернет работает, но то, что шло через VPN, идёт без него. «Не пускать» — это закрывается: в режиме «по спискам» — сайты из списков, в режиме «всё через VPN» — весь интернет. Доступ к роутеру остаётся.'));
+		o.value('open', _('Пустить напрямую'));
+		o.value('closed', _('Не пускать'));
+		o.default = 'open';
+		o.rmempty = false;
 
 		return m.render();
 	}
