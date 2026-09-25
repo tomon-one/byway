@@ -107,7 +107,7 @@ BYWAY_VERSION="$BYWAY_NUM ($BYWAY_NAME)"
 BYWAY_REPO="tomon-one/byway"
 # Версия Xray-core, на которой byway прогнан целиком: её ставит `byway engine
 # tested`. Та же в install.sh (XRAY_TESTED) -- править парой.
-XRAY_TESTED=26.7.28
+XRAY_TESTED=26.9.9
 
 CONF=/etc/config/byway
 LISTS=/etc/byway
