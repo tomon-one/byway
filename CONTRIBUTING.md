@@ -40,6 +40,7 @@
 - **Поведение изменилось** — поправьте README, оба языка.
 
 Код распространяется под [GPL-2.0](LICENSE); присланные правки — под ней же.
+Общение в issue и pull request'ах — по [кодексу поведения](CODE_OF_CONDUCT.ru.md).
 
 ---
 
@@ -86,3 +87,4 @@ What to know about the code:
 
 The code is licensed under [GPL-2.0](LICENSE); contributions are accepted
 under the same license.
+Issues and pull requests follow the [Code of Conduct](CODE_OF_CONDUCT.md).
