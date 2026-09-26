@@ -1,0 +1,54 @@
+name: Отчёт о совместимости / Compatibility report
+description: byway на вашем роутере — заработал или нет / byway on your router — worked or not
+labels: [compatibility]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        byway проверен целиком на одной модели. Неудачный отчёт полезнее удачного.
+        byway is fully verified on one model only. A failure report is worth more than a success one.
+  - type: input
+    id: router
+    attributes:
+      label: Модель роутера / Router model
+      placeholder: Cudy WR3000S v1
+    validations:
+      required: true
+  - type: input
+    id: openwrt
+    attributes:
+      label: OpenWrt
+      description: "`grep DISTRIB_RELEASE /etc/openwrt_release`"
+      placeholder: 25.12.5
+    validations:
+      required: true
+  - type: input
+    id: arch
+    attributes:
+      label: Архитектура / Architecture
+      description: "`grep DISTRIB_ARCH /etc/openwrt_release`"
+      placeholder: aarch64_cortex-a53
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Версия byway и Xray-core / byway and Xray-core versions
+      description: "`byway version`, `byway engine --check`"
+      placeholder: byway 0.2.3, Xray 26.9.9
+  - type: dropdown
+    id: result
+    attributes:
+      label: Итог / Result
+      options:
+        - Работает / Works
+        - Работает с оговорками / Works with caveats
+        - Не работает / Does not work
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Подробности / Details
+      description: Что не так или что пришлось сделать руками; вывод `byway doctor` / What went wrong or had to be done by hand; `byway doctor` output
+      render: text

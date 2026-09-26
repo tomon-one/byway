@@ -1,0 +1,45 @@
+name: Ошибка / Bug
+description: Что-то работает не так, как написано / Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **Не вставляйте ключ VPN** (`vless://…` и прочие ссылки) — issue виден всем. Уязвимость — не сюда, а по [SECURITY.md](https://github.com/tomon-one/byway/blob/main/SECURITY.md).
+        ⚠️ **Do not paste your VPN key** (`vless://…` or any other link) — issues are public. Vulnerabilities go through [SECURITY.md](https://github.com/tomon-one/byway/blob/main/SECURITY.md), not here.
+  - type: input
+    id: version
+    attributes:
+      label: Версия byway / byway version
+      description: "`byway version`"
+      placeholder: byway 0.2.3
+    validations:
+      required: true
+  - type: input
+    id: router
+    attributes:
+      label: Роутер и OpenWrt / Router and OpenWrt
+      description: "Модель и `grep DISTRIB_RELEASE /etc/openwrt_release` / Model and OpenWrt version"
+      placeholder: Cudy WR3000S v1, OpenWrt 25.12.5
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: Что случилось / What happened
+      description: Что делали, что ожидали, что получили / What you did, what you expected, what you got
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Вывод byway report / byway report output
+      description: "`byway report` — состояние и диагностика, без ключа / state and diagnostics, without the key"
+      render: text
+  - type: checkboxes
+    id: nokey
+    attributes:
+      label: Проверка / Check
+      options:
+        - label: В тексте выше нет ключа VPN / There is no VPN key in the text above
+          required: true

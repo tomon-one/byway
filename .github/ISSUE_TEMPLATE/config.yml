@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Уязвимость / Security vulnerability
+    url: https://github.com/tomon-one/byway/security/advisories/new
+    about: Закрыто, не в открытом issue / Privately, not in a public issue
