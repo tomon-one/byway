@@ -12,7 +12,7 @@ body:
     attributes:
       label: Версия byway / byway version
       description: "`byway version`"
-      placeholder: byway 0.2.3
+      placeholder: byway 0.2.4
     validations:
       required: true
   - type: input

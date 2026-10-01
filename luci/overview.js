@@ -122,9 +122,11 @@ function maybeDecode(s) {
 }
 
 /* Что byway разбирает. Каждая схема проверена прогоном: конфиг собирается и
-   принимается ядром Xray-core. hysteria2 и tuic отсутствуют в самом Xray-core 26.7.11 —
-   это не наше ограничение. */
-var SUPPORTED = [ 'vless', 'vmess', 'trojan', 'ss', 'socks' ];
+   принимается ядром Xray-core, а hysteria2, wireguard и vless с шифрованием --
+   ещё и соединением через настоящий сервер (стенд 2026-10-01). tuic и hysteria
+   первой версии отсутствуют в самом Xray-core — это не наше ограничение. */
+var SUPPORTED = [ 'vless', 'vmess', 'trojan', 'ss', 'socks', 'hysteria2', 'hy2',
+                  'wireguard', 'wg' ];
 var KNOWN = SUPPORTED.concat([ 'ssr', 'hysteria', 'hysteria2', 'hy2', 'tuic',
                                'wireguard', 'warp' ]);
 
@@ -508,7 +510,7 @@ return view.extend({
 		o.rmempty = false;
 
 		o = s.option(form.ListValue, 'conn_mode', _('Способ подключения'),
-			_('byway понимает vless, vmess, trojan, shadowsocks и socks. Автоматически — Xray-core замеряет задержку и ведёт трафик через самый быстрый живой ключ.'));
+			_('byway понимает vless, vmess, trojan, shadowsocks, socks, hysteria2 и wireguard. Автоматически — Xray-core замеряет задержку и ведёт трафик через самый быстрый живой ключ.'));
 		o.value('key', _('Один ключ'));
 		o.value('sub', _('Загрузка из подписки'));
 		o.value('selector', _('Несколько, вручную'));

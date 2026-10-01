@@ -24,9 +24,10 @@
 #   byway status     что сейчас поднято
 #   byway check URL  разобрать ссылку и проверить конфиг ядром, без соединений
 #
-# Виды ссылок: vless, trojan, socks -- разбираются сразу; vmess и ss лежат
-# внутри base64 и требуют пакета coreutils-base64 (в busybox его нет).
-# hysteria2 и tuic невозможны: их нет в Xray 26.7.11.
+# Виды ссылок: vless, trojan, socks, hysteria2 (hy2), wireguard (wg) --
+# разбираются сразу; vmess и ss лежат внутри base64 и требуют пакета
+# coreutils-base64 (в busybox его нет). tuic и hysteria первой версии в
+# Xray-core нет (сверено по исходникам 26.9.30).
 #   byway presets    скачать подключённые готовые списки и проверить их
 #   byway sub URL    скачать подписку и напечатать ключи из неё построчно
 #   byway health     короткая проверка для панели: служба, VPN, трафик, DNS
@@ -40,8 +41,10 @@
 #   работают: ws, tcp/raw (в т.ч. headerType=http), grpc, httpupgrade, xhttp,
 #             kcp — но БЕЗ полей header и seed, они удалены отдельно от него
 #   УДАЛЕНЫ:  h2/http, quic — Xray отвергает и называет замену (xhttp)
-#   защита:   tls (alpn, fp, allowInsecure), reality (spiderX, mldsa65Verify), none
-#   не поддержан: encryption=mlkem768x25519plus — byway отказывает сам, рано
+#   защита:   tls (alpn, fp, pcs, vcn), reality (spiderX, mldsa65Verify), none
+#   с 26.3.27: hysteria (hysteria2://, obfs salamander -- с 26.7.11)
+#   шифрование VLESS mlkem768x25519plus -- с 25.8.29
+#   allowInsecure ядро отвергает с 26.3.27 (с 2026-06-01) -- нужен pcs
 #   byway probe URL  проверить ноду в изоляции, боевую конфигурацию не трогая
 #   byway nft        показать правила nft, ничего не применяя
 #   byway plumb on   поднять обвязку: nft, маршрут, dnsmasq
@@ -99,7 +102,7 @@ set -e
 # Здесь и ниже лежит остаток третьего аудита -- стенды, панель, соседи по
 # роутеру, документация. Разбор: docs/audit/2026-09-07.md. Выйдет со следующим
 # выпуском, когда правок накопится на него.
-BYWAY_NUM="0.2.3"
+BYWAY_NUM="0.2.4"
 BYWAY_NAME="Causeway"
 BYWAY_VERSION="$BYWAY_NUM ($BYWAY_NAME)"
 # Откуда берутся обновления. Отдельной строкой, а не внутри адреса: тот,
@@ -107,7 +110,7 @@ BYWAY_VERSION="$BYWAY_NUM ($BYWAY_NAME)"
 BYWAY_REPO="tomon-one/byway"
 # Версия Xray-core, на которой byway прогнан целиком: её ставит `byway engine
 # tested`. Та же в install.sh (XRAY_TESTED) -- править парой.
-XRAY_TESTED=26.9.9
+XRAY_TESTED=26.9.30
 
 CONF=/etc/config/byway
 LISTS=/etc/byway
@@ -201,6 +204,9 @@ xray_hint() {
       *"without TLS"*)
         warn "  Xray-core с 26.7.11 не пускает vless и trojan без TLS или reality к публичному адресу"
         warn "  нужен ключ с security=tls или reality; без шифрования транспорта — только сервер в частной сети" ;;
+      *'"allowInsecure"'*)
+        warn "  Xray-core с 26.3.27 не даёт отключать проверку сертификата сервера (allowInsecure)"
+        warn "  нужен отпечаток сертификата в ключе (pcs= или pinSHA256=) либо настоящий сертификат на сервере" ;;
     esac
 }
 
@@ -517,15 +523,20 @@ redir_port() {
 
 # ── разбор ссылки ──────────────────────────────────────────────────────────
 #
-# Поддержаны vless, trojan, socks (разбираются из адреса напрямую) и vmess, ss
-# (внутри base64, нужен декодер). Значения нигде не печатаются: только в конфиг.
+# Поддержаны vless, trojan, socks, hysteria2, wireguard (разбираются из адреса
+# напрямую) и vmess, ss (внутри base64, нужен декодер). Значения нигде не печатаются: только в конфиг.
 #
 # Имена полей JSON сверены прогоном `xray run -test` на самом бинарнике, а не
 # взяты из памяти: Xray молча глотает неизвестные поля, поэтому проверялось
 # от обратного -- заведомо неверное значение обязано давать ошибку именно про
 # это поле. Имена параметров В ССЫЛКЕ бинарник не знает, это соглашение
 # клиентов; ошибка в них не тихая, её поймает предупреждение ниже.
-KNOWN_PARAMS="type security sni fp alpn path host headerType seed serviceName mode authority pbk sid spx pqv flow encryption quicSecurity key extra allowInsecure packetEncoding obfs obfs-password"
+KNOWN_PARAMS="type security sni fp alpn path host headerType seed serviceName mode authority pbk sid spx pqv flow encryption quicSecurity key extra allowInsecure insecure pinSHA256 pcs vcn"
+# Свои параметры у hysteria2 и wireguard -- отдельно: у чужой схемы они
+# пропадали бы молча, а предупреждение про незнакомый параметр -- ровно
+# для того, чтобы человек узнал, что из ссылки не перенесено.
+KNOWN_HY="obfs obfs-password mport"
+KNOWN_WG="publickey privatekey secretkey pk peer_pk presharedkey pre_shared_key psk address local_address mtu reserved keepalive"
 
 # base64 на этом роутере отсутствует в busybox и требует пакета
 # coreutils-base64. Нужен только для vmess и ss -- у остальных схем всё
@@ -580,8 +591,20 @@ node_json_ok() {
                "pbk=$N_PBK" "sid=$N_SID" "flow=$N_FLOW" "mode=$N_MODE" \
                "alpn=$N_ALPN" "headerType=$N_HDR" "seed=$N_SEED" \
                "serviceName=$N_SVC" "authority=$N_AUTH" "spx=$N_SPX" \
-               "pqv=$N_PQV" "quicSecurity=$N_QSEC" "key=$N_QKEY"; do
+               "pqv=$N_PQV" "quicSecurity=$N_QSEC" "key=$N_QKEY" \
+               "encryption=$N_ENC" "obfs-password=$N_OBFSPW" "pcs=$N_PIN" \
+               "vcn=$N_VCN" "obfs=$N_OBFS" "privatekey=$N_WGKEY" \
+               "publickey=$N_WGPUB" "presharedkey=$N_WGPSK" "address=$N_WGADDR" \
+               "mtu=$N_WGMTU" "reserved=$N_WGRES" "keepalive=$N_WGKA"; do
         case "$_pv" in
+          # Управляющие знаки -- ПЕРВЫМИ. qpr раскодирует %0A в настоящий
+          # перевод строки, а проверки формы идут построчным grep: «1,2,3»
+          # в первой строке проходило образец, хвост со второй строки уходил
+          # в конфиг. У reserved (он без кавычек) так дописывался второй
+          # peers со своим сервером, и ядро брало последний (находка аудита
+          # 2026-10-01). В значениях ключа управляющим знакам места нет.
+          *[[:cntrl:]]*)
+            dief "в поле «%s» ссылки управляющий знак (перевод строки, табуляция): такая ссылка подменяет поля конфига" "${_pv%%=*}" ;;
           *'"'*|*'\'*)
             dief "в поле «%s» ссылки кавычка или обратная косая: значения уходят в конфиг как есть, и такая ссылка подменяет его поля" "${_pv%%=*}" ;;
         esac
@@ -662,9 +685,11 @@ parse_node() {
 
     N_SCHEME=${URL%%://*}
     case "$N_SCHEME" in
-      vless|trojan|socks|vmess|ss) ;;
-      hysteria|hysteria2|hy2|tuic)
-        dief "%s эта сборка Xray-core не поддерживает (проверено на 26.7.11)" "$N_SCHEME" ;;
+      vless|trojan|socks|vmess|ss|hysteria2|hy2|wireguard|wg) ;;
+      # Сверено по исходникам 26.9.30: исходящего tuic в Xray-core нет, а
+      # hysteria там только второй версии (Build отвергает version != 2).
+      hysteria|tuic)
+        dief "%s в Xray-core нет; из похожего есть hysteria2" "$N_SCHEME" ;;
       *) dief "неизвестный вид ссылки: %s" "$N_SCHEME" ;;
     esac
 
@@ -682,6 +707,8 @@ parse_node() {
     N_PBK=""; N_SID=""; N_FLOW=""; N_MODE=""; N_ALPN=""
     N_HDR=""; N_SEED=""; N_SVC=""; N_AUTH=""; N_SPX=""; N_PQV=""
     N_ENC=""; N_QSEC=""; N_QKEY=""; N_EXTRA=""; N_INSEC=""
+    N_OBFS=""; N_OBFSPW=""; N_PIN=""; N_VCN=""
+    N_WGKEY=""; N_WGPUB=""; N_WGPSK=""; N_WGADDR=""; N_WGMTU=""; N_WGRES=""; N_WGKA=""
     _query=""
 
     if [ "$N_SCHEME" = "vmess" ]; then
@@ -699,6 +726,19 @@ parse_node() {
         [ "$(jf tls)" = "tls" ] && N_SEC=tls
         N_SNI=$(jf sni); [ -n "$N_SNI" ] || N_SNI=${N_WSHOST:-$N_HOST}
         [ -n "$N_WSHOST" ] || N_WSHOST=$N_HOST
+        # scy -- шифрование самого vmess, alpn и fp -- для TLS. Прежде все
+        # три пропадали: security писался auto всегда.
+        N_METHOD=$(jf scy)
+        case "$N_METHOD" in
+          ""|auto|aes-128-gcm|chacha20-poly1305|none|zero) ;;
+          *) dief "scy=%s у vmess Xray-core не знает: есть auto, aes-128-gcm, chacha20-poly1305, none, zero" "$N_METHOD" ;;
+        esac
+        # alpn -- через запятую внутри строки, а jf режет на запятой.
+        N_ALPN=$(printf '%s' "$_j" | sed -n 's/.*"alpn"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        _v=$(jf fp); [ -n "$_v" ] && N_FP=$_v
+        # У vmess имя сервиса gRPC лежит в path (так пишут v2rayN и прочие),
+        # а не в отдельном поле: без этого serviceName уходил пустым.
+        if [ "$N_TYPE" = "grpc" ]; then N_SVC=$N_PATH; fi
         N_PROTO=vmess
         node_json_ok
         # Проверка порта СВОЯ у каждой ветки, а не одна общая в конце. Общая
@@ -714,7 +754,13 @@ parse_node() {
         # ss://method:password@host:port. Второй встречается реже.
         _ui=${_rest%%@*}
         _hp=${_rest#*@}
+        # Плагин (obfs-local, v2ray-plugin) Xray-core не запускает -- без
+        # него сервер с плагином не ответит. Говорим вслух, а не теряем.
+        case "$_hp" in *plugin=*)
+            warn "plugin у shadowsocks не переносится: Xray-core плагины не запускает, сервер с плагином не ответит" ;;
+        esac
         _hp=${_hp%%\?*}
+        _hp=${_hp%%/*}
         case "$_ui" in
           *:*) _plain=$_ui ;;
           *)   _plain=$(b64d "$_ui") ;;
@@ -732,10 +778,15 @@ parse_node() {
         return 0
     fi
 
-    # vless, trojan, socks -- всё в адресе открытым текстом
+    # vless, trojan, socks, hysteria2, wireguard -- всё в адресе открытым текстом
     _ui=${_rest%%@*}
     _rest2=${_rest#*@}
+    # Без собаки части до неё нет вовсе: wg-ссылки Hiddify и hysteria2 без
+    # пароля несут всё в параметрах. Прежде весь хвост уходил в _ui.
+    case "$_rest" in *@*) ;; *) _ui="" ;; esac
     _hostport=${_rest2%%\?*}
+    # hysteria2 пишет «host:port/?sni=…» -- косая перед вопросом не порт.
+    _hostport=${_hostport%%/*}
     N_HOST=${_hostport%%:*}
     N_PORT=${_hostport##*:}
     if [ "$N_PORT" = "$N_HOST" ]; then N_PORT=443; fi
@@ -745,8 +796,23 @@ parse_node() {
     case "$N_SCHEME" in
       vless)  N_UUID=$_ui; N_PROTO=vless ;;
       trojan) N_PASS=$(pctd "$_ui"); N_PROTO=trojan ;;
-      socks)  N_USER=${_ui%%:*}; N_PASS=${_ui#*:}
-              [ "$N_USER" = "$_ui" ] && { N_USER=""; N_PASS=""; }
+      hysteria2|hy2) N_PASS=$(pctd "$_ui"); N_PROTO=hysteria ;;
+      wireguard|wg)  N_WGKEY=$(pctd "$_ui"); N_PROTO=wireguard ;;
+      socks)  _su=$(pctd "$_ui")
+              # Часть клиентов кладёт «логин:пароль» в base64 (вида
+              # socks://dXNlcjpwYXNz@…). Без расшифровки логин и пароль
+              # пропадали молча, и сервер с паролем отвечал отказом.
+              case "$_su" in
+                *:*|"") ;;
+                *) if have_base64; then
+                       _sd=$(b64d "$_su")
+                       case "$_sd" in *:*) _su=$_sd ;; esac
+                   else
+                       warnf "у socks логин и пароль, похоже, в base64, а декодера нет: %s" "$PKG_FIX coreutils-base64"
+                   fi ;;
+              esac
+              N_USER=${_su%%:*}; N_PASS=${_su#*:}
+              [ "$N_USER" = "$_su" ] && { N_USER=""; N_PASS=""; }
               N_PROTO=socks ;;
     esac
 
@@ -768,6 +834,10 @@ parse_node() {
         qp "$1" | sed 's/%7B/{/g; s/%7D/}/g; s/%22/"/g; s/%5B/[/g; s/%5D/]/g'
     }
     _v=$(qp type);     [ -n "$_v" ] && N_TYPE=$_v
+    # trojan без TLS не бывает: протокол и задуман поверх него, и клиенты
+    # параметр security у trojan часто опускают. Прежде пустой security
+    # давал none, и свежее ядро такой ключ к публичному адресу отвергало.
+    [ "$N_PROTO" = "trojan" ] && N_SEC=tls
     _v=$(qp security); [ -n "$_v" ] && N_SEC=$_v
     N_SNI=$(qp sni);   [ -n "$N_SNI" ] || N_SNI=$N_HOST
     _v=$(qp fp);       [ -n "$_v" ] && N_FP=$_v
@@ -778,7 +848,78 @@ parse_node() {
     N_SEED=$(qp seed); N_SVC=$(qp serviceName); N_AUTH=$(qp authority)
     N_SPX=$(qp spx); N_PQV=$(qp pqv); N_ENC=$(qp encryption)
     N_QSEC=$(qp quicSecurity); N_QKEY=$(qp key); N_EXTRA=$(qp_json extra)
-    N_INSEC=$(qp allowInsecure)
+    N_INSEC=$(qp allowInsecure); [ -n "$N_INSEC" ] || N_INSEC=$(qp insecure)
+    # pcs -- имя у v2rayN, pinSHA256 -- у hysteria2; значение одно и то же.
+    N_PIN=$(qp pcs); [ -n "$N_PIN" ] || N_PIN=$(qp pinSHA256)
+    N_VCN=$(qp vcn)
+    # Параметр без раскодирования: пароли и ключи бывают с любыми знаками,
+    # qp раскодирует лишь часть. Полный pctd здесь безопасен, потому что
+    # результат проходит node_json_ok (кавычка, косая) и образцы ниже.
+    qpr() { pctd "$(printf '%s' "$_query" | tr '&' '\n' | sed -n "s/^$1=//p" | head -1)"; }
+    # Первый непустой из нескольких имён одного параметра: клиенты зовут
+    # одно и то же по-разному (v2rayN -- publickey, Hiddify -- peer_pk).
+    qpa() { for _qn in "$@"; do _qv=$(qpr "$_qn"); [ -n "$_qv" ] && { printf '%s' "$_qv"; return 0; }; done; return 0; }
+
+    if [ "$N_PROTO" = "hysteria" ]; then
+        # Транспорт у hysteria свой, и он всегда под TLS -- без tlsSettings
+        # ядро не соединяется вовсе («tls config is nil» в dialer.go).
+        N_TYPE=hysteria; N_SEC=tls
+        # Отпечаток браузера (uTLS) относится к TLS поверх TCP; у QUIC его нет.
+        N_FP=""
+        [ -n "$N_ALPN" ] || N_ALPN=h3
+        # Смена портов у hysteria2 пишется и параметром mport, и прямо в
+        # порту: «host:443,20000-30000» или «host:20000-30000». Ни то, ни
+        # другое Xray-core через hysteriaSettings не берёт; соединение идёт
+        # на первый порт, сервер слушает и его.
+        case "$N_PORT" in
+          *[,-]*) warnf "диапазон портов в ключе не переносится: соединение идёт на порт %s" "${N_PORT%%[,-]*}"
+                  N_PORT=${N_PORT%%[,-]*} ;;
+        esac
+        _v=$(qp obfs)
+        case "$_v" in
+          ""|none) ;;
+          salamander) N_OBFS=salamander; N_OBFSPW=$(qpr obfs-password)
+                      [ -n "$N_OBFSPW" ] || die "obfs=salamander без obfs-password: пароль обфускации обязателен" ;;
+          *) dief "obfs=%s у hysteria2 не поддержан: в Xray-core есть только salamander" "$_v" ;;
+        esac
+        if [ -n "$(qp mport)" ]; then
+            warn "mport (смена портов) не переносится: соединение идёт на основной порт из ключа"
+        fi
+    fi
+
+    if [ "$N_PROTO" = "wireguard" ]; then
+        N_TYPE=wireguard; N_SEC=none
+        [ -n "$N_WGKEY" ] || N_WGKEY=$(qpa privatekey secretkey pk)
+        N_WGPUB=$(qpa publickey peer_pk)
+        N_WGPSK=$(qpa presharedkey pre_shared_key psk)
+        N_WGADDR=$(qpa address local_address | tr -d ' ')
+        N_WGMTU=$(qp mtu); N_WGRES=$(qpr reserved | tr -d ' '); N_WGKA=$(qp keepalive)
+        # Ключи -- base64 на 32 байта либо hex; так их и принимает
+        # ParseWireGuardKey. Образец строгий: значение уходит в конфиг.
+        wgkey_ok() { printf '%s' "$1" | grep -Eq '^([A-Za-z0-9+/]{43}=|[0-9a-fA-F]{64})$'; }
+        wgkey_ok "$N_WGKEY" || die "в ключе wireguard нет закрытого ключа либо он не той формы (base64 на 44 знака либо 64 шестнадцатеричных)"
+        wgkey_ok "$N_WGPUB" || die "в ключе wireguard нет публичного ключа сервера (publickey) либо он не той формы"
+        [ -z "$N_WGPSK" ] || wgkey_ok "$N_WGPSK" || die "presharedkey в ключе wireguard не той формы"
+        # Без своего адреса в туннеле ядро подставит 10.0.0.1 -- сервер такого
+        # клиента не узнает, и соединение молча не пойдёт.
+        [ -n "$N_WGADDR" ] || die "в ключе wireguard нет address -- адреса этого клиента в туннеле"
+        printf '%s' "$N_WGADDR" | grep -Eq '^[0-9a-fA-F.:]+(/[0-9]{1,3})?(,[0-9a-fA-F.:]+(/[0-9]{1,3})?)*$' ||
+            dief "address в ключе wireguard не похож на список адресов: %s" "$N_WGADDR"
+        [ -z "$N_WGMTU" ] || printf '%s' "$N_WGMTU" | grep -Eq '^[0-9]{3,4}$' ||
+            dief "mtu в ключе wireguard -- не число: %s" "$N_WGMTU"
+        [ -z "$N_WGRES" ] || printf '%s' "$N_WGRES" | grep -Eq '^[0-9]{1,3},[0-9]{1,3},[0-9]{1,3}$' ||
+            dief "reserved в ключе wireguard -- не три числа через запятую: %s" "$N_WGRES"
+        [ -z "$N_WGKA" ] || printf '%s' "$N_WGKA" | grep -Eq '^[0-9]{1,5}$' ||
+            dief "keepalive в ключе wireguard -- не число: %s" "$N_WGKA"
+    fi
+    if [ -n "$N_PIN" ]; then
+        printf '%s' "$N_PIN" | grep -Eq '^[0-9a-fA-F:,]+$' ||
+            dief "отпечаток сертификата (pcs, pinSHA256) -- не шестнадцатеричный: %s" "$N_PIN"
+    fi
+    if [ -n "$N_VCN" ]; then
+        printf '%s' "$N_VCN" | grep -Eq '^[A-Za-z0-9.,*-]+$' ||
+            dief "имя для проверки сертификата (vcn) -- не имя хоста: %s" "$N_VCN"
+    fi
     node_json_ok
     # extra идёт в конфиг объектом, минуя проверку на кавычку выше, поэтому
     # проверяется своей: один объект и ничего вокруг.
@@ -786,15 +927,32 @@ parse_node() {
         die "параметр extra в ссылке -- не один объект JSON: он подставляется в конфиг как есть, и такая ссылка переписывает соседние поля, включая адрес сервера и защиту"
     fi
 
+    case "$N_PROTO" in
+      hysteria)  _known="$KNOWN_PARAMS $KNOWN_HY" ;;
+      wireguard) _known="$KNOWN_PARAMS $KNOWN_WG" ;;
+      *)         _known=$KNOWN_PARAMS ;;
+    esac
     for _pn in $(printf '%s' "$_query" | tr '&' '\n' | sed 's/=.*//' | grep . ); do
-        case " $KNOWN_PARAMS " in
+        case " $_known " in
           *" $_pn "*) ;;
           *) warnf "параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он" "$_pn" ;;
         esac
     done
 
+    # Шифрование VLESS (постквантовое, mlkem768x25519plus) -- с Xray-core
+    # 25.8.29. Значение идёт в конфиг строкой как есть; форму проверяем
+    # образцом, разбор частей оставляем ядру -- его run -test отвергнет
+    # негодное до подмены рабочего конфига.
     if [ -n "$N_ENC" ] && [ "$N_ENC" != "none" ]; then
-        dief "encryption=%s не поддержан этой сборкой Xray-core: убрать параметр из ссылки либо обновить движок" "$N_ENC"
+        [ "$N_PROTO" = "vless" ] ||
+            dief "encryption=%s бывает только у vless" "$N_ENC"
+        printf '%s' "$N_ENC" | grep -Eq '^mlkem768x25519plus\.[A-Za-z0-9._+/=-]+$' ||
+            dief "encryption=%s не поддержан: Xray-core знает только mlkem768x25519plus" "$N_ENC"
+        xray_ver_num >/dev/null
+        if [ "$XRAYVER" -lt 250829 ]; then
+            dief "шифрование VLESS (encryption=mlkem768x25519plus) появилось в Xray-core 25.8.29, а стоит %s — обновить: byway engine tested" \
+                 "$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f2)"
+        fi
     fi
 
     # Общая проверка на выходе: порт приходит и из адреса, и из base64-обёртки
@@ -806,9 +964,27 @@ parse_node() {
 build_outbound() {
     case "$N_PROTO" in
       vless)
-        OUTBOUND="\"protocol\": \"vless\", \"settings\": { \"vnext\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"users\": [ { \"id\": \"$N_UUID\", \"encryption\": \"none\"$FLOWJ } ] } ] }" ;;
+        OUTBOUND="\"protocol\": \"vless\", \"settings\": { \"vnext\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"users\": [ { \"id\": \"$N_UUID\", \"encryption\": \"${N_ENC:-none}\"$FLOWJ } ] } ] }" ;;
+      hysteria)
+        OUTBOUND="\"protocol\": \"hysteria\", \"settings\": { \"version\": 2, \"address\": \"$N_HOST\", \"port\": $N_PORT }" ;;
+      wireguard)
+        # address -- список через запятую, уже сверенный образцом в parse_node.
+        _wa=$(printf '%s' "$N_WGADDR" | sed 's/,/", "/g')
+        _wp="\"publicKey\": \"$N_WGPUB\", \"endpoint\": \"$N_HOST:$N_PORT\""
+        if [ -n "$N_WGPSK" ]; then _wp="$_wp, \"preSharedKey\": \"$N_WGPSK\""; fi
+        if [ -n "$N_WGKA" ]; then _wp="$_wp, \"keepAlive\": $N_WGKA"; fi
+        _wo=""
+        if [ -n "$N_WGMTU" ]; then _wo=", \"mtu\": $N_WGMTU"; fi
+        if [ -n "$N_WGRES" ]; then _wo="$_wo, \"reserved\": [ $N_WGRES ]"; fi
+        # noKernelTun: wireguard внутри процесса движка, а не интерфейсом
+        # ядра. С 24.11.30 Xray по умолчанию поднимает wg0 через /dev/net/tun:
+        # без kmod-tun конфиг отвергается («CreateTUN failed», стенд
+        # 25.12.5 2026-10-01), а с ним в системе появляется интерфейс, о
+        # котором маршрутизация роутера ничего не знает. Старшие версии поле
+        # не знают и пропускают -- у них wireguard и так внутри процесса.
+        OUTBOUND="\"protocol\": \"wireguard\", \"settings\": { \"noKernelTun\": true, \"secretKey\": \"$N_WGKEY\", \"address\": [ \"$_wa\" ], \"peers\": [ { $_wp } ]$_wo }" ;;
       vmess)
-        OUTBOUND="\"protocol\": \"vmess\", \"settings\": { \"vnext\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"users\": [ { \"id\": \"$N_UUID\", \"alterId\": ${N_AID:-0}, \"security\": \"auto\" } ] } ] }" ;;
+        OUTBOUND="\"protocol\": \"vmess\", \"settings\": { \"vnext\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"users\": [ { \"id\": \"$N_UUID\", \"alterId\": ${N_AID:-0}, \"security\": \"${N_METHOD:-auto}\" } ] } ] }" ;;
       trojan)
         OUTBOUND="\"protocol\": \"trojan\", \"settings\": { \"servers\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"password\": \"$N_PASS\" } ] }" ;;
       shadowsocks)
@@ -1071,7 +1247,34 @@ build_stream() {
            if [ -n "$N_EXTRA" ]; then _m="$_m, \"extra\": $N_EXTRA"; fi
            STREAM="\"network\": \"xhttp\", \"xhttpSettings\": { \"path\": \"$N_PATH\", \"host\": \"$N_WSHOST\"$_m }" ;;
 
-      *)   dief "транспорт %s не поддержан — есть ws, tcp/raw, kcp, grpc, httpupgrade, xhttp" "$N_TYPE" ;;
+      hysteria)
+           # Транспорт и протокол в Xray-core есть с 26.1.13, но схема
+           # hysteriaSettings менялась от выпуска к выпуску (up/down и udphop
+           # уехали в finalmask к 26.9.9). Пишем только поля, общие для всех:
+           # version и auth. Нижняя граница -- проверенная прогоном 26.3.27.
+           xray_ver_num >/dev/null
+           if [ "$XRAYVER" -lt 260327 ]; then
+               dief "hysteria2 нужен Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested" \
+                    "$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f2)"
+           fi
+           warn "hysteria2 идёт поверх QUIC (UDP), а в РФ его ограничивают первым делом"
+           _fm=""
+           if [ -n "$N_OBFS" ]; then
+               # salamander в finalmask/udp появился к 26.7.11; до того
+               # обфускации у hysteria в Xray-core не было вовсе.
+               if [ "$XRAYVER" -lt 260711 ]; then
+                   dief "obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а стоит %s — обновить: byway engine tested" \
+                        "$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f2)"
+               fi
+               _fm=", \"finalmask\": { \"udp\": [ { \"type\": \"salamander\", \"settings\": { \"password\": \"$N_OBFSPW\" } } ] }"
+           fi
+           STREAM="\"network\": \"hysteria\", \"hysteriaSettings\": { \"version\": 2, \"auth\": \"$N_PASS\" }$_fm" ;;
+
+      # У wireguard транспорта нет: протокол сам ходит по UDP. В
+      # streamSettings остаётся только метка на сокете (self_sockopt).
+      wireguard) STREAM="" ;;
+
+      *)   dief "транспорт %s не поддержан — есть ws, tcp/raw, kcp, grpc, httpupgrade, xhttp, hysteria" "$N_TYPE" ;;
     esac
     case "$N_SEC" in
       tls)     _a=""
@@ -1082,11 +1285,34 @@ build_stream() {
                  _alist=$(printf '%s' "$N_ALPN" | sed 's/,/", "/g')
                  _a=", \"alpn\": [ \"$_alist\" ]"
                fi
+               # allowInsecure ядро с 26.3.27 отвергает (там -- с 2026-06-01,
+               # с 26.6.27 -- без условий), замена -- отпечаток сертификата
+               # (pinnedPeerCertSha256) или имя для проверки
+               # (verifyPeerCertByName). Сверено по исходникам 26.3.27-26.9.30.
+               # Прежде byway писал allowInsecure всегда, и на любом свежем
+               # движке такой ключ не собирался, а причину называл сам Xray.
+               xray_ver_num >/dev/null
                if [ "$N_INSEC" = "1" ] || [ "$N_INSEC" = "true" ]; then
-                 warn "allowInsecure=1: проверка сертификата сервера отключена, соединение можно подменить"
-                 _a="$_a, \"allowInsecure\": true"
+                 if [ "$XRAYVER" -lt 260327 ]; then
+                   warn "allowInsecure=1: проверка сертификата сервера отключена, соединение можно подменить"
+                   _a="$_a, \"allowInsecure\": true"
+                 elif [ -z "$N_PIN" ] && [ -z "$N_VCN" ]; then
+                   die "в ключе отключена проверка сертификата (allowInsecure или insecure), а Xray-core с 26.3.27 так не умеет: нужен отпечаток сертификата сервера (pcs= или pinSHA256=) либо настоящий сертификат на сервере"
+                 fi
                fi
-               SECURITY="\"security\": \"tls\", \"tlsSettings\": { \"serverName\": \"$N_SNI\", \"fingerprint\": \"$N_FP\"$_a }" ;;
+               if [ -n "$N_PIN" ] || [ -n "$N_VCN" ]; then
+                 if [ "$XRAYVER" -lt 260327 ]; then
+                   dief "проверка сертификата по отпечатку (pcs, vcn) нужна Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested" \
+                        "$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f2)"
+                 fi
+                 if [ -n "$N_PIN" ]; then _a="$_a, \"pinnedPeerCertSha256\": \"$N_PIN\""; fi
+                 if [ -n "$N_VCN" ]; then _a="$_a, \"verifyPeerCertByName\": \"$N_VCN\""; fi
+               fi
+               # Отпечаток браузера пишется, только если он есть: у hysteria
+               # (QUIC) его нет вовсе.
+               _f=""
+               if [ -n "$N_FP" ]; then _f=", \"fingerprint\": \"$N_FP\""; fi
+               SECURITY="\"security\": \"tls\", \"tlsSettings\": { \"serverName\": \"$N_SNI\"$_f$_a }" ;;
       reality)
                # spiderX и mldsa65Verify -- поля проверены на бинарнике: мусор
                # в значении даёт ошибку именно про них, значит они реализованы,
@@ -1143,12 +1369,16 @@ build_stream() {
     if [ -n "$_mux" ] && [ "$_mux" != "0" ]; then
         if [ -n "$N_FLOW" ]; then
             warnf "mux отключён: он не сочетается с flow=%s (Vision делит поток сам)" "$N_FLOW"
-        elif [ "$N_TYPE" = "xhttp" ] || [ "$N_TYPE" = "grpc" ]; then
+        elif [ "$N_TYPE" = "xhttp" ] || [ "$N_TYPE" = "grpc" ] || [ "$N_TYPE" = "hysteria" ]; then
             # Замер 2026-09-03: xhttp с mux дал 896 мс медианы против 861 без
             # него, и всё уходило в ОДНО соединение. У xhttp своё
             # мультиплексирование (xmux), у grpc свой multiMode -- второй слой
             # поверх только добавляет блокировку начала очереди.
             warnf "mux отключён: у транспорта %s своё мультиплексирование, второй слой поверх только вредит" "$N_TYPE"
+        elif [ "$N_PROTO" = "wireguard" ]; then
+            # Мультиплексирование Xray -- поверх потока; у wireguard потока
+            # нет, ему делить нечего. Говорим вслух, как о прочих отказах.
+            warn "mux к wireguard не применяется: у него нет потока, который можно делить"
         else
             MUXJ=" \"mux\": { \"enabled\": true, \"concurrency\": $_mux },"
         fi
@@ -1161,12 +1391,31 @@ build_stream() {
 proxy_block() {
     _tag=${1:-proxy}
     if [ "$N_PROTO" = "raw" ]; then
-        # Вставляем "tag" первым полем. Если человек уже указал свой -- Xray
-        # возьмёт последний, поэтому свой тег перебьём: правила ищут proxy.
-        printf '%s' "$N_RAW" | sed "0,/{/s/{/{ \"tag\": \"$_tag\",/"
+        # "tag" -- ПОСЛЕДНИМ полем объекта. Xray на повторяющемся ключе берёт
+        # последний (проверено run -dump на 26.9.30), а правила ищут свой
+        # тег. Прежде тег вставлялся первым, и свой тег человека его
+        # перебивал: правила вели в несуществующий исходящий, а run -test
+        # этого не замечает.
+        printf '%s' "$N_RAW" | awk -v t="$_tag" '
+            { s = s $0 "\n" }
+            END {
+                n = 0
+                for (i = length(s); i > 0; i--) if (substr(s, i, 1) == "}") { n = i; break }
+                if (n == 0) { printf "%s", s; exit }
+                head = substr(s, 1, n - 1); tail = substr(s, n)
+                b = head; sub(/[[:space:]]+$/, "", b)
+                sep = (substr(b, length(b), 1) == "{") ? " " : ", "
+                printf "%s%s\"tag\": \"%s\" %s", b, sep, t, tail
+            }' 
     else
-        printf '{ "tag": "%s", %s,%s "streamSettings": { %s, %s%s } }' \
-            "$_tag" "$OUTBOUND" "$MUXJ" "$STREAM" "$SECURITY" "$(self_sockopt)"
+        # Части streamSettings склеиваются через запятую только непустые:
+        # у wireguard транспорта нет, и шаблон «{ %s, %s }» дал бы «{ , …}».
+        _ss=$STREAM
+        if [ -n "$SECURITY" ]; then _ss="${_ss:+$_ss, }$SECURITY"; fi
+        _so=$(self_sockopt)
+        if [ -z "$_ss" ]; then _so=${_so#, }; fi
+        printf '{ "tag": "%s", %s,%s "streamSettings": { %s%s } }' \
+            "$_tag" "$OUTBOUND" "$MUXJ" "$_ss" "$_so"
     fi
 }
 
@@ -3079,7 +3328,7 @@ EXPORT_KEYS="enabled conn_mode node_url sub_url outbound_json conn_label
              list_mode ru_direct preset interface fakeip_pool dns_upstream
              dns_upstream2 dns_bootstrap dns_listen tproxy_port local_proxy_port redirect_port
              router_via_vpn mark self_mark log_level ipv6 fakeip6_pool
-             show_usage mux_concurrency probe_interval guard
+             show_usage mux_concurrency probe_interval guard block_quic
              lists_update dns_route on_failure node_urls lang update_check
              auto_update auto_update_hour"
 
@@ -3693,7 +3942,7 @@ eng_ram_restore() {
 REPORT_KEYS="enabled conn_mode list_mode ru_direct preset interface
              fakeip_pool dns_upstream dns_upstream2 dns_bootstrap dns_listen tproxy_port local_proxy_port
              redirect_port router_via_vpn mark self_mark log_level ipv6 fakeip6_pool
-             show_usage mux_concurrency probe_interval guard
+             show_usage mux_concurrency probe_interval guard block_quic
              lang xray_bin conn_label"
 
 cmd_report() {
@@ -4158,11 +4407,17 @@ cmd_import() {
 }
 
 cmd_probe() {
-    URL=${1:-$(u node_url)}
-    [ -n "$URL" ] || die "ссылка не задана: передать аргументом либо записать в byway.main.node_url"
     [ -x "$XRAY" ] ||
         dief "движка нет (%s) — ключ проверить нечем; сам ключ тут ни при чём" "$XRAY"
-    parse_node "$URL"
+    # Без аргумента в режиме «свой конфиг» проверяется он, как и у check:
+    # прежде probe брал node_url, то есть проверял не то, что работает.
+    if [ -z "${1:-}" ] && [ "$(u conn_mode)" = "outbound" ]; then
+        parse_node
+    else
+        URL=${1:-$(u node_url)}
+        [ -n "$URL" ] || die "ссылка не задана: передать аргументом либо записать в byway.main.node_url"
+        parse_node "$URL"
+    fi
     build_stream
 
     PORT=${PROBE_PORT:-15080}
@@ -5340,6 +5595,42 @@ nft_ruleset() {
     # принимает, правило на него просто не срабатывает.
     if [ -n "$_nets" ]; then _netsline="elements = { $_nets }"; else _netsline=""; fi
 
+    # QUIC в туннель не пускать (block_quic, по умолчанию включено).
+    # Ключи поверх TCP (vless, trojan, vmess и прочие) везут UDP клиента
+    # внутри TCP, и QUIC там зависает молча: клиент десятки секунд ждёт
+    # ответа и только потом сам уходит на TCP. Discord 2026-10-01 держал так
+    # сообщения по 15--38 секунд. Отказ сразу (ICMP port unreachable)
+    # переводит клиента на HTTP/2 без ожидания. У hysteria2, wireguard и kcp
+    # туннель сам по UDP -- там настройку можно выключить.
+    #
+    # По МЕТКЕ перехвата, а не по адресу: одно правило накрывает пул
+    # подставных адресов, подсети, режим «всё через VPN» и IPv6. Стоит в
+    # input, потому что reject в prerouting ядро не принимает, а tproxy
+    # приводит перехваченный пакет именно сюда, с исходным портом 443.
+    #
+    # Только первый пакет QUIC, а не весь UDP 443: длинный заголовок (два
+    # старших бита первого байта) и номер версии QUIC v1 или v2 следом.
+    # Иначе под отказ попадали OpenVPN и WireGuard клиента на udp/443, DTLS,
+    # STUN/TURN -- у них первый байт другой, и перехода на TCP у многих нет
+    # (находка аудита 2026-10-01). Пакеты уже идущей сессии (короткий
+    # заголовок) не трогаются: новые сессии и так начинаются с Initial.
+    # Синтаксис принят nftables 1.0.2 (OpenWrt 22.03) и 25.12.5.
+    # Пустое значение -- включено: так у установок, где опции ещё нет.
+    # Вход для собственного трафика роутера (redir-in) при включённом IPv6
+    # слушает «::», то есть все интерфейсы, а не петлю. Настоящий заворот
+    # приходит на него через lo и до этого правила не доходит (iif lo
+    # return выше), поэтому закрыть порт для прочих можно безусловно.
+    _rdrop=""
+    if [ -n "$_rport" ]; then
+        _rdrop="
+		meta l4proto tcp th dport $_rport counter drop"
+    fi
+    _quic=""
+    if [ "$(u block_quic)" != "0" ]; then
+        _quic="
+		meta mark & $_mark == $_mark udp dport 443 @th,64,8 & 0xc0 == 0xc0 @th,72,32 { 0x00000001, 0x6b3343cf } counter reject"
+    fi
+
     # Прелюдия из двух строк -- не украшение, а починка.
     #
     # `nft -f` НЕ заменяет таблицу, он доливает в неё. Значит проверка
@@ -5434,8 +5725,8 @@ table inet $TABLE {
 	# сокет отвечает на обоих, и закрывать надо оба.
 	chain input {
 		type filter hook input priority filter - 10; policy accept;
-		iif lo return
-		meta l4proto { tcp, udp } th dport $_port counter drop
+		iif lo return$_quic
+		meta l4proto { tcp, udp } th dport $_port counter drop$_rdrop
 	}
 $_selfchain
 }
@@ -5527,7 +5818,9 @@ route_down() {
 # то есть часть доменов получала бы настоящий адрес вместо fakeip, и маршрут
 # работал бы через раз. Худший вид поломки: не видно.
 #
-# Прежние значения кладутся в byway.main.saved_*, откат их возвращает.
+# Прежние значения кладутся в /etc/byway/dns-saved (старые установки держали
+# их в byway.main.saved_* -- те читаются только при переходе), откат их
+# возвращает.
 # Кэш dnsmasq НЕ обнуляется, в отличие от podkop: таблица fakedns живёт в
 # памяти Xray, пул на 131 тысячу адресов при полутора тысячах доменов не
 # вытесняется, поэтому кэшировать ответ безопасно. Но пережить перезапуск
@@ -6059,9 +6352,13 @@ cmd_nft() { nft_ruleset; }
 # правила, плюс суммы файлов подсетей. Меняется что-то из этого -- меняется и
 # слепок; не меняется -- правила перекладывать незачем.
 nft_sig() {
-    printf '%s|%s|%s|%s|%s|' \
+    # block_quic -- в подписи обязательно: из всех настроек только он живёт
+    # исключительно в правилах nft и в конфиг движка не попадает. Без него
+    # reload видел «ничего не изменилось», и переключатель в панели не
+    # действовал до перезапуска (находка аудита 2026-10-01).
+    printf '%s|%s|%s|%s|%s|%s|' \
         "$(u fakeip_pool)" "$(u mark)" "$(u tproxy_port)" \
-        "$(u interface)" "$(u list_mode)"
+        "$(u interface)" "$(u list_mode)" "$(u block_quic)"
     {
         md5sum "$LISTS/subnets.lst" 2>/dev/null | cut -d' ' -f1
         for _ns in $(u preset); do
@@ -6504,7 +6801,9 @@ cmd_status() {
             _r=$(nslookup "$_d" 127.0.0.1 2>/dev/null | awk '/^Address/{print $NF}' | grep -E "^$(fakeip_re)" | head -1)
             [ -n "$_r" ] && printf "$(_t 'fakeip      %s -> %s\n')" "$_d" "$_r" || printf "$(_t 'fakeip      НЕ выдаётся на %s\n')" "$_d"
         fi
-        _c=$(nft list table inet "$TABLE" 2>/dev/null | grep -oE "packets [0-9]+" | awk '{s+=$2} END{print s+0}')
+        # Только правила tproxy: счётчики отказа QUIC и закрытого порта
+        # перехвата считали бы тот же пакет второй раз.
+        _c=$(nft list table inet "$TABLE" 2>/dev/null | grep 'tproxy' | grep -oE "packets [0-9]+" | awk '{s+=$2} END{print s+0}')
         printf "$(_t "в tproxy    %s пакетов\n")" "$_c"
     fi
     # Про новую версию говорим ПОСЛЕ состояния, а не вместо него: это не
@@ -6868,7 +7167,7 @@ cmd_health() {
         if [ "$_ms" -lt 400 ]; then printf "$(_t 'vpn\tok\t%s мс\n')" "$_ms"
         else printf "$(_t 'vpn\twarn\t%s мс, медленно\n')" "$_ms"; fi
     else
-        _hfail vpn 'не отвечает'
+        _hfail vpn "$(_t 'не отвечает')"
     fi
 
     # 3. Проходит ли трафик НАСКВОЗЬ. Идём через локальный прокси byway на
@@ -6888,7 +7187,7 @@ cmd_health() {
         _c=$(curl -s -o /dev/null --max-time 5 -w '%{http_code}' \
              --proxy "http://127.0.0.1:$_lp" "https://$_d/" 2>/dev/null || true)
         case "${_c:-000}" in
-          000) _hfail tunnel 'трафик не проходит' ;;
+          000) _hfail tunnel "$(_t 'трафик не проходит')" ;;
           *)   printf "$(_t 'tunnel\tok\tтрафик проходит\n')" ;;
         esac
     else
@@ -6913,7 +7212,7 @@ cmd_health() {
             [ "$_try" = 1 ] && sleep 1
         done
         if [ -n "$_a" ]; then printf "$(_t 'dns\tok\tотвечает\n')"
-        else _hfail dns 'не выдаёт адрес'; fi
+        else _hfail dns "$(_t 'не выдаёт адрес')"; fi
     fi
 }
 
@@ -7100,7 +7399,7 @@ m_connection() {
                  sed "s/^/    /" || printf "    $(_t 'подключение не настроено\n')"
              m_pause ;;
           2) echo
-             printf "$(_t "  Ссылка целиком: vless://… trojan://… ss://… vmess://…\n")"
+             printf "$(_t "  Ссылка целиком: vless://… trojan://… ss://… vmess://… hy2://… wireguard://…\n")"
              printf "$(_t "  Ключ никуда не отправляется и в журнал не пишется.\n\n")"
              m_ask "Ключ"
              if [ -n "$REPLY" ]; then
@@ -7285,11 +7584,11 @@ m_transfer() {
         echo
         m_ask "Выбор"
         case "$REPLY" in
-          1) echo; m_ask "Куда сохранить [/tmp/byway-settings.txt]"
-             echo; cmd_export "${REPLY:-/tmp/byway-settings.txt}" --no-key || true
+          1) echo; m_ask "Куда сохранить [/tmp/settings-byway.txt]"
+             echo; cmd_export "${REPLY:-/tmp/settings-byway.txt}" --no-key || true
              m_pause ;;
-          2) echo; m_ask "Куда сохранить [/tmp/byway-settings.txt]"
-             echo; cmd_export "${REPLY:-/tmp/byway-settings.txt}" || true
+          2) echo; m_ask "Куда сохранить [/tmp/settings-byway.txt]"
+             echo; cmd_export "${REPLY:-/tmp/settings-byway.txt}" || true
              m_pause ;;
           3) echo; m_ask "Файл"
              if [ -n "$REPLY" ]; then
@@ -7305,8 +7604,8 @@ m_transfer() {
                  fi
              fi
              m_pause ;;
-          4) echo; m_ask "Куда сохранить [/tmp/byway-report.txt]"
-             echo; cmd_report "${REPLY:-/tmp/byway-report.txt}" || true
+          4) echo; m_ask "Куда сохранить [/tmp/report-byway.txt]"
+             echo; cmd_report "${REPLY:-/tmp/report-byway.txt}" || true
              m_pause ;;
           0|"") return 0 ;;
         esac

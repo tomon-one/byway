@@ -1,0 +1,644 @@
+# How byway works
+
+Read this if you are fixing or extending byway, or trying to work out why
+traffic goes where it shouldn't. It covers the packet path, the interception
+rules, the service, the periodic jobs and the files, using the function, UCI
+option, port and path names exactly as they appear in the code.
+
+Numbers below are the shipped defaults from `/etc/config/byway`; all of them
+can be changed. Where a value is fixed in code rather than in UCI, that is
+stated.
+
+## Components
+
+| part | role |
+|---|---|
+| `/usr/local/bin/byway` | POSIX script (busybox ash): builds the Xray-core config, installs and removes the interception rules, checks state, updates itself |
+| `/etc/init.d/byway` | procd service: runs Xray-core and calls `byway plumb on/off` |
+| Xray-core | DNS inbound with fake addresses, tproxy inbound, routing, outbounds |
+| nft table `inet byway` | intercepts traffic from the trusted bridges |
+| `ip rule` + routing table 100 | delivers marked packets to a local socket |
+| dnsmasq | forwards every query to the Xray-core DNS inbound |
+| cron | `byway watch` every 5 minutes, `byway stat` hourly |
+
+"Interception rules" below means everything `byway plumb on` sets up: the nft
+table, the `ip rule`, the route in table 100 and the dnsmasq redirection.
+
+## Packet path
+
+```
+device on br-lan
+  │ DNS query
+  ▼
+dnsmasq (server=127.0.0.42, noresolv=1)
+  ▼
+Xray-core: dns-in 127.0.0.42:53 → dns-out outbound → built-in DNS
+  ├─ name on the list → address from pool 198.18.0.0/15 (fakedns)
+  └─ anything else    → dns_upstream (DoH), real address
+  │
+  │ connection to 198.18.x.x:443
+  ▼
+nft: table inet byway, chain prerouting (priority mangle)
+  1. iifname not in byway.main.interface → return
+  2. ip daddr @privnets                  → return
+  3. socket transparent 1                → mark, accept
+  4. ip daddr @fakeip / @subnets         → tproxy to :1602, mark 0x100000
+  ▼
+ip rule fwmark 0x100000/0x100000 lookup 100
+table 100: local default dev lo          → delivered to a local socket
+  ▼
+Xray-core: tproxy-in 0.0.0.0:1602, sniffing fakedns/http/tls/quic
+  ▼
+routing → proxy | route-NAME | direct | block
+```
+
+### DNS and fake addresses
+
+dnsmasq forwards everything to `dns_listen` (127.0.0.42). A `dokodemo-door`
+tagged `dns-in` listens there; the first routing rule hands it to the
+`dns-out` outbound, which passes queries to the built-in DNS. Its servers:
+
+- `fakedns` for names in the merged list (your own `domains.lst`, the
+  ready-made lists in `list preset`, the per-route lists) and for
+  `full:example.com`;
+- `dns_upstream`, then `dns_upstream2` (`none` disables it) for everything
+  else;
+- `dns_bootstrap`, only to resolve the `dns_upstream*` hostnames themselves
+  when they are given as names.
+
+For a listed name fakedns answers locally with an address from `fakeip_pool`.
+Nobody looks up the real address at home: the VPN server does that when it
+opens the connection.
+
+The address-to-name table lives in Xray-core's memory. `poolSize` is the pool
+size minus two (`pool_size`). If the list holds more names than that, `byway
+gen` warns: an evicted address is handed to another name, and a device that
+still has the old answer cached ends up at the wrong host.
+
+Restarting the engine wipes the table. That is why the service start, and
+`byway watch` when the engine PID changes, flush the dnsmasq cache with
+SIGHUP. A connection to a pool address the engine no longer knows, where
+sniffing could not recover a name either, hits the `block` rule.
+
+### Interception in nft
+
+`byway nft` (function `nft_ruleset`) prints the whole table without applying
+anything. Sets: `fakeip` (the pool), `privnets` (`0/8`, `10/8`, `127/8`,
+`169.254/16`, `172.16/12`, `192.168/16`, `100.64/10`, `224/4`, `240/4`) and
+`subnets` (merged subnet list). The pool is not in `privnets`, so the private
+cut-off can come before the tproxy rules without eating anything needed.
+
+Order in `prerouting` matters. Only packets arriving from bridges in `list
+interface` are intercepted. The `privnets` return comes before the `socket
+transparent` shortcut: the other way round, a packet addressed to the router
+itself on the tproxy port would get the mark, the firewall rule that accepts
+by mark would let it through, and a guest zone with `input REJECT` would stop
+holding guests. The mark is applied with `or`, so other bits survive; `ip
+rule` matches with a mask.
+
+Chain `input` (priority `filter - 10`): `iif lo return`, the QUIC reject rule,
+then `drop` for tcp/udp to `tproxy_port` and for tcp to `redirect_port` (with
+IPv6 on, the `redir-in` inbound listens on `::`, that is, on every interface).
+These two rules block direct connections to the inbounds from the network; the
+router's own redirected traffic arrives via `lo` and never reaches them.
+Intercepted traffic is not affected: tproxy does not rewrite the destination
+address or port, so such a packet reaches `input` with its original port.
+
+Two more consequences of that. `tproxy-in` listens on `0.0.0.0`, not loopback,
+because the packet arrives with destination `198.18.x.x`. And the firewall
+needs the `firewall.bywaytproxy` rule (src `*`, proto `all`, `mark M/M`,
+`ACCEPT`) that `install.sh` creates; without it a zone with `input REJECT`
+drops intercepted packets. If `mark` changes, `byway plumb on` rewrites the
+rule before loading its own table.
+
+The ruleset is applied as one transaction and starts with `table inet byway` +
+`delete table inet byway`. `nft -f` adds to an existing table instead of
+replacing it; without that prelude, narrowing the pool would fail with
+"interval overlaps" on a perfectly valid ruleset. The text is checked with
+`nft -c -f -` before it is loaded.
+
+### Routing by mark
+
+`route_up` adds `ip rule add fwmark M/M lookup 100` and `ip route add local
+default dev lo table 100`. Without them the kernel would forward the marked
+packet and the tproxy socket would never see it. The table number is the
+constant `RT_TABLE=100` in the code, not an option: busybox `ip` rejects table
+numbers above 255. Foreign routes in table 100 are left alone, with a warning.
+`route_down` removes the route only if byway created it (marker
+`/tmp/byway-route-mine`).
+
+### Inside Xray-core
+
+`tproxy-in` is a `dokodemo-door` with `followRedirect` and `sockopt.tproxy`.
+Sniffing uses `destOverride` `fakedns`, `http`, `tls`, `quic` with `routeOnly:
+false`: the destination is replaced by the recovered name, and routing works
+with the name from then on. Rules, first match wins, `domainStrategy:
+IPIfNonMatch`:
+
+| # | rule | goes to |
+|---|---|---|
+| 1 | `inboundTag: dns-in` | `dns-out` |
+| 2 | with `dns_route tunnel`: built-in DNS queries | `proxy` |
+| 3 | routes: `/etc/byway/routes/NAME.lst` | `route-NAME` |
+| 4 | `lists`: listed domains and `full:example.com` | `proxy` |
+| 5 | `lists`: listed subnets | `proxy` |
+| 4′ | `all` + `ru_direct 1`: `domain:ru`, `domain:su`, `domain:xn--p1ai` | `direct` |
+| 5′ | `all`: server addresses from the keys | `direct` |
+| 6 | private, reserved and the pool itself | `block` |
+| 7 | everything else, `tcp,udp` | `direct` in `lists`, `proxy` in `all` |
+
+Rule 6 is required. Without it `tproxy-in` would be an open forwarder: a guest
+connects to a pool address, writes `Host: 192.168.1.1` in the first packet,
+sniffing rewrites the destination, and the router itself makes the connection,
+bypassing the `forward` chain where the firewall stops guests. Having the pool
+in the same rule closes the "inbound connects to itself" loop.
+
+`example.com` (constant `PROBE_DOMAIN`) always goes through the tunnel, so
+`byway health` can test the whole chain regardless of what the lists contain.
+
+With `conn_mode urltest` there are several outbounds (`proxy-0`, `proxy-1`,
+…), and rules point to the `auto` balancer (`leastPing`). `observatory` probes
+each key every `probe_interval` (`3m`).
+
+### lists and all modes
+
+`list_mode lists`: the pool and the listed subnets go through the tunnel,
+everything else is `direct`.
+
+`list_mode all`: nft intercepts everything from the listed bridges that is not
+in `privnets`. The lists take no part in routing; the last rule points to
+`proxy`. Exceptions:
+
+- `ru_direct 1` sends `.ru`, `.su` and `.рф` around the tunnel. `.рф` is
+  written in punycode, `xn--p1ai`, because that is what appears in DNS and
+  SNI. The name here comes from sniffing.
+- The server addresses of all keys (`VPN_HOSTS`, route servers included) go
+  `direct`. Otherwise there is a loop: to connect to the server the engine
+  resolves its name, and that query follows the catch-all rule into a tunnel
+  that is not up yet.
+
+For a key given as raw JSON (`conn_mode outbound`) byway does not know the
+server address and cannot exempt it; `byway gen` warns about this. In no mode
+should the server address end up in the lists.
+
+### Why a service needs both a domain and a subnet
+
+DNS decides the route. A device that got its address somewhere other than the
+router (DoH in the browser, Android Private DNS, a custom resolver) gets the
+real address, and the pool never comes into play. For that device only the
+subnet works: `@subnets` intercepts by destination address.
+
+Interception is not the same as tunnelling, though. Sniffing replaces the
+address with the SNI name, and the decision is made by name. If the name is
+not in the domain list, the subnet rule (`IPIfNonMatch`) checks the address
+the engine itself gets for that name from its own resolver, not the address
+the client was connecting to. A different CDN node, and the connection goes
+`direct`. So a service gets both a domain (for the engine's decision) and a
+subnet (for clients with their own DNS). To check: `grep NAME
+/tmp/byway-access.log` should show `-> proxy`; the log is written with
+`show_usage 1` or `log_level` `info`/`debug`.
+
+## The router's own traffic
+
+`prerouting` never sees packets the router itself sends; those go through
+`output`. Yet the router's resolver also points at the DNS inbound and returns
+pool addresses for listed names. Without extra measures the router cannot
+reach a single listed domain. There are two.
+
+The first is the `local-in` inbound on `127.0.0.1:1603` (`local_proxy_port`),
+an HTTP proxy in Xray-core. It works without any kernel rules. byway sends its
+own downloads through it and retries directly if that fails: version check,
+`byway update`, `byway engine`, ready-made lists, subscriptions, `byway
+health`. By hand: `https_proxy=http://127.0.0.1:1603 curl …`.
+
+The second is redirection with `router_via_vpn 1` (on by default), for
+programs that know nothing about the proxy:
+
+```
+chain output {
+    type nat hook output priority -100; policy accept;
+    meta mark 0x400000 return
+    ip daddr @fakeip meta l4proto tcp counter redirect to :1604
+}
+```
+
+Port 1604 (`redirect_port`) is the `redir-in` inbound (`dokodemo-door`,
+`followRedirect`, sniffing). Only TCP to the pool is redirected. Subnets are
+left out on purpose: a subnet can easily include your own hosting provider's
+range, and then the engine's connection to the server would be redirected into
+the engine. The priority is written as a number because nftables 1.0.2
+(OpenWrt 22.03) does not parse the name `dstnat` here.
+
+Redirection needs `self_mark` (0x400000). The engine runs on the same host, so
+its own outgoing packets pass through `output` too. When it cannot recover a
+name for a fake address, it sends the packet `direct` to that same address,
+and the chain redirects it straight back. The loop has no limit, eats the
+open-file limit within minutes, and Xray-core stops accepting anything,
+interception for the whole home included. Address or port cannot exclude it,
+since they are the same. So with `router_via_vpn 1` every outbound (`proxy`,
+`route-*`, `direct`, `dns-out`) gets `sockopt.mark`, and the first rule of the
+chain lets marked packets through. A raw-JSON key cannot get the mark
+automatically; add `sockopt.mark` to it yourself.
+
+**The `self_mark` bit must differ from the `mark` bit.** `ip rule` matches any
+mark with the `mark` bit set; on overlap, the engine's packets to the server
+would go to table 100. The `self_mark` function picks `0x400000` or `0x800000`
+on overlap and warns. If `redirect_port` collides with `tproxy_port` or
+`local_proxy_port`, redirection is not set up at all, and byway says so.
+
+## IPv6
+
+`ipv6 0` is the default. The built-in DNS runs with `queryStrategy: UseIPv4`
+and returns no AAAA. What leaks around the tunnel over IPv6 is traffic from
+devices that got their addresses elsewhere, and anything that relies on
+subnets only, since subnets are IPv4-only with this option off. If the router
+has a default IPv6 route, `byway doctor` warns about it.
+
+`ipv6 1` is experimental:
+
+- the `inet byway` table gains the sets `fakeip6` (`fakeip6_pool`, default
+  `fc00::/18`, Xray-core's built-in constant), `privnets6` (`::1`, `::`,
+  `::ffff:0:0/96`, `fe80::/10`, `ff00::/8`, `fc00::/7`) and `subnets6` (IPv6
+  lines from the same `subnets.lst`);
+- in `prerouting` the `@fakeip6` rule sits above `@privnets6`, because the
+  pool lies inside `fc00::/7`; then two `fib` cut-offs: the router's own
+  addresses and anything routed back into the bridges (the global prefix comes
+  from the ISP and cannot be put in a set);
+- `lists` intercepts `@fakeip6` and `@subnets6`, `all` intercepts all IPv6;
+- `ip -6 rule` to the same table 100 and `local ::/0 dev lo table 100`;
+- Xray-core: a second fakedns pool, `queryStrategy: UseIP`, `tproxy-in` and
+  `redir-in` listen on `::`, the `block` rule adds `::1/128`, `fe80::/10` and
+  the v6 pool;
+- the `output` chain redirects `@fakeip6`, and the fail-closed block adds a
+  `blocked6` set.
+
+## Rejecting QUIC
+
+`block_quic 1` is the default. Keys that run over TCP (vless, trojan, vmess
+and others) carry the client's UDP inside TCP, and QUIC stalls there silently:
+the application waits tens of seconds before falling back to TCP on its own.
+An immediate reject makes it switch to HTTP/2 straight away. The rule sits in
+the `input` chain:
+
+```
+meta mark & 0x100000 == 0x100000 udp dport 443 \
+    @th,64,8 & 0xc0 == 0xc0 @th,72,32 { 0x00000001, 0x6b3343cf } counter reject
+```
+
+It lives in `input` because the kernel does not accept `reject` in prerouting,
+and tproxy delivers the intercepted packet here with port 443 intact. It
+matches the interception mark rather than an address, so one rule covers the
+pool, subnets, `all` mode and IPv6, and leaves non-intercepted traffic alone.
+It hits only the first QUIC packet: long header and version v1 or v2. OpenVPN
+and WireGuard on udp/443, DTLS, STUN and packets of established sessions pass.
+In `all` mode everything is intercepted, so QUIC to `.ru` under `ru_direct` is
+rejected too. With hysteria2, wireguard and kcp keys the tunnel itself runs
+over UDP and the option can be turned off. `block_quic` exists only in the nft
+rules, which is why it is part of `nft_sig` (see reload).
+
+## When the engine does not come up
+
+`byway plumb on` checks the engine before changing anything: `nslookup` of the
+first listed name against `dns_listen` must return a pool address (with an
+empty list, any answer will do). It waits up to 15 seconds and gives up
+earlier if there is no Xray-core process for five checks in a row. If the
+probe fails, no rules are installed, dnsmasq goes back to the ISP resolvers
+(`dns_down`), and `block_on` runs. What happens next depends on `on_failure`.
+
+`open` (default): `block_on` does nothing. The home has internet and no
+tunnel. **The list does not stop working, it works around the VPN:** names
+resolve to real addresses, connections leave from your home address, and from
+the outside everything looks fine.
+
+`closed`, "don't let traffic bypass the VPN". What gets closed depends on
+`list_mode`:
+
+| mode | what `block_on` sets up |
+|---|---|
+| `lists` | `byway-block.conf` in dnsmasq's `conf-dir`: `address=/NAME/0.0.0.0` for plain names on the list (after `dnsmasq --test`); table `inet byway_block`, chain `forward`: from the listed bridges to `@blocked` / `@blocked6` (subnets), `reject` |
+| `all` | table `inet byway_block`, chain `forward`: everything from the listed bridges except traffic between them and to `privnets`, `reject` |
+
+The block hooks `forward`. The router's own traffic stays open, so the engine
+can still reach the server and come up; LuCI and ssh go through `input` and
+are unaffected; bridges outside `list interface` are not blocked. `keyword:`
+and `regexp:` entries cannot be blocked by name (dnsmasq matches by suffix),
+and byway reports how many there are. The outcome goes to
+`/tmp/byway-blocked`: `lists`, `all` or `none` (nothing to block, or the
+kernel rejected the rule).
+
+With `closed`, the service calls `byway plumb close` before starting the
+engine: after a reboot dnsmasq comes up with the ISP resolvers before byway
+does, and the list would leak directly during the wait.
+
+The block is lifted by a successful `plumb on`, by `byway watch` once the
+engine is back, by `byway plumb off` and by stopping the service. On failure
+paths the service and `byway watch` call `plumb off --keep-block`, which
+leaves the block in place.
+
+A pin in `/etc/hosts` overrides fakedns: dnsmasq answers it directly, so the
+name neither goes through the tunnel nor gets blocked. `byway doctor` counts
+such pins.
+
+## Building the config
+
+`byway gen` (`cmd_gen`) builds `/etc/byway/config.json` from UCI and the lists:
+
+1. Lock `/var/run/byway-gen.lock`.
+2. Merge the lists: your own file, ready-made lists, routes. Cached in
+   `/tmp/byway-domains-all.lst` and `/tmp/byway-subnets-all.lst`, rebuilt when
+   the set of sources changes or any file is newer than the cache.
+3. Every UCI value that goes into JSON or into the nft rules is matched
+   against a pattern (`val_or`); on mismatch the default is used and a warning
+   printed. Values come from the panel and from other people's exports (`byway
+   import`), hence the checks.
+4. The draft `/tmp/byway-config.new.json` (mode 600) is checked with `xray run
+   -test -c`. Rejected: the draft stays, the error and a hint are printed, the
+   working config is untouched, exit code 1. Accepted: the engine's
+   deprecation warnings are shown.
+5. Identical to the working config (`cmp`): nothing changes. Otherwise free
+   space is checked and the draft is `mv`ed over the working config, mode 600.
+6. List lines that look like neither a name nor a subnet are dropped
+   (`/tmp/byway-bad-entries`); the count and the first three are printed.
+
+The service runs `byway gen` on every start. If the build fails but the
+previous config still passes `xray run -test`, the engine starts on the
+previous one.
+
+Memory. The init script passes `GOMEMLIMIT` to the engine via `procd_set_param
+env` (function `xray_memlimit`): with `xray_memlimit` unset, 40 % of
+`MemTotal`, at least 32 MiB; `0`/`off`/`no`, not set; anything else is passed
+as is, in Go format (`96MiB`). Without a limit Go lets the heap grow to twice
+the live data, and on a router with little memory the kernel OOM-kills the
+engine. The limit is soft: live data is never cut, Go just collects garbage
+more often. uci drops empty options, so the default lives in code. `byway
+status` shows the effective value.
+
+Engine path: `xray_bin`. It is accepted only if it lies in `/usr/bin`,
+`/usr/sbin`, `/usr/local/bin`, `/bin` or `/sbin`, contains no `..`, is
+executable and its `version` starts with `Xray `. Otherwise both the script
+and the init script fall back to `xray` from `PATH`, then `/usr/bin/xray`.
+
+## The procd service
+
+`START=90`, `STOP=10`. Instance: `$XRAY run -c /etc/byway/config.json`,
+`stdout` and `stderr` to syslog (Xray-core logs to stdout), pidfile
+`/var/run/byway.pid`, `respawn 3600 5 0`.
+
+Parameters: threshold 3600 s, 5 s pause before restarting, 0 retries meaning
+unlimited. procd's threshold is not "this many crashes per hour": the counter
+resets only after the process has run longer than the threshold. With a finite
+retry count, a handful of crashes half an hour apart stops the service for
+good, and `stop_service` is not called, so dnsmasq would keep pointing at a
+port nobody listens on.
+
+`start`: if `enabled` is not `1`, run `byway plumb off --service` and exit.
+With `closed`, run `byway plumb close`. No engine binary: print a hint and
+exit. Then `byway gen`, the procd instance, and in `service_started` up to
+three `byway plumb on` attempts 10 s apart. That loop runs in the background,
+because with waiting it takes up to a minute and the panel drops the request
+after about 20 seconds. The loop's PID goes to `/var/run/byway-plumb.pid`. A
+snapshot of what was applied goes to `/var/run/byway.applied`: md5 of
+`config.json` and md5 of `byway nftsig` output.
+
+Interception rules go in after the engine, never before: `dns_up` points the
+router's entire resolver at the DNS inbound, and with a dead engine the home
+would have no DNS.
+
+`stop`: first kill the background loop and its children (if the PID still
+belongs to byway), then `byway plumb off --service`. `--service` does not set
+the "removed by hand" marker (`/tmp/byway-plumb-down`); otherwise `byway
+watch` would not restore the rules after a failed start.
+
+`restart`, and the reload branch for "config changed", pass `--keep-dns`: the
+resolver stays on the DNS inbound and only its cache is flushed. Switching to
+the ISP and back would mean two windows without DNS. If the engine does not
+answer, `plumb on` hands dnsmasq back to the ISP on its failure path.
+
+`reload`. `service_triggers` registers `procd_add_reload_trigger byway`, so
+procd calls reload on every `uci commit byway`, panel language changes
+included. `reload_service` therefore restarts only what changed:
+
+1. `enabled 1` and the engine not running: `start`; `enabled 0` and running:
+   `stop`.
+2. The running engine is not the binary the engine path now points to (checked
+   via `/proc/PID/exe`): `stop` + `start` with `--keep-dns`.
+3. `byway gen`. If it fails, the old config keeps running.
+4. md5 of `config.json` ≠ first snapshot line: `stop` + `start` with
+   `--keep-dns`.
+5. md5 of `byway nftsig` ≠ second line: only `byway plumb on`, the engine is
+   left alone.
+6. Otherwise nothing.
+
+`nft_sig` is a signature of the rules without building them: `fakeip_pool`,
+`mark`, `tproxy_port`, `interface`, `list_mode`, `block_quic` and the md5 of
+`subnets.lst` and the ready-made `.sub` files. Everything else changes
+`config.json` and is caught in step 4. **A new option that lives only in the
+nft rules must be added to `nft_sig`**, or reload will not notice it.
+
+## Periodic jobs
+
+`install.sh` adds to crontab:
+
+```
+*/5 * * * * /usr/local/bin/byway watch >/dev/null 2>&1
+7 * * * *   /usr/local/bin/byway stat  >/dev/null 2>&1
+```
+
+List updates and version checks have no jobs of their own; `byway watch` does
+them.
+
+### byway watch
+
+Every 5 minutes it records the state (engine PID, nft table, `ip rule`, route,
+where dnsmasq points, whether the resolver returns a fake address) and then,
+in order:
+
+1. No engine while `enabled 1` and no "removed by hand" marker: `block_on`
+   (only acts with `closed`). Misses are counted in `/tmp/byway-nopid`. On the
+   second miss in a row, if dnsmasq points at the DNS inbound, `plumb off
+   --service --keep-block`: resolver back to the ISP, block stays. Logged as
+   `(nodns)`.
+2. Engine is back and a block is in place: `block_off`.
+3. Engine running, `guard` not `0`, but the table, rule, route or dnsmasq
+   redirection is missing: `plumb on`, logged as `(healed)` or `(failed)`.
+   This repairs a foreign `nft flush ruleset` or a firewall reload.
+4. Ready-made lists, version check, auto-update (below).
+5. `/tmp/byway-access.log` over 4 MB: truncated to zero, which means `byway
+   stat` is not running.
+6. A state line is appended to `/etc/byway/health.log` (last 200 lines) only
+   when something changed or was repaired. Engine PID changed: `killall -HUP
+   dnsmasq`.
+
+`byway plumb off` without `--service` creates `/tmp/byway-plumb-down`, and
+`byway watch` leaves the rules alone until the next `plumb on` or reboot.
+
+### byway stat
+
+Hourly, provided the access log is being written (`show_usage 1` or
+`log_level` `info`/`debug`; otherwise the config has `"access": "none"`).
+
+Xray-core logs a line when it accepts a connection, before sniffing, so the
+line holds the pool address, not the name. `byway stat` therefore builds a
+reverse address-to-name table (`/tmp/byway-fakemap`) by asking the DNS inbound
+about listed names, at most 200 per run, with the resume point in `.pos`. The
+table is tied to the engine PID. From the log it takes `tproxy-in -> proxy`
+lines newer than the cut-off (`/tmp/byway-statmark`) and adds the counts to
+`/etc/byway/usage.tsv`; addresses without a name (subnets) are counted as `(по
+IP)`. The file is written to flash only when it changes. The log is trimmed to
+its last 50 lines by writing over it, not with `mv`: the engine keeps the file
+open with `O_APPEND`, and a replaced file would send writes into a deleted
+one. To view: `byway top [N]`.
+
+### Scheduled list updates
+
+`lists_update`: `90m`, `12h`, `2h37m`, `1d`; a bare number is minutes; empty
+or `0` means never; anything below 30 minutes becomes 30. At least one
+`preset` must be enabled. The time of the last download is the mtime of
+`/etc/byway/presets`. When it is due: `byway presets`, errors to syslog,
+`/etc/init.d/byway reload`. It fires on the first `byway watch` run after the
+interval expires.
+
+### Version check and auto-update
+
+`update_check 1` (default): once a day (`/tmp/byway-upcheck`) a request to the
+GitHub API `releases/latest`. If newer: the version goes to
+`/tmp/byway-newver`, the first line of the release notes to
+`/tmp/byway-relnote`, the time it was first seen to `/etc/byway/.newver-seen`,
+and a line to syslog. Nothing is downloaded.
+
+`auto_update 1` installs what was found; without `update_check` there is
+nothing to install. All of these must hold:
+
+- the router's local hour equals `auto_update_hour` (`04`; stock firmware runs
+  in UTC, and `byway doctor` tells you what hour that is for you);
+- same minor branch (`X.Y` matches);
+- three days have passed since it was first seen, unless the release notes
+  start with `ВАЖНО`, `CRITICAL` or `!`;
+- the md5 of `/usr/local/bin/byway` equals `/etc/byway/.binmd5` written by the
+  installer, so a hand-edited script is never updated;
+- this version has not been rolled back before (`/etc/byway/.au-failed`), and
+  there was no attempt in the last 24 hours (`/etc/byway/.au-try`).
+
+Sequence: copy the script to `/etc/byway/byway.prev` (if that fails, abort),
+`byway update` (the tag archive from GitHub and its `install.sh`), then up to
+150 seconds of `alive_ok` checks: engine process, `inet byway` table, fake
+address from the resolver. If it does not come up, `byway.prev` is copied back
+to `/usr/local/bin/byway`, the service restarts, and the version is recorded
+in `.au-failed`. **Rollback restores only the script:** the init script, panel
+and dictionaries stay at the new version. The outcome goes to
+`/tmp/byway-autoupdate` and syslog.
+
+### Replacing the engine
+
+`byway engine VERSION|tested|newest|stable`; without an argument it shows what
+is installed and what is available. `tested` is the constant `XRAY_TESTED`
+(also in `install.sh`). The archive and its `.dgst` come from the XTLS
+releases, and the SHA2-256 is verified. On MIPS without an FPU the GitHub
+builds do not run, so the engine there is updated from the OpenWrt packages.
+With enough flash, the new binary goes next to the old one
+(`/usr/local/bin/xray-VERSION`), is checked with `byway gen`, written to
+`xray_bin`, and the service restarts. Without enough flash the swap goes
+through RAM: the old version's archive is downloaded first for rollback, and
+the service stops for about a minute. Either way `alive_ok` checks the result,
+and on failure the old engine is put back. Lock: `/var/run/byway-engine.lock`.
+
+## dnsmasq
+
+`dns_up` works on `dhcp.@dnsmasq[0]`:
+
+1. If there is no snapshot, the previous state goes to `/etc/byway/dns-saved`:
+   `noresolv=`, `server=` lines (except byway's own address), and `listen=`
+   with byway's address at the time.
+2. General resolvers are removed from `server`. `/domain/address` entries
+   stay: they are split DNS for the local network.
+3. `server` += `127.0.0.42`, `noresolv=1`. Without `noresolv` dnsmasq would
+   also ask the ISP, take the first answer, and some listed names would get
+   real addresses.
+4. If dnsmasq already points at the DNS inbound, SIGHUP; otherwise `restart`.
+
+**The `dhcp` change is never committed.** It lives as a delta in `/tmp/.uci`:
+`/etc/init.d/dnsmasq` sees it, and a reboot wipes it along with tmpfs.
+Committed, it would survive a power loss, a sysupgrade and a stopped engine,
+leaving the home with a resolver that points nowhere. As it is, the worst case
+is a router that boots with the ISP's DNS and no tunnel. One caveat: "Save" on
+the DHCP page in LuCI commits all pending changes, this one included.
+
+`dns_down`: `uci revert dhcp` (this also drops anyone else's uncommitted
+`dhcp` changes); if byway's address still made it into the saved config, the
+resolvers are restored from `dns-saved` explicitly, keeping `/domain/address`
+entries, and `uci commit dhcp` runs; `dns-saved` is deleted; dnsmasq is
+restarted if it still points at the DNS inbound or its state cannot be
+determined, otherwise it gets SIGHUP. So `byway plumb off` returns the
+resolver to the ISP even if someone else committed the change.
+
+## Locks
+
+A lock is a directory (`mkdir` is atomic) holding the files `pid` and `byway`.
+Without `byway` it is foreign and is removed at once. With a dead PID it is
+left over from an interrupted run and is removed. With a live PID, wait up to
+30 seconds.
+
+| lock | taken by | if busy |
+|---|---|---|
+| `/var/run/byway-gen.lock` | `byway gen` | exit with error |
+| `/var/run/byway-plumb.lock` | `byway plumb on/off/close` | `return 1`, so `byway watch` carries on |
+| `/var/run/byway-engine.lock` | `byway engine` | exit with error |
+
+Locks live in `/var/run`, not `/tmp`: on OpenWrt that is `/tmp/run`, owned by
+root with mode 755. In `/tmp` (1777) any process, dnsmasq under its own user
+included, could create the lock directory and lock out the config build and
+the interception rules.
+
+## Files
+
+| path | contents |
+|---|---|
+| `/usr/local/bin/byway` | the script; symlink `/usr/bin/byway`, because `/usr/local/bin` is not in OpenWrt's `PATH` |
+| `/usr/local/bin/byway-uninstall` | uninstaller (symlink `/usr/bin/byway-uninstall`) |
+| `/usr/local/bin/xray-VERSION` | engine, if installed from GitHub |
+| `/etc/init.d/byway` | service |
+| `/etc/config/byway` | UCI: section `main`, `route` sections for per-route outbounds |
+| `/etc/byway/domains.lst`, `subnets.lst` | your lists; domains accept `full:`, `keyword:`, `regexp:` |
+| `/etc/byway/presets/NAME.lst`, `NAME.sub` | downloaded ready-made lists: domains and subnets |
+| `/etc/byway/routes/NAME.lst` | per-route list |
+| `/etc/byway/config.json` | built Xray-core config, mode 600 |
+| `/etc/byway/lang/en.tsv` | "key⇥translation" dictionary, English only |
+| `/etc/byway/dns-saved` | dnsmasq's previous state, while the rules are up |
+| `/etc/byway/health.log`, `usage.tsv` | `byway watch` log, `byway stat` counts |
+| `/etc/byway/byway.prev`, `.binmd5`, `.au-try`, `.au-failed`, `.newver-seen` | auto-update |
+| `/tmp/byway-access.log` | Xray-core access log |
+| `/tmp/byway-config.new.json` | draft config; kept if the engine rejected it |
+| `/tmp/byway-domains-all.lst`, `byway-subnets-all.lst` (+ `.sig`) | merged lists |
+| `/tmp/byway-bad-entries` | dropped list lines |
+| `/tmp/byway-blocked` | active block: `lists`, `all`, `none` |
+| `/tmp/byway-plumb-down` | rules removed by hand |
+| `/tmp/byway-route-mine`, `byway-route-mine6` | the route in table 100 was created by byway |
+| `/tmp/byway-watch.last`, `byway-nopid` | previous state and miss counter of `byway watch` |
+| `/tmp/byway-fakemap`, `.pos`, `byway-statmark` | `byway stat` accounting |
+| `/tmp/byway-upcheck`, `-newver`, `-relnote`, `-autoupdate` | version check, auto-update outcome |
+| `/var/run/byway.pid`, `byway.applied` | engine PID; applied-state snapshot for reload |
+| `/var/run/byway-plumb.pid`, `byway-nostart` | background start loop; "start failed, skip the loop" |
+| `<dnsmasq conf-dir>/byway-block.conf` | name block under `closed` |
+| `/www/luci-static/resources/view/byway/`, `.../resources/byway/` | panel |
+| `/usr/share/luci/menu.d/`, `/usr/share/rpcd/acl.d/luci-app-byway.json` | panel menu and ACL |
+
+Everything under `/tmp` and `/var/run` lives in RAM and is gone after a
+reboot. `install.sh` adds `/etc/byway/`, the init script, the `/etc/rc.d`
+links and the script files to `/etc/sysupgrade.conf`. The engine is not on
+that list: reinstall it after a sysupgrade.
+
+## Where to look
+
+| question | command |
+|---|---|
+| what is up right now | `byway status` |
+| what is wrong with the environment | `byway doctor` |
+| does traffic get through the tunnel | `byway health` |
+| which nft rules would be / are installed | `byway nft` / `nft list table inet byway` |
+| rule and route | `ip rule`, `ip route show table 100` |
+| where dnsmasq points | `uci get dhcp.@dnsmasq[0].server` |
+| does the resolver return a fake address | `nslookup NAME 127.0.0.42` |
+| where a connection went | `grep NAME /tmp/byway-access.log` |
+| what the service and `byway watch` did | `logread -e byway`, `/etc/byway/health.log` |
+| what the engine logs | `logread -e xray` |
+| built config without secrets | `byway show` |

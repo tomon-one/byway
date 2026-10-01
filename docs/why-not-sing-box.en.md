@@ -70,10 +70,13 @@ byway would have to work out not just "which engine" and "which version" but
 
 ## What sing-box offers in return
 
-Protocols Xray-core does not have: Hysteria2, TUIC, AnyTLS, ShadowTLS, WireGuard
-and others. Of these, mostly the first two get asked for.
+Protocols Xray-core does not have: TUIC, AnyTLS, ShadowTLS and others. Hysteria2
+and WireGuard were on this list until autumn 2026: Xray-core added Hysteria2 in
+26.1.13, it has had WireGuard for a long time, and byway parses both links
+since release 0.2.4 (Hysteria2 — on engine 26.3.27 or newer: before it the
+protocol settings changed from release to release). Of what remains, mostly TUIC gets asked for.
 
-Both run over QUIC, that is, over UDP. In Russia UDP is the first thing to be
+Like Hysteria2, it runs over QUIC, that is, over UDP. In Russia UDP is the first thing to be
 throttled — long and widely documented, and matching what we see on a working
 router. So the gain is smaller than the length of the list suggests: a protocol
 that gets throttled first is a poor replacement for one that works.
@@ -122,8 +125,9 @@ come together the analysis is worth redoing:
 
 1. **sing-box learns xhttp** — then it could be exercised on the same key as
    Xray-core rather than blind.
-2. **Real demand appears for Hysteria2 or TUIC** from people for whom they
-   genuinely work better — on their line, not in theory.
+2. **Real demand appears for TUIC** from people for whom it genuinely works
+   better — on their line, not in theory. (byway parses Hysteria2 since
+   0.2.4.)
 3. **sing-box configs stop drifting between versions** — then the branching
    becomes one-dimensional.
 

@@ -35,7 +35,7 @@ body:
     attributes:
       label: Версия byway и Xray-core / byway and Xray-core versions
       description: "`byway version`, `byway engine --check`"
-      placeholder: byway 0.2.3, Xray 26.9.9
+      placeholder: byway 0.2.4, Xray 26.9.30
   - type: dropdown
     id: result
     attributes:

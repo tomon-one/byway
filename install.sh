@@ -128,7 +128,7 @@ t() {
       "Поставить base64? Нужен только для ключей vmess:// и ss://") printf %s "Install base64? Needed only for vmess:// and ss:// keys" ;;
       "  весь вывод пакетного менеджера: cat %s") printf %s "  full package manager output: cat %s" ;;
       "base64 не поставился: ключи vmess и ss не разобрать") printf %s "base64 did not install: vmess and ss keys cannot be parsed" ;;
-      "base64 не ставится -- ключи vless, trojan и socks работают без него") printf %s "base64 is skipped -- vless, trojan and socks keys work without it" ;;
+      "base64 не ставится -- ключи vless, trojan, socks, hysteria2 и wireguard работают без него") printf %s "base64 is skipped -- vless, trojan, socks, hysteria2 and wireguard keys work without it" ;;
       "на флеше свободно %s МБ, а движку нужно около 30 -- он не поместится") printf %s "%s MB free on flash, the core needs about 30 -- it will not fit" ;;
       "  это не поправить настройкой: нужен роутер с большим флешем либо extroot на USB") printf %s "  no setting fixes this: you need a router with more flash, or extroot on USB" ;;
       "на флеше меньше 2 МБ свободно") printf %s "less than 2 MB free on flash" ;;
@@ -175,7 +175,7 @@ FATAL=0   # непоправимое: система не того поколе�
 # а не «последняя»: установщик и файлы, которые он кладёт, обязаны быть одного
 # тега, иначе панель окажется новее программы или наоборот.
 REPO=tomon-one/byway
-VER=0.2.3
+VER=0.2.4
 # Версия движка, на которой byway проверялся целиком -- на живом роутере, с
 # поднятым туннелем и реальным трафиком. Правится вместе с выпуском: протухшая
 # «проверенная» хуже её отсутствия.
@@ -186,7 +186,7 @@ VER=0.2.3
 # Отсюда и два разных варианта в вопросе: «самый свежий» и «стабильный» у
 # Xray -- это РАЗНЫЕ вещи, и человек должен выбирать зная это.
 # Та же версия -- в byway (XRAY_TESTED, для `byway engine tested`): править парой.
-XRAY_TESTED=26.9.9
+XRAY_TESTED=26.9.30
 
 # Стояла ли программа ДО этого запуска. Спрашиваем сейчас, потому что после
 # копирования различить установку и обновление уже нечем, а сказать человеку
@@ -762,9 +762,9 @@ xray_from_github() {
     # рядом архив и бинарник занимают весь раздел.
     # Имя с номером процесса, а не постоянное. /tmp общий: постоянное
     # `/tmp/xray.zip` мог заранее создать кто угодно с правами на запись, а
-    # `unzip -o` от root распаковал бы ЕГО содержимое в /usr/local/bin. Проверки
-    # суммы у нас нет и взяться ей неоткуда (GitHub её не публикует), поэтому
-    # защита одна: непредсказуемое имя и удаление чужого файла перед записью.
+    # `unzip -o` от root распаковал бы ЕГО содержимое в /usr/local/bin.
+    # Защита -- непредсказуемое имя и удаление чужого файла перед записью;
+    # сумма из .dgst выпуска сверяется ниже, когда есть sha256sum.
     _z=/tmp/xray.$$.zip
     rm -f "$_z" 2>/dev/null || true
     sayf "установка Xray-core %s (%s)" "$_ver" "$_as"
@@ -954,7 +954,7 @@ if ! have_base64; then
         have_base64 ||
             { warn "base64 не поставился: ключи vmess и ss не разобрать"; pkg_why; }
     else
-        say "base64 не ставится -- ключи vless, trojan и socks работают без него"
+        say "base64 не ставится -- ключи vless, trojan, socks, hysteria2 и wireguard работают без него"
     fi
 fi
 

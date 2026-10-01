@@ -97,13 +97,16 @@ return view.extend({
 		var muxOff = !!tnow && !/mux=/.test(st);
 
 		o = s.option(form.Value, 'mux_concurrency', 'Mux',
-			_('Сколько потоков в одно соединение. 0 — выключено, разумно 4–8. Помогает WebSocket, HTTPUpgrade и HTTP/2, где каждое соединение обходится дорого. XHTTP, gRPC и xtls-rprx-vision мультиплексируют сами — им второй слой мешает, и byway отключает mux.'));
+			_('Сколько потоков в одно соединение. 0 — выключено, разумно 4–8. Помогает WebSocket, HTTPUpgrade и HTTP/2, где каждое соединение обходится дорого. XHTTP, gRPC, Hysteria2 и xtls-rprx-vision мультиплексируют сами — им второй слой мешает, и byway отключает mux; у WireGuard потока нет вовсе.'));
 		o.datatype = 'uinteger';
 		o.placeholder = '8';
 		/* Говорим прямо в поле, а не только в подсказке. Подсказку сворачивают
 		   и не читают, а цифра «8» рядом с XHTTP выглядит как работающая
 		   настройка -- владелец на это и указал. */
-		if (muxOff)
+		if (muxOff && tnow === 'wireguard')
+			o.description = '⚠ ' + _('Сейчас не действует: у WireGuard потока нет, мультиплексировать нечего. ') +
+				o.description;
+		else if (muxOff)
 			o.description = '⚠ ' + _('Сейчас не действует: у транспорта ') +
 				tnow + _(' своё мультиплексирование, byway отключает mux сам. ') +
 				o.description;
@@ -176,6 +179,12 @@ return view.extend({
 			_('Через этот порт byway скачивает списки и обновления по VPN. Менять — только при столкновении с другой службой.'));
 		o.datatype = 'port';
 		o.placeholder = '1603';
+
+		o = s.option(form.Flag, 'block_quic',
+			_('Отказ QUIC для сайтов через VPN'),
+			_('С ключами поверх TCP (vless, trojan, vmess) протокол QUIC внутри VPN зависает: приложение ждёт десятки секунд, прежде чем перейти на обычное соединение. С отказом сайт сразу открывается по TCP. С ключами hysteria2 и wireguard VPN сам идёт по UDP — там отказ не нужен.'));
+		o.default = '1';
+		o.rmempty = false;
 
 		o = s.option(form.Flag, 'router_via_vpn',
 			_('VPN для программ на роутере'),

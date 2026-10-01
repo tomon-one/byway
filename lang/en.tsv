@@ -69,7 +69,6 @@ byway: неизвестная команда «%s». Список: byway\n	byway
 не запущена	not running
 всё через VPN	everything through the VPN
 по спискам	by lists
-  Ссылка целиком: vless://… trojan://… ss://… vmess://…\n	  The whole link: vless://… trojan://… ss://… vmess://…\n
   Ключ никуда не отправляется и в журнал не пишется.\n\n	  The key is not sent anywhere and is not written to the log.\n\n
   \033[1;32mключ принят\033[0m\n	  \033[1;32mkey accepted\033[0m\n
   \033[1;31mключ не разобран\033[0m, вот что говорит проверка:\n\n	  \033[1;31mkey not parsed\033[0m, here is what the check says:\n\n
@@ -104,17 +103,14 @@ byway: неизвестная команда «%s». Список: byway\n	byway
 %s: записей %s, взяты первые %s — остальное отброшено	%s: %s entries, taking the first %s — the rest is dropped
 выбран свой конфиг, но он пуст	a custom config is selected, but it is empty
 ключ не задан	no key is set
-%s эта сборка Xray-core не поддерживает (проверено на 26.7.11)	%s is not supported by this Xray-core build (checked on 26.7.11)
 неизвестный вид ссылки: %s	unknown link type: %s
 vmess-ссылка не раскодировалась	the vmess link did not decode
 параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он	byway does not carry link parameter "%s" into the config — worth checking whether it matters
-encryption=%s не поддержан этой сборкой Xray-core: убрать параметр из ссылки либо обновить движок	encryption=%s is not supported by this Xray-core build: remove the parameter from the link or update the engine
 протокол %s не собран	protocol %s is not built in
 mkcp идёт поверх UDP, а в РФ UDP душат первым делом	mkcp runs over UDP, and in Russia UDP is the first thing throttled
 header и seed у mkcp свежие Xray-core удалили (замена: finalmask/udp header-*, mkcp-original, mkcp-aes128gcm) -- оставлены как в ссылке; если движок их отвергнет, конфиг не заменится	recent Xray versions removed mkcp's header and seed (replacement: finalmask/udp header-*, mkcp-original, mkcp-aes128gcm) -- left as given in the link; if the engine rejects them, the config is not replaced
 HTTP/2 из Xray-core удалён, замена: xhttp в режиме stream-one	HTTP/2 has been removed from Xray-core, replacement: xhttp in stream-one mode
 QUIC из Xray-core удалён, замена: xhttp stream-one поверх H3; в РФ QUIC блокируют первым делом	QUIC has been removed from Xray-core, replacement: xhttp stream-one over H3; QUIC is the first thing blocked in Russia
-транспорт %s не поддержан — есть ws, tcp/raw, kcp, grpc, httpupgrade, xhttp	transport %s is not supported — available: ws, tcp/raw, kcp, grpc, httpupgrade, xhttp
 allowInsecure=1: проверка сертификата сервера отключена, соединение можно подменить	allowInsecure=1: the server certificate is not verified, the connection can be spoofed
 security=%s не поддержан	security=%s is not supported
 flow=%s с транспортом %s не работает: Xray-core примет конфиг и сломается в бою	flow=%s does not work with transport %s: Xray-core will accept the config and break in use
@@ -232,7 +228,7 @@ dnsmasq не направлен на byway	dnsmasq does not point at byway
 Ключ	Key
 Адрес подписки	Subscription address
 Домен	Domain
-Куда сохранить [/tmp/byway-settings.txt]	Where to save [/tmp/byway-settings.txt]
+Куда сохранить [/tmp/settings-byway.txt]	Where to save [/tmp/settings-byway.txt]
 Файл	File
 Включить?	Enable?
 Остановить?	Stop?
@@ -279,7 +275,7 @@ vpn\twarn\tсвой конфиг: адрес сервера неизвестен
 отчёт записан: %s	report written: %s
   секреты убраны, но перед отправкой файл стоит просмотреть	  secrets are removed, but look the file over before sending it
 Собрать отчёт для обращения — без ключа, но с диагностикой	Build a report to ask for help — no key, but with diagnostics
-Куда сохранить [/tmp/byway-report.txt]	Where to save it [/tmp/byway-report.txt]
+Куда сохранить [/tmp/report-byway.txt]	Where to save it [/tmp/report-byway.txt]
 собрать отчёт для обращения, без ключа от VPN	build a report to ask for help, without the VPN key
 report [файл]	report [file]
 снято	generated
@@ -607,3 +603,38 @@ engine [ВЕРСИЯ|tested|newest|stable]	engine [VERSION|tested|newest|stable]
 \nОбновления\n	\nUpdates\n
 проверка новых версий выключена	the new version check is off
 новее %s не найдено	nothing newer than %s found
+  Ссылка целиком: vless://… trojan://… ss://… vmess://… hy2://… wireguard://…\n	  The whole link: vless://… trojan://… ss://… vmess://… hy2://… wireguard://…\n
+  Xray-core с 26.3.27 не даёт отключать проверку сертификата сервера (allowInsecure)	  since 26.3.27 Xray-core does not allow turning off server certificate checks (allowInsecure)
+  нужен отпечаток сертификата в ключе (pcs= или pinSHA256=) либо настоящий сертификат на сервере	  the key needs a certificate fingerprint (pcs= or pinSHA256=), or the server needs a real certificate
+%s в Xray-core нет; из похожего есть hysteria2	%s is not in Xray-core; the closest thing there is hysteria2
+obfs=salamander без obfs-password: пароль обфускации обязателен	obfs=salamander without obfs-password: the obfuscation password is required
+obfs=%s у hysteria2 не поддержан: в Xray-core есть только salamander	obfs=%s is not supported for hysteria2: Xray-core has only salamander
+mport (смена портов) не переносится: соединение идёт на основной порт из ключа	mport (port hopping) is not carried over: the connection goes to the main port from the key
+в ключе wireguard нет закрытого ключа либо он не той формы (base64 на 44 знака либо 64 шестнадцатеричных)	the wireguard key has no private key, or it has the wrong form (44 base64 characters or 64 hex digits)
+в ключе wireguard нет публичного ключа сервера (publickey) либо он не той формы	the wireguard key has no server public key (publickey), or it has the wrong form
+presharedkey в ключе wireguard не той формы	presharedkey in the wireguard key has the wrong form
+в ключе wireguard нет address -- адреса этого клиента в туннеле	the wireguard key has no address -- this client's address inside the tunnel
+address в ключе wireguard не похож на список адресов: %s	address in the wireguard key does not look like a list of addresses: %s
+mtu в ключе wireguard -- не число: %s	mtu in the wireguard key is not a number: %s
+reserved в ключе wireguard -- не три числа через запятую: %s	reserved in the wireguard key is not three comma-separated numbers: %s
+keepalive в ключе wireguard -- не число: %s	keepalive in the wireguard key is not a number: %s
+отпечаток сертификата (pcs, pinSHA256) -- не шестнадцатеричный: %s	the certificate fingerprint (pcs, pinSHA256) is not hexadecimal: %s
+имя для проверки сертификата (vcn) -- не имя хоста: %s	the name for certificate checks (vcn) is not a host name: %s
+encryption=%s бывает только у vless	encryption=%s exists only for vless
+encryption=%s не поддержан: Xray-core знает только mlkem768x25519plus	encryption=%s is not supported: Xray-core knows only mlkem768x25519plus
+шифрование VLESS (encryption=mlkem768x25519plus) появилось в Xray-core 25.8.29, а стоит %s — обновить: byway engine tested	VLESS encryption (encryption=mlkem768x25519plus) appeared in Xray-core 25.8.29, and %s is installed — update: byway engine tested
+hysteria2 нужен Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested	hysteria2 needs Xray-core 26.3.27 or newer, and %s is installed — update: byway engine tested
+hysteria2 идёт поверх QUIC (UDP), а в РФ его ограничивают первым делом	hysteria2 runs over QUIC (UDP), and in Russia that is restricted first
+obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а стоит %s — обновить: byway engine tested	obfs=salamander for hysteria2 needs Xray-core 26.7.11 or newer, and %s is installed — update: byway engine tested
+транспорт %s не поддержан — есть ws, tcp/raw, kcp, grpc, httpupgrade, xhttp, hysteria	transport %s is not supported — available: ws, tcp/raw, kcp, grpc, httpupgrade, xhttp, hysteria
+в ключе отключена проверка сертификата (allowInsecure или insecure), а Xray-core с 26.3.27 так не умеет: нужен отпечаток сертификата сервера (pcs= или pinSHA256=) либо настоящий сертификат на сервере	the key turns off certificate checks (allowInsecure or insecure), and since 26.3.27 Xray-core cannot do that: the key needs the server certificate fingerprint (pcs= or pinSHA256=), or the server needs a real certificate
+проверка сертификата по отпечатку (pcs, vcn) нужна Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested	certificate checks by fingerprint (pcs, vcn) need Xray-core 26.3.27 or newer, and %s is installed — update: byway engine tested
+mux к wireguard не применяется: у него нет потока, который можно делить	mux does not apply to wireguard: it has no stream to split
+в поле «%s» ссылки управляющий знак (перевод строки, табуляция): такая ссылка подменяет поля конфига	the «%s» field of the link has a control character (newline, tab): such a link overrides config fields
+диапазон портов в ключе не переносится: соединение идёт на порт %s	the port range in the key is not carried over: the connection goes to port %s
+scy=%s у vmess Xray-core не знает: есть auto, aes-128-gcm, chacha20-poly1305, none, zero	Xray-core does not know scy=%s for vmess: there are auto, aes-128-gcm, chacha20-poly1305, none, zero
+plugin у shadowsocks не переносится: Xray-core плагины не запускает, сервер с плагином не ответит	the shadowsocks plugin is not carried over: Xray-core does not run plugins, and a server with a plugin will not answer
+у socks логин и пароль, похоже, в base64, а декодера нет: %s	the socks login and password look like base64, and there is no decoder: %s
+не отвечает	not responding
+трафик не проходит	traffic does not pass
+не выдаёт адрес	gives no address
