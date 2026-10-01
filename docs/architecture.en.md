@@ -236,11 +236,15 @@ reach a single listed domain. There are two.
 
 The first is the `local-in` inbound on `127.0.0.1:1603` (`local_proxy_port`),
 an HTTP proxy in Xray-core. It works without any kernel rules. byway sends its
-own downloads through it and retries directly if that fails: version check,
-`byway update`, `byway engine`, ready-made lists, subscriptions, the
-dictionary on `byway lang en`. `byway health` goes only through this inbound
-and never retries directly, because what it tests is the tunnel. By hand:
-`https_proxy=http://127.0.0.1:1603 curl …`.
+own downloads through it (`net_get`): version check, `byway update`,
+`byway engine`, ready-made lists, the dictionary on `byway lang en`. If that
+fails — directly, then directly with `curl --resolve` to GitHub addresses
+from DoH (`gh_resolve`, `doh_a`: a query to `https://8.8.8.8`, then
+`https://1.1.1.1`, by address, not by name). The third attempt is for a
+broken tunnel with GitHub on the list: the router's resolver returns a fake
+address for it. Subscriptions get no third attempt. `byway health` goes only
+through this inbound and never retries directly, because what it tests is the
+tunnel. By hand: `https_proxy=http://127.0.0.1:1603 curl …`.
 
 The second is redirection with `router_via_vpn 1` (on by default), for
 programs that know nothing about the proxy:
@@ -437,7 +441,12 @@ init script fall back to `xray` from `PATH`, then `/usr/bin/xray`.
 
 ## The procd service
 
-`START=90`, `STOP=10`. Instance: `$XRAY run -c /etc/byway/config.json`,
+`START=21` — right after the network (20), dnsmasq and the firewall (19);
+`STOP=10`. With the former `START=90`, tens of seconds passed between dnsmasq
+coming up and the block under `closed`, and clients got real addresses and
+kept them until the TTL ran out. The installer calls `disable` before
+`enable` to remove the old `S90byway`, and drops it from
+`/etc/sysupgrade.conf`. Instance: `$XRAY run -c /etc/byway/config.json`,
 `stdout` and `stderr` to syslog (Xray-core logs to stdout), pidfile
 `/var/run/byway.pid`, `respawn 3600 5 0`.
 
@@ -450,12 +459,16 @@ port nobody listens on.
 
 `start`: if `enabled` is not `1`, run `byway plumb off --service` and exit.
 With `closed`, run `byway plumb close`. No engine binary: print a hint and
-exit. Then `byway gen`, the procd instance, and in `service_started` up to
-three `byway plumb on` attempts 10 s apart. That loop runs in the background,
-because with waiting it takes up to a minute and the panel drops the request
-after about 20 seconds. The loop's PID goes to `/var/run/byway-plumb.pid`. A
-snapshot of what was applied goes to `/var/run/byway.applied`: md5 of
-`config.json` and md5 of `byway nftsig` output.
+exit; if a runnable `/usr/local/bin/xray-*` sits next to it, the hint names
+it, otherwise the service sets the marker `/tmp/byway-engine-restore` and
+after 15 s runs `byway engine restore` in the background (output to syslog),
+once per boot. Then `byway gen`, the procd instance, and in `service_started`
+up to three `byway plumb on` attempts 10 s apart. That loop runs in the
+background, because with waiting it takes up to a minute and the panel drops
+the request after about 20 seconds. The loop's PID goes to
+`/var/run/byway-plumb.pid`. A snapshot of what was applied goes to
+`/var/run/byway.applied`: md5 of `config.json` and md5 of `byway nftsig`
+output.
 
 Interception rules go in after the engine, never before: `dns_up` points the
 router's entire resolver at the DNS inbound, and with a dead engine the home
@@ -518,23 +531,28 @@ Every 5 minutes it records the state (engine PID, nft table, `ip rule`, route,
 where dnsmasq points, whether the resolver returns a fake address) and then,
 in order:
 
-1. No engine while `enabled 1` and no "removed by hand" marker: `block_on`
+1. With `enabled 1`, the engine file fails `xray_ok`, there is no runnable
+   `/usr/local/bin/xray-*` next to it, and the marker
+   `/tmp/byway-engine-restore` is over 15 minutes old or missing: the marker
+   is refreshed, `byway engine restore` runs in the background, output to
+   syslog. Flash needs 25 MB free; with less it refuses before downloading.
+2. No engine while `enabled 1` and no "removed by hand" marker: `block_on`
    (only acts with `closed`). Misses are counted in `/tmp/byway-nopid`. On the
    second miss in a row, if dnsmasq points at the DNS inbound, `plumb off
    --service --keep-block`: resolver back to the ISP, block stays. Logged as
    `(nodns)`.
-2. Engine is back and a block is in place: `plumb on` regardless of `guard`;
+3. Engine is back and a block is in place: `plumb on` regardless of `guard`;
    a successful one lifts the block (`(healed)`), a failed one leaves it
    (`(failed)`). With `enabled` other than `1`, just `block_off`.
-3. Engine running, `enabled 1`, `guard` not `0`, no "removed by hand" marker
+4. Engine running, `enabled 1`, `guard` not `0`, no "removed by hand" marker
    (`/tmp/byway-plumb-down`), but the table, rule, route or byway's address in
    `dhcp.@dnsmasq[0].server` is missing: `plumb on`, logged as `(healed)` or
    `(failed)`. The address is checked in UCI, not in the running dnsmasq.
    This repairs a foreign `nft flush ruleset` or a firewall reload.
-4. Ready-made lists, version check, auto-update (below).
-5. `/tmp/byway-access.log` over 4 MB: truncated to zero, which means `byway
+5. Ready-made lists, version check, auto-update (below).
+6. `/tmp/byway-access.log` over 4 MB: truncated to zero, which means `byway
    stat` is not running.
-6. A state line is appended to `/etc/byway/health.log` (last 200 lines) only
+7. A state line is appended to `/etc/byway/health.log` (last 200 lines) only
    when something changed or was repaired. Engine PID changed and the
    resolver already returns a pool address: `killall -HUP dnsmasq`.
 
@@ -613,12 +631,14 @@ and dictionaries stay at the new version. The outcome goes to
 
 ### Replacing the engine
 
-`byway engine VERSION|tested|newest|stable`; without an argument it shows what
-is installed and what is available. `tested` is the constant `XRAY_TESTED`
-(also in `install.sh`). The archive and its `.dgst` come from the XTLS
-releases, and the SHA2-256 is verified. On MIPS without an FPU the GitHub
-builds do not run, so the engine there is updated from the OpenWrt packages.
-With less than 40 MB of `MemAvailable` the swap does not start.
+`byway engine VERSION|tested|newest|stable|restore`; without an argument it
+shows what is installed and what is available. `tested` is the constant
+`XRAY_TESTED` (also in `install.sh`), `restore` is the number from the file
+name in `xray_bin` (`/usr/local/bin/xray-VERSION`), otherwise `XRAY_TESTED`;
+with a live engine `restore` does nothing. The archive and its `.dgst` come
+from the XTLS releases, and the SHA2-256 is verified. On MIPS without an FPU
+the GitHub builds do not run, so the engine there is updated from the OpenWrt
+packages. With less than 40 MB of `MemAvailable` the swap does not start.
 
 If free flash is at least the size of the uncompressed binary plus 5 MB, the
 new binary goes next to the old one (`/usr/local/bin/xray-VERSION`), is
@@ -636,6 +656,25 @@ engine is put back. With the service off or without a key the check is
 skipped, and on the side-by-side path the service restart too; without a key
 the path through RAM stops at the config build. Lock:
 `/var/run/byway-engine.lock`.
+
+No previous engine (not found or does not run) — `eng_fresh`: the same flash
+space as the side-by-side path, unpacking to `/usr/local/bin/xray-VERSION`, a
+run check, `xray_bin`, a service restart with `enabled 1`. No rollback archive
+and no wait for the tunnel: there is nothing to roll back to.
+
+### Background jobs for the panel
+
+A panel request lives for seconds, an update or an engine swap for minutes,
+so the "Install the update" and "Install the tested core" buttons call
+`byway job update` and `byway job engine tested`. `job` detaches
+`byway job run …` (through `setsid` if present), writes the PID to
+`/var/run/byway-job.pid` and answers at once. `job run` writes output straight
+to `/tmp/byway-job.log`, without a pipe, so progress shows as it goes, and
+ends with the line `== done` (`== конец` in Russian). One job at a time: with
+a live PID it refuses. `byway job log` returns the log without colours and,
+while the job is alive, the line `… in progress` with exit code 3; the panel
+polls it every 3 s. `byway doctor` and `byway report` the panel calls
+directly — they finish in seconds.
 
 ## dnsmasq
 
@@ -718,18 +757,20 @@ the interception rules.
 | `/tmp/byway-watch.last`, `byway-nopid` | previous state and miss counter of `byway watch` |
 | `/tmp/byway-fakemap`, `.pos`, `byway-statmark` | `byway stat` accounting |
 | `/tmp/byway-upcheck`, `-newver`, `-relnote`, `-autoupdate` | version check, auto-update outcome |
+| `/tmp/byway-engine-restore` | marker of an attempt to install a missing engine: the service once per boot, `byway watch` when it is over 15 minutes old |
+| `/tmp/byway-job.log`, `/var/run/byway-job.pid` | progress and PID of the panel's background job (`byway job`) |
 | `/var/run/byway.pid`, `byway.applied` | engine PID; applied-state snapshot for reload |
 | `/var/run/byway-plumb.pid`, `byway-nostart` | background start loop; "start failed, skip the loop" |
 | `<dnsmasq conf-dir>/byway-block.conf` | name block under `closed` |
-| `/www/luci-static/resources/view/byway/`, `.../resources/byway/` | panel |
+| `/www/luci-static/resources/view/byway/`, `.../resources/byway/` | panel; the installer writes the version number into `ui.js` (`BUILT`), and if it differs from `byway version` the panel warns that the browser shows it from cache |
 | `/usr/share/luci/menu.d/`, `/usr/share/rpcd/acl.d/luci-app-byway.json` | panel menu and ACL |
 
 Everything under `/tmp` and `/var/run` lives in RAM and is gone after a
-reboot. `install.sh` adds `/etc/byway/`, the init script, the `/etc/rc.d`
-links, the script files and the panel files to `/etc/sysupgrade.conf`. The
-engine is not on that list (35 MB): after a sysupgrade the service does not
-start until the install line puts the engine back; it records the new path
-itself.
+reboot. `install.sh` adds `/etc/byway/`, the init script, the
+`/etc/rc.d/S21byway` and `K10byway` links, the script files and the panel
+files to `/etc/sysupgrade.conf`. The engine is not on that list (35 MB): after
+a sysupgrade the service installs it itself with `byway engine restore` (see
+[The procd service](#the-procd-service)).
 
 ## Where to look
 

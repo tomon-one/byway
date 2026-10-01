@@ -75,7 +75,8 @@ key, lists, IPv6, the router's networks and neighbouring services.
 
 `[ ok ]` is fine, `[ ?? ]` is worth knowing, `[ !! ]` is a fault. Under each
 `[ ?? ]` and `[ !! ]` line there is what to do, often as a ready command.
-With faults the command exits with code 1.
+With faults the command exits with code 1. In the web UI —
+"Maintenance → Check the environment".
 
 ### `byway report`
 
@@ -90,7 +91,8 @@ and `ИМЯ`.
 
 `byway report FILE` creates the file with mode 600 from the start. Paths like
 `/tmp/byway-…` are refused, byway keeps its working files there.
-`/tmp/report.txt` works.
+`/tmp/report.txt` works. In the web UI — "Maintenance → Collect a report",
+the text appears on the page.
 
 ### `logread -e byway` and `logread -e xray`
 
@@ -125,14 +127,17 @@ removed.
 Run `byway health` and follow the first `fail` line.
 
 `service fail`: start with `byway doctor`, it names a byway switched off in
-the settings and a missing autostart right away. Then
-`/etc/init.d/byway restart`: on failure the service prints the reason. With
-no engine it names the install command or a file found next to it,
-`/usr/local/bin/xray-*`. If the config did not build, `byway gen` shows the
-engine's answer and, for known causes, what to do; the draft stays in
-`/tmp/byway-config.new.json`. If the new config fails but the engine accepts
-the previous one, the service starts on the previous one, and the latest
-settings changes do not take effect.
+the settings and a missing autostart right away. Then `/etc/init.d/byway
+restart`: on failure the service prints the reason. With no engine it names a
+file found next to it, `/usr/local/bin/xray-*`, and if there is none, installs
+the engine itself in the background (`byway engine restore`). That is what the
+first minutes after a firmware upgrade look like; progress is in `logread -e
+byway`, the line `no core — installing Xray …`. If it fails, the watchdog
+retries every 15 minutes; by hand — `byway engine restore`. If the config did not
+build, `byway gen` shows the engine's answer and, for known causes, what to
+do; the draft stays in `/tmp/byway-config.new.json`. If the new config fails
+but the engine accepts the previous one, the service starts on the previous
+one, and the latest settings changes do not take effect.
 
 `vpn fail`: the router cannot open a connection to the server. The server
 is down, changed its address or port, or the address is unreachable from
@@ -377,11 +382,14 @@ The line. If the connection to the ISP drops, the tunnel drops with it:
 
 `byway update` leaves settings and lists alone, rebuilds the config and
 restarts the service. If the web UI behaves oddly afterwards, clear the
-browser cache: LuCI does not tell the browser that the UI files changed.
-Ctrl+F5 on each tab of the UI, or F12 → Network → "Disable cache" → F5. A
-manual update keeps no copy of the previous version; to go back, run the
-previous version's installer, by the install line or the archive with its
-number in the tag (see [Installing](../README.en.md#installing)).
+browser cache: LuCI does not tell the browser that the UI files changed. The
+web UI warns about it with the line "The byway panel was updated to …, but the
+browser shows the previous one (…) from its cache", but only until its shared
+module is re-fetched. Ctrl+Shift+R (Ctrl+F5) on each tab of the UI, or F12 →
+Network → "Disable cache" → F5. A manual update keeps no copy of the previous
+version; to go back, run the previous version's installer, by the install line
+or the archive with its number in the tag (see
+[Installing](../README.en.md#installing)).
 
 Automatic updates are off by default. When on, they install only releases
 with the same first two version numbers, at the set hour by the router's
@@ -443,7 +451,8 @@ byway engine 26.9.9       # a specific version; tested: the one tested with bywa
 
 If the flash has no room for a second engine and the current one came from a
 package, `byway engine` refuses: remove the package with the package manager
-first.
+first, after which `byway engine tested` installs the engine as onto empty
+space.
 
 A replacement needs at least 40 MB of free memory. On MIPS without a
 floating-point unit GitHub builds do not run, and `byway engine` refuses:

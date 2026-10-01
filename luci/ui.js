@@ -42,6 +42,20 @@
 var BYWAY = '/usr/local/bin/byway';
 var _ = function (x) { return lang.tr(x); };
 
+/* Номер версии, с которой поставлена панель: установщик вписывает его вместо
+   метки. Браузер держит модули панели в кэше, LuCI сбрасывает его только со
+   своей версией, и после `byway update` человек видел прежнюю панель над
+   новым byway. Расхождение -- предупреждение с тем, как обновить страницу. */
+var BUILT = '@@BYWAY_VERSION@@';
+if (BUILT.indexOf('@@') < 0) {
+	fs.exec(BYWAY, [ 'version' ]).then(function (r) {
+		var v = ((r.stdout || '').split(' ')[1] || '').trim();
+		if (v && v !== BUILT)
+			ui.addNotification(null, E('p', {}, [
+				_('Панель byway обновлена до %s, а браузер показывает прежнюю (%s) из кэша. Обновить страницу без кэша: Ctrl+Shift+R; на телефоне — очистить кэш браузера.').format(v, BUILT) ]), 'warning');
+	}).catch(function () {});
+}
+
 return baseclass.extend({
 	BYWAY: BYWAY,
 
@@ -118,6 +132,30 @@ return baseclass.extend({
 	   быть, но сломалось». Владелец показал это на приёмке 2026-09-07. */
 	row: function (box) {
 		return box && box.closest ? box.closest('.cbi-value') : null;
+	},
+
+	/* Долгая работа (обновление, замена ядра): `byway job` запускает её в
+	   фоне и сразу отвечает, а ход читается `byway job log` раз в три
+	   секунды, пока тот отвечает кодом 3 («ещё идёт»). Запрос панели живёт
+	   секунды, установка -- минуты: напрямую она обрывалась бы посередине. */
+	job: function (args, box) {
+		var self = this;
+		self.say(box, _('запуск…'));
+		return fs.exec(self.BYWAY, [ 'job' ].concat(args)).then(function (r) {
+			if (r.code !== 0) {
+				self.say(box, self.plain((r.stdout || '') + (r.stderr || '')).trim());
+				return;
+			}
+			return new Promise(function (done) {
+				(function poll() {
+					fs.exec(self.BYWAY, [ 'job', 'log' ]).then(function (l) {
+						self.say(box, (l.stdout || '').trim() || _('запуск…'));
+						if (l.code === 3) setTimeout(poll, 3000);
+						else done();
+					}).catch(function () { setTimeout(poll, 3000); });
+				})();
+			});
+		});
 	},
 
 	say: function (box, text) {

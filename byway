@@ -1787,10 +1787,7 @@ fetch_list() {   # адреса через пробел, целевой файл
     # половину набора значит молча потерять сервис, и заметит это человек не
     # сегодня, а когда тот перестанет открываться.
     for _f1 in $_fu; do
-        curl -fsSL --max-time 40 --max-filesize 8000000 -A "Mozilla/5.0" \
-             --proxy "http://127.0.0.1:$_px" -o "$_fpart" "$_f1" 2>/dev/null ||
-        curl -fsSL --max-time 40 --max-filesize 8000000 -A "Mozilla/5.0" \
-             -o "$_fpart" "$_f1" 2>/dev/null ||
+        net_get --max-time 40 --max-filesize 8000000 -o "$_fpart" "$_f1" ||
         { rm -f "$_ftmp" "$_fpart"; return 2; }
         cat "$_fpart" >> "$_ftmp"
         # Перевод строки между файлами обязателен: у списка последняя строка
@@ -2297,7 +2294,58 @@ PLUMB_DOWN=/tmp/byway-plumb-down
 # поднимает сам запуск службы.
 NOPID=/tmp/byway-nopid
 
+# Фоновая задача для панели: обновление byway и замена ядра идут минуты, а
+# запрос панели живёт секунды -- оборванная посреди установка хуже любой.
+# `job update|engine [ВЕРСИЯ]` запускает и сразу отвечает, `job log` отдаёт
+# ход; конец помечен строкой «== конец». Одна задача за раз.
+JOBLOG=/tmp/byway-job.log
+JOBPID=/var/run/byway-job.pid
+cmd_job() {
+    case "${1:-}" in
+      update|engine)
+        if [ -f "$JOBPID" ] && kill -0 "$(cat "$JOBPID" 2>/dev/null)" 2>/dev/null; then
+            die "уже идёт другая задача — дождаться её конца"
+        fi
+        if [ "$1" = update ]; then set -- update
+        else set -- engine "${2:-tested}"; fi
+        : > "$JOBLOG"
+        _js=""; command -v setsid >/dev/null 2>&1 && _js=setsid
+        $_js "$0" job run "$@" </dev/null >/dev/null 2>&1 &
+        printf '%s\n' "$!" > "$JOBPID"
+        sayf "задача запущена: byway %s" "$*"
+        ;;
+      run)
+        # Сама работа, уже отцепленная от панели. Прямо в файл, без
+        # конвейера: sed в конвейере пишет блоками, и ход был бы виден только
+        # в конце. Цвета снимает `job log`.
+        shift
+        { "$0" "$@" 2>&1; printf '\n== %s\n' "$(_t конец)"; } > "$JOBLOG"
+        rm -f "$JOBPID" 2>/dev/null || true
+        ;;
+      log)
+        sed "s/$(printf '\033')\[[0-9;]*m//g" "$JOBLOG" 2>/dev/null || true
+        # Код 3 -- «ещё идёт»: панель судит по коду, а не по тексту.
+        if [ -f "$JOBPID" ] && kill -0 "$(cat "$JOBPID" 2>/dev/null)" 2>/dev/null; then
+            printf '%s\n' "$(_t '… идёт')"
+            return 3
+        fi
+        ;;
+      *) die "byway job update|engine [ВЕРСИЯ]|log" ;;
+    esac
+}
+
 cmd_watch() {
+    # Ядра нет (sysupgrade, неудачная попытка службы при старте) -- повтор
+    # раз в четверть часа, в фоне: загрузка идёт минуты, а сторож ходит раз
+    # в пять. Запускаемое xray-* рядом -- не повод: его указывают руками.
+    _xalt=""
+    for _x in /usr/local/bin/xray-*; do [ -x "$_x" ] && _xalt=$_x; done
+    if [ "$(u enabled)" = "1" ] && [ -z "$_xalt" ] && ! xray_ok "${XRAY:-/nonexistent}" &&
+       [ -z "$(find /tmp/byway-engine-restore -mmin -15 2>/dev/null)" ]; then
+        : > /tmp/byway-engine-restore
+        logt "byway watch: ядра нет -- byway engine restore в фоне"
+        ( "$0" engine restore 2>&1 | sed "s/$(printf '\033')\[[0-9;]*m//g" | logger -t byway ) </dev/null >/dev/null 2>&1 &
+    fi
     _pid=$(xray_pid)
     # Полный health раз в пять минут -- это curl целой страницы через туннель,
     # то есть постоянная нагрузка на TLS роутера и трафик ноды ради строки,
@@ -3460,6 +3508,44 @@ ver_gt() {
     [ "$_a3" -gt "$_b3" ]
 }
 
+# Адрес имени по DoH -- запросом К АДРЕСУ, не к имени: при сломанном
+# туннеле (движок жив, сервер нет) локальный DNS отдаёт подставной адрес на
+# всё из списка, и GitHub из списка уходит в мёртвый туннель и «напрямую».
+# Тот же приём у установщика (doh_a в install.sh).
+doh_a() {   # 1 -- имя
+    for _dq in "https://8.8.8.8/resolve?name=$1&type=A" \
+               "https://1.1.1.1/dns-query?name=$1&type=A"; do
+        _da=$(curl -fsSL --max-time 8 -H "accept: application/dns-json" "$_dq" 2>/dev/null |
+              tr ',' '\n' | sed -n 's/.*"data":"\([0-9][0-9.]*\)".*/\1/p' | head -1)
+        case "$_da" in
+          [0-9]*.[0-9]*.[0-9]*.[0-9]*) printf '%s' "$_da"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# --resolve для имён GitHub (и переадресаций выпусков), один раз за запуск.
+gh_resolve() {
+    [ "${GH_RES_DONE:-0}" = 1 ] && return 0
+    GH_RES_DONE=1; GH_RES=""
+    for _gh in github.com api.github.com raw.githubusercontent.com codeload.github.com \
+               objects.githubusercontent.com release-assets.githubusercontent.com; do
+        _gi=$(doh_a "$_gh") || continue
+        GH_RES="$GH_RES --resolve $_gh:443:$_gi"
+    done
+}
+
+# Три попытки: прокси-вход, напрямую, напрямую с адресами GitHub из DoH.
+net_get() {   # аргументы curl как есть
+    _npx=$(u local_proxy_port); _npx=${_npx:-1603}
+    curl -fsSL -A "Mozilla/5.0" --proxy "http://127.0.0.1:$_npx" "$@" 2>/dev/null && return 0
+    curl -fsSL -A "Mozilla/5.0" "$@" 2>/dev/null && return 0
+    gh_resolve
+    [ -n "$GH_RES" ] || return 1
+    # shellcheck disable=SC2086
+    curl -fsSL -A "Mozilla/5.0" $GH_RES "$@" 2>/dev/null
+}
+
 # Спрашивает у GitHub про последний выпуск. Печатает «код версия» одной
 # строкой: код нужен снаружи, а через подстановку $( ) переменная наружу не
 # выходит -- она осталась бы в подоболочке, и «нет связи» печаталось бы даже
@@ -3468,7 +3554,8 @@ latest_version() {
     _px=$(u local_proxy_port); _px=${_px:-1603}
     _api="https://api.github.com/repos/$BYWAY_REPO/releases/latest"
     _code=000; _body=""
-    for _via in "--proxy http://127.0.0.1:$_px" ""; do
+    for _via in "--proxy http://127.0.0.1:$_px" "" doh; do
+        if [ "$_via" = doh ]; then gh_resolve; [ -n "$GH_RES" ] || break; _via=$GH_RES; fi
         # shellcheck disable=SC2086
         _r=$(curl -sSL --max-time 25 -A "Mozilla/5.0" $_via -w '
 %{http_code}' "$_api" 2>/dev/null || true)
@@ -3535,8 +3622,7 @@ cmd_update() {
     _px=$(u local_proxy_port); _px=${_px:-1603}
     _url="https://github.com/$BYWAY_REPO/archive/refs/tags/v$_new.tar.gz"
     say "загрузка"
-    curl -fsSL --max-time 120 -A "Mozilla/5.0" --proxy "http://127.0.0.1:$_px"          -o "$_d/p.tar.gz" "$_url" 2>/dev/null ||
-    curl -fsSL --max-time 120 -A "Mozilla/5.0" -o "$_d/p.tar.gz" "$_url" 2>/dev/null ||
+    net_get --max-time 120 -o "$_d/p.tar.gz" "$_url" ||
         die "не скачалось -- ничего не тронуто"
     tar xzf "$_d/p.tar.gz" -C "$_d" 2>/dev/null || die "не распаковалось -- ничего не тронуто"
     _src=$(find "$_d" -maxdepth 2 -name install.sh 2>/dev/null | head -1)
@@ -3682,11 +3768,7 @@ eng_asset() {
 
 # Загрузка: сперва через свой прокси-вход -- GitHub бывает в списке, а свой
 # трафик роутера без router_via_vpn до туннеля не доходит, -- потом напрямую.
-eng_dl() {   # аргументы curl как есть
-    _epx=$(u local_proxy_port); _epx=${_epx:-1603}
-    curl -fsSL -A "Mozilla/5.0" --proxy "http://127.0.0.1:$_epx" "$@" 2>/dev/null && return 0
-    curl -fsSL -A "Mozilla/5.0" "$@" 2>/dev/null
-}
+eng_dl() { net_get "$@"; }
 
 # Номер выпуска XTLS: stable -- releases/latest (у XTLS предвыпуском помечено
 # всё новее 26.3.27, и «latest» отдаёт мартовский), any -- самый свежий.
@@ -3738,8 +3820,7 @@ eng_put() {   # 1 архив, 2 путь
 # отдаёт подставной адрес. Снятая обвязка возвращает роутеру настоящий DNS;
 # перезапуск службы в ходе замены её поднимет обратно сам.
 eng_nonet() {
-    warn "  если GitHub в списке, а туннель не работает: byway plumb off — и повторить"
-    warn "  замена сама вернёт перехват; если отказаться — вернуть: byway plumb on"
+    warn "  GitHub не ответил ни через туннель, ни напрямую, ни по адресам из DoH — проверить связь роутера и повторить"
 }
 
 eng_free_kb() {   # свободно на разделе, где лежит /usr/local/bin, КБ
@@ -3802,6 +3883,7 @@ cmd_engine() {
         _esv=$(eng_top stable || true)
         if [ -z "$_eov" ]; then
             warn "ядро Xray не указано или не запускается (byway.main.xray_bin)"
+            say "  поставить: byway engine restore"
         elif [ -z "$_env" ]; then
             sayf "стоит Xray %s; есть ли новее — неизвестно: GitHub не ответил" "$_eov"
             eng_nonet
@@ -3829,9 +3911,18 @@ cmd_engine() {
         _efk=$(eng_free_kb || echo 0); _emk=$(eng_mem_kb || echo 0)
         sayf "  на флеше свободно %s МБ, памяти доступно %s МБ" \
             "$(( ${_efk:-0} / 1024 ))" "$(( ${_emk:-0} / 1024 ))"
-        say "  варианты: byway engine ВЕРСИЯ | tested | newest | stable"
+        say "  варианты: byway engine ВЕРСИЯ | tested | newest | stable | restore"
         return 0 ;;
       tested) _env=$XRAY_TESTED ;;
+      # Ядра нет (sysupgrade его не сохраняет): та версия, что была -- номер
+      # в имени файла из xray_bin, настройки sysupgrade переживают, -- иначе
+      # проверенная. Зовут служба при старте и сторож, вручную -- тоже можно.
+      restore)
+        [ -z "$_eov" ] || { sayf "ядро на месте: Xray %s" "$_eov"; return 0; }
+        _erb=$(uci -q get byway.main.xray_bin 2>/dev/null || true)
+        _env=${_erb##*/xray-}
+        case "$_erb" in /usr/local/bin/xray-*) ;; *) _env="" ;; esac
+        case "$_env" in ''|*[!0-9.]*) _env=$XRAY_TESTED ;; esac ;;
       newest) _env=$(eng_top any || true)
               [ -n "$_env" ] || die "GitHub не ответил — номер свежей версии неизвестен, ничего не тронуто" ;;
       stable) _env=$(eng_top stable || true)
@@ -3839,11 +3930,9 @@ cmd_engine() {
       *)      _env=$_earg ;;
     esac
     case "$_env" in
-      *[!0-9.]*|.*|*.) dief "непонятная версия «%s» — нужен номер вида 26.9.9 либо tested, newest, stable" "$_earg" ;;
+      *[!0-9.]*|.*|*.) dief "непонятная версия «%s» — нужен номер вида 26.9.9 либо tested, newest, stable, restore" "$_earg" ;;
     esac
     [ "$_env" != "$_eov" ] || { sayf "стоит уже %s — менять нечего" "$_env"; return 0; }
-    [ -n "$_eov" ] ||
-        die "прежний движок не определился — ставить установщиком byway, а не заменой"
 
     _enew=/usr/local/bin/xray-$_env
     _elk=/var/run/byway-engine.lock
@@ -3859,6 +3948,14 @@ cmd_engine() {
     [ "${_emk:-0}" -ge 40960 ] ||
         dief "памяти доступно %s МБ, для замены нужно не меньше 40 — ничего не тронуто" "$(( ${_emk:-0} / 1024 ))"
 
+    # Ядра нет -- место проверяем ДО загрузки: сторож повторяет раз в
+    # четверть часа, и качать 14 МБ ради отказа каждый раз незачем.
+    if [ -z "$_eov" ]; then
+        _efree=$(eng_free_kb || echo 0)
+        [ "${_efree:-0}" -ge 25600 ] ||
+            dief "на флеше свободно %s МБ, ядру нужно %s — ничего не тронуто" \
+                 "$(( ${_efree:-0} / 1024 ))" 25
+    fi
     sayf "загрузка Xray-core %s (%s)" "$_env" "$ENG_ASSET"
     _erc=0; eng_fetch "$_env" "$_ed/new.zip" || _erc=$?
     case "$_erc" in
@@ -3874,6 +3971,13 @@ cmd_engine() {
     # Рядом -- если на флеше есть весь размер ядра и 5 МБ сверху. Сжатие
     # ubifs не угадать заранее, поэтому меряется по несжатому.
     _efree=$(eng_free_kb || echo 0)
+    # Ядра нет вовсе (после sysupgrade, снятого пакета): откатываться не на
+    # что, значит и откат не нужен -- просто поставить. Прежде здесь был
+    # отказ «ставить установщиком», и дом без движка ждал человека.
+    if [ -z "$_eov" ]; then
+        eng_fresh
+        return 0
+    fi
     _etun0=0
     eng_idle || { tunnel_ok && _etun0=1; } || true
     if [ "$(( ${_efree:-0} * 1024 ))" -ge "$(( _esz + 5242880 ))" ]; then
@@ -3884,6 +3988,28 @@ cmd_engine() {
 }
 
 # Путь «рядом». Прежний движок не трогается до конца: откат -- вернуть путь.
+eng_fresh() {
+    # 25 МБ, как у установщика: ubifs дожимает 35 МБ ядра примерно вдвое, и
+    # порог «несжатый размер + 5» отказывал роутеру с /overlay 43.7 МБ после
+    # sysupgrade -- ровно тому, ради кого восстановление и заведено.
+    [ "${_efree:-0}" -ge 25600 ] ||
+        dief "на флеше свободно %s МБ, ядру нужно %s — ничего не тронуто" \
+             "$(( ${_efree:-0} / 1024 ))" 25
+    sayf "ядра нет — ставится Xray %s" "$_env"
+    eng_put "$_ed/new.zip" "$_enew" || die "ядро не распаковалось на флеш — ничего не тронуто"
+    if ! "$_enew" version >/dev/null 2>&1; then
+        rm -f "$_enew" 2>/dev/null || true
+        die "ядро не запускается на этом железе — удалено"
+    fi
+    eng_bin_set "$_enew"
+    logf 'движок поставлен: %s (прежнего не было)' "$_env"
+    if [ "$(u enabled)" = "1" ]; then
+        say "запуск службы"
+        /etc/init.d/byway restart >/dev/null 2>&1 || true
+    fi
+    sayf "готово: Xray %s, на флеше свободно %s МБ" "$_env" "$(( $(eng_free_kb || echo 0) / 1024 ))"
+}
+
 eng_side() {
     say "места хватает — новое ядро кладётся рядом с прежним"
     eng_put "$_ed/new.zip" "$_enew" || die "ядро не распаковалось на флеш — ничего не тронуто"
@@ -7893,6 +8019,7 @@ case "${1:-}" in
   import) shift; cmd_import "$@" ;;
   version|--version|-v) echo "byway $BYWAY_VERSION" ;;
   watch)  cmd_watch ;;
+  job)    shift; cmd_job "$@" ;;
   stat)   cmd_stat ;;
   top)    shift; cmd_top "$@" ;;
   nft)    cmd_nft ;;
@@ -7922,7 +8049,7 @@ case "${1:-}" in
     _help 'presets' 'обновить готовые списки'
     _help 'top [N]' 'чем реально пользуются'
     _help 'update [--check|--force]' 'проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же'
-    _help 'engine [ВЕРСИЯ|tested|newest|stable]' 'есть ли обновление ядра Xray-core, и его замена; без аргумента — ещё и подробности'
+    _help 'engine [ВЕРСИЯ|tested|newest|stable|restore]' 'есть ли обновление ядра Xray-core, и его замена; без аргумента — ещё и подробности'
     _help 'lang [ru|en]' 'язык вывода и панели; английский словарь докачивается при переключении'
     _help 'report [файл]' 'собрать отчёт для обращения, без ключа от VPN'
     _help 'export [файл] [--with-key]' 'выгрузить настройки без ключа от VPN; --with-key — с ключом'

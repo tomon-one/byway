@@ -1005,7 +1005,14 @@ md5sum /usr/local/bin/byway 2>/dev/null | cut -d' ' -f1 > /etc/byway/.binmd5 || 
 # то есть автозапуск был задуман и просто не включался.
 #
 # Безопасно делать до настройки: при `enabled=0` служба ничего не поднимает.
+# disable до enable: при смене START (90 -> 21 в 0.3.0) прежняя ссылка
+# S90byway осталась бы рядом с новой, и служба стартовала бы дважды.
+# disable снимает все S??byway/K??byway по маске.
+/etc/init.d/byway disable >/dev/null 2>&1 || true
 /etc/init.d/byway enable >/dev/null 2>&1 || true
+if [ -f /etc/sysupgrade.conf ] && grep -qxF /etc/rc.d/S90byway /etc/sysupgrade.conf; then
+    grep -vxF /etc/rc.d/S90byway /etc/sysupgrade.conf > /tmp/su.$$ && mv /tmp/su.$$ /etc/sysupgrade.conf
+fi
 if /etc/init.d/byway enabled 2>/dev/null; then
     say "программа и служба установлены, автозапуск включён"
 else
@@ -1122,6 +1129,9 @@ if [ "$PANEL" = 1 ]; then
             cp "$SRC/luci/$_m.js" "/www/luci-static/resources/byway/$_m.js" &&
             chmod 644 "/www/luci-static/resources/byway/$_m.js"
     done
+    # Номер версии в панель: по нему она узнаёт, что браузер показывает её
+    # прежнюю из кэша (ui.js, BUILT).
+    sed -i "s/@@BYWAY_VERSION@@/$VER/" /www/luci-static/resources/byway/ui.js 2>/dev/null || true
     # Словарь панели -- тоже только выбранного языка: при русском строки
     # перевода вырезаются, модуль остаётся (его подключают все вкладки).
     # Строки перевода -- ровно те, что начинаются с двух табов и кавычки.
@@ -1157,7 +1167,7 @@ fi
 # Перечислены ФАЙЛЫ, а не каталог /usr/local/bin целиком: там же обычно лежит
 # бинарник Xray на 34 МБ, а sysupgrade пакует сохраняемое в память -- каталогом
 # целиком мы бы клали роутер на ровном месте.
-for P in /etc/byway/ /etc/init.d/byway /etc/rc.d/S90byway /etc/rc.d/K10byway \
+for P in /etc/byway/ /etc/init.d/byway /etc/rc.d/S21byway /etc/rc.d/K10byway \
          /usr/local/bin/byway /usr/local/bin/byway-uninstall          /usr/bin/byway /usr/bin/byway-uninstall; do
     grep -qxF "$P" /etc/sysupgrade.conf 2>/dev/null || echo "$P" >> /etc/sysupgrade.conf
 done

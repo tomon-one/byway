@@ -246,7 +246,7 @@ say "── 2. Служба ──"
 if [ -x /etc/init.d/byway ]; then
     do_ /etc/init.d/byway stop
     do_ /etc/init.d/byway disable
-    do_ rm -f /etc/init.d/byway /etc/rc.d/S90byway /etc/rc.d/K10byway
+    do_ rm -f /etc/init.d/byway /etc/rc.d/S90byway /etc/rc.d/S21byway /etc/rc.d/K10byway
     say "остановлена и снята с автозапуска"
 fi
 

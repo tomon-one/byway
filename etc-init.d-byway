@@ -25,7 +25,11 @@
 # без DNS на девять секунд ради состояния, которое никому не достанется.
 
 USE_PROCD=1
-START=90
+# 21 -- сразу за сетью (20), dnsmasq и firewall (19). Прежде было 90, и при
+# «не пускать мимо VPN» от подъёма dnsmasq до запрета проходили десятки
+# секунд, в которые клиенты получали настоящие адреса и держали их до TTL.
+# Движку сеть для старта не нужна: перехват проверяется по своему DNS.
+START=21
 STOP=10
 
 BYWAY=/usr/local/bin/byway
@@ -233,7 +237,10 @@ start_service() {
 		# Совет «поставить xray-core» на роутере, где движок уже лежит
 		# рядом под своей версией, вёл ко второй копии ядра на разделе
 		# 43.7 МБ, куда две не влезают. Сперва смотрим, нет ли готового.
-		_alt=$(ls -1 /usr/local/bin/xray-* 2>/dev/null | tail -1)
+		# Только запускаемые: висячая ссылка (ядро в /tmp, стёртом
+		# перезагрузкой) -- не замена, а с ней пропускалось восстановление.
+		_alt=""
+		for _x in /usr/local/bin/xray-*; do [ -x "$_x" ] && _alt=$_x; done
 		if [ -n "$_alt" ]; then
 			echo "  рядом лежит $_alt"
 			echo "  указать его: uci set byway.main.xray_bin=$_alt && uci commit byway"
@@ -249,8 +256,16 @@ start_service() {
 			if ! command -v apk >/dev/null 2>&1 && command -v opkg >/dev/null 2>&1; then
 				_pkgfix="opkg update && opkg install"
 			fi
-			echo "  поставить: $_pkgfix xray-core"
-			echo "  либо переустановить byway -- он положит движок сам"
+			# Ставим сами, в фоне и раз за загрузку: так бывает после
+			# sysupgrade, и дом иначе ждал человека с командой. Номер --
+			# из прежнего xray_bin, иначе проверенный. Удачная установка
+			# перезапускает службу сама; не вышло -- сторож повторит.
+			if [ ! -f /tmp/byway-engine-restore ]; then
+				: > /tmp/byway-engine-restore
+				echo "  движок ставится в фоне: byway engine restore (журнал: logread -e byway)"
+				( sleep 15; "$BYWAY" engine restore 2>&1 | sed "s/$(printf '\033')\[[0-9;]*m//g" | logger -t byway ) </dev/null >/dev/null 2>&1 &
+			fi
+			echo "  поставить руками: byway engine restore, либо $_pkgfix xray-core"
 			echo "  либо указать свой путь: uci set byway.main.xray_bin=/путь/к/xray"
 		fi
 		# Безусловно, по той же причине, что и веткой выше.

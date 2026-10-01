@@ -415,7 +415,8 @@ understands and why byway refuses — [keys and connection](docs/keys.en.md).
   the block stays. The watchdog is turned off with the "Interception
   auto-restore" setting on the "Advanced" tab; an engine that comes back while
   the block is in place is picked up even then: byway brings interception up,
-  and the block is lifted.
+  and the block is lifted. A missing engine (after a firmware upgrade) the
+  watchdog installs again every 15 minutes — `byway engine restore`.
 - **Failure behaviour** is a choice — see [How it works](#how-it-works).
 - **Checks:** `byway doctor` for the environment, `byway health` for whether it
   works right now, `byway probe` to test a key in isolation without touching the
@@ -425,7 +426,8 @@ understands and why byway refuses — [keys and connection](docs/keys.en.md).
   five minutes, written only on a change. Whether the VPN server answers is not
   logged there: `byway health` checks that.
 - **A report for a bug thread** — `byway report`: state, environment and
-  diagnostics as one piece of text, **without the VPN key**.
+  diagnostics as one piece of text, **without the VPN key**. It and
+  `byway doctor` are in the web UI too, on the "Maintenance" tab.
 
 Symptoms, checks and what to do — [when it does not
 work](docs/troubleshooting.en.md).
@@ -433,10 +435,10 @@ work](docs/troubleshooting.en.md).
 ### Control
 
 - **The LuCI web UI:** key, mode, lists, state and connection check, export
-  and import, update checks. Console only: installing an update
-  (`byway update`), replacing the engine (`byway engine`), the environment
-  check (`byway doctor`), the key check (`byway probe`), the report
-  (`byway report`) and experimental IPv6.
+  and import, the environment check and the report, checking for and
+  installing byway updates, replacing the engine with the tested one. Console
+  only: an engine of another version (`byway engine VERSION`), the key check
+  (`byway probe`) and experimental IPv6.
 - **A console menu** — `byway menu`, the same actions.
 - **Export and import.** Settings and lists as one piece of text:
   `byway export` and `byway import`. The export leaves the key out by default,
@@ -503,8 +505,10 @@ The block switches on when Xray-core on the router is not running or
 interception did not come up. If the engine is alive and the server is
 unreachable, list traffic still goes into the engine and does not leave around
 the VPN. The block also holds while the service restarts, updates or replaces
-the engine, and a successful start of interception lifts it. Access to the
-router itself (LuCI, ssh) stays open in both modes.
+the engine, and a successful start of interception lifts it. At boot the
+service starts right after the network, dnsmasq and the firewall, and sets the
+block before the engine starts. Access to the router itself (LuCI, ssh) stays
+open in both modes.
 
 The packet path, the service and periodic tasks, the files and what happens on
 a failure — [how byway works](docs/architecture.en.md).
@@ -520,16 +524,19 @@ a failure — [how byway works](docs/architecture.en.md).
 | **Overview** | whether it works, through what, and how to change that: state, key, connection mode, failure behaviour |
 | **Routes** | what goes through the VPN: mode, your lists, ready-made lists, per-key routes |
 | **Network** | whose traffic to divert, DNS, interception ports and addresses, Mux, QUIC rejection, VPN for programs on the router |
-| **Maintenance** | full state, state log, checks for byway and Xray core updates (installed from the console), byway auto-update, settings transfer, statistics |
+| **Maintenance** | full state, environment check, report for a support request, state log, byway update and swapping the Xray core for the tested one (in the background, progress on the page), byway auto-update, settings transfer, statistics |
 | **Advanced** | language and values you change once in a lifetime |
 
-> ⚠️ **Clear the browser cache after updating byway.** LuCI appends the version
-> of **LuCI itself** to a module's URL, not the file's, so after a byway update
-> the browser does not know the file changed and keeps showing the old tab, and
-> there is no way to tell by looking. Ctrl+F5 helps, but only re-fetches **the
-> modules of the open page** — you would have to do it on every tab of the web
-> UI. More reliable: F12 → Network → "Disable cache" → F5, without closing the
-> tools.
+> ⚠️ **Clear the browser cache after updating byway.** LuCI appends the
+> version of **LuCI itself** to a module's URL, not the file's, so after a
+> byway update the browser does not know the file changed and keeps showing
+> the old tab. The web UI notices this and warns: "The byway panel was updated
+> to …, but the browser shows the previous one (…) from its cache". The check
+> lives in a module shared by all tabs, and once it is re-fetched on one tab
+> the warning goes away on the others too, although their files may still be
+> old. Ctrl+Shift+R (Ctrl+F5) re-fetches **only the modules of the open page**
+> — you would have to do it on every tab of the web UI. More reliable: F12 →
+> Network → "Disable cache" → F5, without closing the tools.
 
 ---
 
@@ -551,7 +558,8 @@ a failure — [how byway works](docs/architecture.en.md).
 | `byway top [N]` | which list entries are actually used; needs statistics collection on (`show_usage`) |
 | `byway stat` | collect statistics now, without waiting for the schedule; also only with `show_usage` |
 | `byway update [--check\|--force]` | whether a new byway version exists, and installing it; `--force` installs the latest GitHub release even if it is not newer than the installed one |
-| `byway engine [VERSION\|tested\|newest\|stable]` | whether an Xray-core update exists, and replacing the engine |
+| `byway engine [VERSION\|tested\|newest\|stable\|restore]` | whether an Xray-core update exists, and replacing the engine; `restore` installs a missing engine |
+| `byway job update\|engine [VERSION]\|log` | internal, for the web UI: an update or an engine swap in the background; `log` shows progress, exit code 3 means still running |
 | `byway lang ru\|en` | output and web UI language |
 | `byway report [file]` | a report for a bug thread: state and diagnostics, no key |
 | `byway export [file] [--with-key]` | export settings without the VPN key; `--with-key` puts it in |
@@ -578,8 +586,10 @@ byway update --force     # install the latest release even if it is not newer
 An update does not touch settings or lists. The installer asks about the
 language and the web UI again, offering
 your previous answers as defaults. At the end the service restarts if it is
-enabled, and the tunnel drops for a few seconds. Clear the
-browser cache afterwards — see the warning in [The web UI](#the-web-ui).
+enabled, and the tunnel drops for a few seconds. In the web UI the "Install
+the update" button on the "Maintenance" tab does the same: the installation
+runs in the background, with progress on the page. Clear the browser cache
+afterwards — see the warning in [The web UI](#the-web-ui).
 
 ⚠️ **Update this way, not with the install one-liner.** On a running router the
 install line may fail — the reason is below; `byway update` works whatever your
@@ -616,16 +626,19 @@ auto-update has nothing to install.
 The interval between version checks is picked at random each time: a request
 to GitHub at the same time every day would stand out from other traffic, and
 that regularity alone would tell the ISP that byway is installed here. The
-check is turned off with a checkbox on the "Maintenance" tab or `option
-update_check '0'`.
+check is turned off with the "Update check" checkbox on the "Maintenance" tab
+or `option update_check '0'`.
 
 **Refreshing the ready-made lists** (`lists_update`) goes to GitHub at regular
 intervals, and the ISP can notice that regularity. It is **off** by default,
-and you set the interval yourself. The version check and the list refresh go
-through byway's proxy inbound: into the tunnel if GitHub is in your
-lists (the ready-made byway list has it) or the mode is "Everything through
-the VPN", direct otherwise. If the proxy does not answer, the request goes
-direct too.
+and you set the interval yourself. The version check, the list refresh,
+`byway update` and `byway engine` go through byway's proxy inbound: into the
+tunnel if GitHub is in your lists (the ready-made byway list has it) or the
+mode is "Everything through the VPN", direct otherwise. If the proxy does not
+answer, the request is repeated direct, and if that fails too — direct to
+GitHub addresses obtained over DoH from `8.8.8.8` and `1.1.1.1`: with a broken
+tunnel the router's resolver hands out a placeholder address for GitHub when
+it is in the list.
 
 **Auto-update** (`auto_update`) is off deliberately: it restarts the service,
 which leaves the whole house without the tunnel for a while. By turning it on
@@ -650,9 +663,13 @@ that release by itself again; by hand — `byway update`.
 
 **After a firmware upgrade** byway's settings, lists, service and web UI are
 kept, but the Xray-core engine is not: its 35 MB are left out of the list of
-files kept across upgrades. The service does not start, there is no tunnel,
-and with "Block" what went through the VPN is closed. To get it back, run the
-install line again: it installs the engine and records its path itself.
+files kept across upgrades. When the service finds no engine at start, it
+installs one itself, in the background: the version that was there (the
+number in the file name in `xray_bin`), otherwise the tested one — and
+restarts. If that fails, the watchdog retries every 15 minutes; progress and
+errors are in `logread -e byway`. Until there is an engine, there is no
+tunnel, and with "Block" what went through the VPN is closed. By hand —
+`byway engine restore`.
 
 ---
 
@@ -705,6 +722,7 @@ byway engine 26.9.9       # install this version
 byway engine tested       # the version byway is fully verified on
 byway engine newest       # the newest one, pre-releases included
 byway engine stable       # the newest stable one
+byway engine restore      # no engine: version from xray_bin or tested
 ```
 
 The archive is checked against the SHA2-256 sum from the release. If there is
@@ -727,15 +745,19 @@ one is not in `/usr/local/bin/xray-*` (a package or a path of your own), the
 replacement through memory does not start: byway does not delete a file it did
 not install. In that case stop the service (`/etc/init.d/byway stop` — a
 running engine keeps its flash space even after the file is deleted), remove
-the package and run the install line again: it asks which engine version you
-want and records its path itself. Until there is an engine, there is no tunnel.
+the package and install an engine with `byway engine tested` (or a version
+number): with no previous engine it is simply installed, the path is recorded
+and the service starts. That needs the engine's uncompressed size plus 5 MB
+free on flash, about 40; the install line makes do with 25. Until there is an
+engine, there is no tunnel.
 
 `byway update` does not touch the engine: it updates byway only.
 
-In the web UI, the "Xray core" block on the "Maintenance" tab has a "Check for
-a core update" button: it answers whether a newer version than the installed
-one exists and names the command to replace it. The engine is replaced from
-the console, since the swap takes longer than the web UI is willing to wait.
+In the web UI, the "Xray core" block on the "Maintenance" tab: "Check for a
+core update" answers whether a newer version than the installed one exists,
+"Install the tested core" installs the version tested with byway in the
+background, with progress on the page. Another version — `byway engine
+VERSION` from the console.
 
 **If the config stopped building after an engine update.** byway verifies
 every build with the engine itself, so an incompatibility does not pass

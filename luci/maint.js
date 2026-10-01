@@ -76,6 +76,31 @@ return view.extend({
 		o = ss.option(form.DummyValue, '_status', _('Сводка'));
 		o.cfgvalue = function () { return bwui.table(data[1] || ''); };
 
+		/* doctor и report укладываются в секунды -- прямым вызовом. */
+		var diagMsg = bwui.table('');
+		o = ss.option(form.Button, '_doctor', _('Проверка окружения'));
+		o.inputstyle = 'action';
+		o.inputtitle = _('Проверить окружение');
+		o.onclick = function () {
+			bwui.say(diagMsg, _('идёт проверка…'));
+			return bwui.run([ 'doctor' ]).then(function (t) {
+				bwui.say(diagMsg, t.trim() || _('нет ответа'));
+			});
+		};
+
+		o = ss.option(form.Button, '_report', _('Отчёт для обращения'));
+		o.inputstyle = 'action';
+		o.inputtitle = _('Собрать отчёт');
+		o.onclick = function () {
+			bwui.say(diagMsg, _('идёт сбор…'));
+			return bwui.run([ 'report' ]).then(function (t) {
+				bwui.say(diagMsg, t.trim() || _('нет ответа'));
+			});
+		};
+
+		o = ss.option(form.DummyValue, '_diagmsg', _('Ответ'));
+		o.cfgvalue = function () { return diagMsg; };
+
 		/* ── Журнал состояния ─────────────────────────────────────────── */
 
 		ss = block('_log', _('Журнал состояния'),
@@ -107,10 +132,10 @@ return view.extend({
 		   блок утверждал, что byway никуда не ходит сам, а сторож к тому
 		   времени уже ходил раз в сутки. */
 		ss = block('_update', _('Обновление'),
-			_('Панель только проверяет обновления: установка дольше, чем она ждёт ответа. Установить — командой byway update в консоли или автоматически (ниже).'));
+			_('Установка идёт в фоне, ход виден ниже; служба перезапускается, туннель пропадает на несколько секунд.'));
 
-		o = ss.option(form.Flag, 'update_check', _('Проверка обновлений раз в сутки'),
-			_('byway раз в сутки спрашивает GitHub, нет ли версии новее, и говорит об этом в сводке. Ничего не скачивает и не ставит. Плата за удобство: с домашнего адреса раз в сутки уходит запрос к GitHub — по нему видно, что здесь стоит byway, и видно это без всякого разбора трафика.'));
+		o = ss.option(form.Flag, 'update_check', _('Проверка обновлений'),
+			_('Раз в 12–36 часов, в случайный момент, byway спрашивает GitHub, нет ли версии новее, и говорит об этом в сводке. Ничего не скачивает и не ставит.'));
 		o.default = '1';
 		o.rmempty = false;
 
@@ -144,6 +169,14 @@ return view.extend({
 			});
 		};
 
+		o = ss.option(form.Button, '_install', _('Установка'));
+		o.inputstyle = 'apply';
+		o.inputtitle = _('Поставить обновление');
+		o.onclick = function () {
+			if (!confirm(_('Поставить последний выпуск byway? Служба перезапустится, туннель пропадёт на несколько секунд.'))) return;
+			return bwui.job([ 'update' ], updMsg);
+		};
+
 		o = ss.option(form.DummyValue, '_updmsg', _('Ответ'));
 		o.cfgvalue = function () { return updMsg; };
 
@@ -154,7 +187,7 @@ return view.extend({
 		   дольше. Панель только показывает версии и готовую команду; ставит
 		   byway engine из консоли, и откатывается он там же сам. */
 		ss = block('_engine', _('Ядро Xray'),
-			_('Есть ли обновление ядра Xray. Заменить — командой byway engine в консоли; если туннель на новом ядре не поднимется, byway вернёт прежнее.'));
+			_('Замена идёт в фоне, ход виден ниже. Если туннель на новом ядре не поднимется, byway вернёт прежнее. Другую версию — командой byway engine ВЕРСИЯ в консоли.'));
 
 		var engMsg = bwui.output('');
 		o = ss.option(form.Button, '_engcheck', _('Проверить'));
@@ -168,6 +201,14 @@ return view.extend({
 			}).catch(function () {
 				bwui.say(engMsg, _('Спросить не вышло — byway ничего не ответил.'));
 			});
+		};
+
+		o = ss.option(form.Button, '_enginst', _('Замена'));
+		o.inputstyle = 'apply';
+		o.inputtitle = _('Поставить проверенное ядро');
+		o.onclick = function () {
+			if (!confirm(_('Поставить ядро Xray, проверенное с byway? Служба перезапустится; если на флеше нет места на второе ядро, туннеля не будет около минуты.'))) return;
+			return bwui.job([ 'engine', 'tested' ], engMsg);
 		};
 
 		o = ss.option(form.DummyValue, '_engmsg', _('Ответ'));
