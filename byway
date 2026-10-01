@@ -25,8 +25,8 @@
 #   byway check URL  разобрать ссылку и проверить конфиг ядром, без соединений
 #
 # Виды ссылок: vless, trojan, socks, hysteria2 (hy2), wireguard (wg) --
-# разбираются сразу; vmess и ss лежат внутри base64 и требуют пакета
-# coreutils-base64 (в busybox его нет). tuic и hysteria первой версии в
+# разбираются сразу; vmess и ss лежат внутри base64 (декодер -- пакет либо
+# awk). tuic и hysteria первой версии в
 # Xray-core нет (сверено по исходникам 26.9.30).
 #   byway presets    скачать подключённые готовые списки и проверить их
 #   byway sub URL    скачать подписку и напечатать ключи из неё построчно
@@ -143,6 +143,11 @@ xray_ok() {
     esac
     case "$1" in *..*) return 1 ;; esac
     [ -f "$1" ] && [ -x "$1" ] || return 1
+    # Имя xray* и заголовок ELF -- до запуска: `xray_bin=/sbin/reboot` с
+    # панели иначе перезагружал роутер на каждом вызове byway (cron -- раз в
+    # пять минут, при загрузке -- по кругу).
+    case "${1##*/}" in xray*) ;; *) return 1 ;; esac
+    head -c 4 "$1" 2>/dev/null | grep -q ELF || return 1
     "$1" version 2>/dev/null | head -1 | grep -qi "^Xray " || return 1
 }
 
@@ -538,13 +543,14 @@ KNOWN_PARAMS="type security sni fp alpn path host headerType seed serviceName mo
 KNOWN_HY="obfs obfs-password mport"
 KNOWN_WG="publickey privatekey secretkey pk peer_pk presharedkey pre_shared_key psk address local_address mtu reserved keepalive"
 
-# base64 на этом роутере отсутствует в busybox и требует пакета
-# coreutils-base64. Нужен только для vmess и ss -- у остальных схем всё
-# лежит в адресе открытым текстом.
+# base64 в busybox этого роутера нет. Есть пакет coreutils-base64 -- берём
+# его, нет -- раскодирует awk (b64d ниже): прежде без пакета vmess и ss
+# отвергались, а установщик задавал о нём отдельный вопрос.
 # ⚠️ Наличие файла ничего не значит: `/bin/base64` бывает ссылкой на busybox,
 # в котором апплета base64 нет, и `command -v` про это не знает. Судим
 # запуском. Поймано приёмкой владельца 2026-09-07.
 have_base64() { printf x | base64 >/dev/null 2>&1; }
+CANARY=/use-application-dns.net/
 
 b64d() {
     if have_base64; then
@@ -560,7 +566,21 @@ b64d() {
         esac
         printf '%s' "$_b6" | base64 -d 2>/dev/null || true
     else
-        dief "для этой ссылки нужен декодер base64: %s" "$PKG_FIX coreutils-base64"
+        # Тот же результат байт в байт (сверено с base64 -d на busybox и gawk,
+        # с UTF-8). LC_ALL=C: иначе gawk печатает %c > 127 многобайтно.
+        # Алфавит url (-_) и отсутствие «=» awk переносит сам.
+        printf '%s' "$1" | tr '_-' '/+' | LC_ALL=C awk '
+          BEGIN { a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+                  for (i = 0; i < 64; i++) v[substr(a, i + 1, 1)] = i }
+          { s = s $0 }
+          END { b = 0; n = 0
+                for (i = 1; i <= length(s); i++) {
+                  c = substr(s, i, 1)
+                  if (c == "=") break
+                  if (!(c in v)) continue
+                  b = b * 64 + v[c]; n += 6
+                  if (n >= 8) { n -= 8; o = int(b / 2 ^ n); b -= o * 2 ^ n; printf "%c", o }
+                } }'
     fi
 }
 
@@ -819,23 +839,22 @@ parse_node() {
               # пропадали молча, и сервер с паролем отвечал отказом.
               case "$_su" in
                 *:*|"") ;;
-                *) if have_base64; then
-                       _sd=$(b64d "$_su")
-                       case "$_sd" in *:*) _su=$_sd ;; esac
-                   else
-                       warnf "у socks логин и пароль, похоже, в base64, а декодера нет: %s" "$PKG_FIX coreutils-base64"
-                   fi ;;
+                *) _sd=$(b64d "$_su")
+                   case "$_sd" in *:*) _su=$_sd ;; esac ;;
               esac
               N_USER=${_su%%:*}; N_PASS=${_su#*:}
               [ "$N_USER" = "$_su" ] && { N_USER=""; N_PASS=""; }
               N_PROTO=socks ;;
     esac
 
-    # Раскодируем СКРОМНО. Кавычки и скобки сюда не входят намеренно:
-    # значения уходят в конфиг внутрь строк JSON и не экранируются, поэтому
-    # %22 в ссылке позволял закрыть строку и дописать в объект свои поля.
-    # Подробности -- у node_json_ok выше.
-    qp() {
+    # Раскодируем ЦЕЛИКОМ: кавычку, косую и управляющие знаки после разбора
+    # отсекает node_json_ok. Прежде раскодировалась лишь часть (%2F %3A …), и
+    # путь v2rayN `%2F%3Fed%3D2048` уходил как `/%3Fed=2048`: Xray ищет ed в
+    # строке запроса пути, не находил, и сервер отвечал 404.
+    qp() { pctd "$(printf '%s' "$_query" | tr '&' '\n' | sed -n "s/^$1=//p" | head -1)"; }
+    # Скромное раскодирование -- только для extra (ниже): там скобки и кавычки
+    # законны, и раскодированный объект проверяет json_obj_ok.
+    qp_part() {
         printf '%s' "$_query" | tr '&' '\n' | sed -n "s/^$1=//p" | head -1 |
           sed 's/%2F/\//g; s/%3A/:/g; s/%2C/,/g; s/%20/ /g;
                s/%3D/=/g; s/%26/\&/g'
@@ -846,7 +865,7 @@ parse_node() {
     # пройти json_obj_ok ниже. Прежде здесь стояло, что дописать в чужой
     # объект через extra нельзя; это было неверно, разбор см. у json_obj_ok.
     qp_json() {
-        qp "$1" | sed 's/%7B/{/g; s/%7D/}/g; s/%22/"/g; s/%5B/[/g; s/%5D/]/g'
+        qp_part "$1" | sed 's/%7B/{/g; s/%7D/}/g; s/%22/"/g; s/%5B/[/g; s/%5D/]/g'
     }
     _v=$(qp type);     [ -n "$_v" ] && N_TYPE=$_v
     # trojan без TLS не бывает: протокол и задуман поверх него, и клиенты
@@ -1255,7 +1274,7 @@ build_stream() {
            # конфиг, который потом нечем объяснить.
            xray_ver_num >/dev/null
            if [ "$XRAYVER" -lt 10824 ]; then
-               dief "движку %s транспорт xhttp неизвестен — обновить Xray-core или взять ключ на ws" \
+               dief "движку %s транспорт xhttp неизвестен (нужен Xray-core 1.8.24 или новее) — обновить: byway engine tested, либо взять ключ на ws" \
                     "$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f1-2)"
            fi
            # extra -- вложенный объект JSON, в ссылке приходит закодированным
@@ -1313,6 +1332,11 @@ build_stream() {
                xray_ver_num >/dev/null
                if [ "$N_INSEC" = "1" ] || [ "$N_INSEC" = "true" ]; then
                  if [ "$XRAYVER" -lt 260327 ]; then
+                   # Политика нового ядра -- и на старом: отказ, если
+                   # человек не разрешил явно (свой самоподписанный сервер).
+                   # С отпечатком отказ дальше точнее: «нужно ядро 26.3.27+».
+                   [ "$(u allow_insecure)" = "1" ] || [ -n "$N_PIN$N_VCN" ] ||
+                     die "в ключе отключена проверка сертификата (allowInsecure): соединение может подменить любой на пути. Для своего сервера с самоподписанным сертификатом: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload"
                    warn "allowInsecure=1: проверка сертификата сервера отключена, соединение можно подменить"
                    _a="$_a, \"allowInsecure\": true"
                  elif [ -z "$N_PIN" ] && [ -z "$N_VCN" ]; then
@@ -1340,7 +1364,19 @@ build_stream() {
                if [ -n "$N_SPX" ]; then _r=", \"spiderX\": \"$N_SPX\""; fi
                if [ -n "$N_PQV" ]; then _r="$_r, \"mldsa65Verify\": \"$N_PQV\""; fi
                SECURITY="\"security\": \"reality\", \"realitySettings\": { \"serverName\": \"$N_SNI\", \"fingerprint\": \"$N_FP\", \"publicKey\": \"$N_PBK\", \"shortId\": \"$N_SID\"$_r }" ;;
-      none)    SECURITY="\"security\": \"none\"" ;;
+      none)    # vless и trojan без шифрования к публичному адресу ядро с
+               # 26.7.11 отвергает само; на старом -- то же решение здесь:
+               # uuid или пароль и весь туннель видны любому на пути.
+               case "$N_PROTO" in vless|trojan)
+                 xray_ver_num >/dev/null
+                 if [ "$XRAYVER" -lt 260711 ] && [ "$(u allow_insecure)" != "1" ]; then
+                   case "$N_HOST" in
+                     10.*|192.168.*|127.*|169.254.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) ;;
+                     *) die "ключ vless или trojan без TLS к публичному адресу: ключ и трафик видны любому на пути. Нужен ключ с security=tls или reality; разрешить всё же: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload" ;;
+                   esac
+                 fi ;;
+               esac
+               SECURITY="\"security\": \"none\"" ;;
       *)       dief "security=%s не поддержан" "$N_SEC" ;;
     esac
     FLOWJ=""
@@ -1494,20 +1530,24 @@ build_proxies() {
         return 0
     fi
 
-    _keys=$(uci -q get byway.main.node_urls || true)
+    _keys=$(u node_urls)
     [ -n "$_keys" ] || die "выбран автовыбор, но ни одного ключа не добавлено"
 
     PROXIES=""
     _n=0
+    xray_ver_num >/dev/null     # версия -- один раз, подоболочки её наследуют
     for _k in $_keys; do
         # Подоболочка обязательна: parse_node на плохом ключе зовёт die, а die
         # делает exit -- то есть || не срабатывает и весь gen умирает от ОДНОГО
         # негодного ключа среди десяти. Сперва проверка в подоболочке, потом
         # настоящий разбор, чтобы переменные попали в текущую оболочку.
-        ( parse_node "$_k" >/dev/null 2>&1 ) || {
-            warn "ключ пропущен: не разобрался"
+        # И build_stream там же: отказ по версии ядра (hysteria2 на старом,
+        # allowInsecure без отпечатка) зовёт die уже при сборке, и один такой
+        # ключ из подписки валил весь автовыбор.
+        if ! _kerr=$( ( parse_node "$_k" && build_stream ) 2>&1 >/dev/null ); then
+            warnf "ключ пропущен: %s" "$(printf '%s' "$_kerr" | tail -1 | tr -d '\033' | sed 's/\[[0-9;]*m//g; s/^ *\[x\] *//')"
             continue
-        }
+        fi
         parse_node "$_k"
         build_stream
         _b=$(proxy_block "proxy-$_n")
@@ -1996,7 +2036,7 @@ cmd_presets() {
     if [ "${_pind:-0}" -gt 0 ]; then
         warnf "  пинов в /etc/hosts перебивают записи списка: %s" "$_pind"
         warn "  dnsmasq ответит по пину, подставного адреса не будет — в туннель они НЕ пойдут"
-        warn "  и запрет «не пускать мимо VPN» их не закроет: пин старше address=/домен/0.0.0.0"
+        warn "  и запрет «не пускать мимо VPN» их не закроет: пин старше address=/домен/"
     fi
 
     if [ "$_any" = "1" ]; then
@@ -2327,7 +2367,7 @@ cmd_watch() {
                 # снимаем, а запрет ОСТАВЛЯЕМ (--keep-block ниже) -- то есть
                 # интернета как раз нет, и прежний безусловный текст говорил
                 # человеку ровно противоположное тому, что сделал.
-                if [ "$(u on_failure)" = "closed" ]; then
+                if [ "$(u on_failure)" != "open" ]; then
                     logt "движок не поднимается пять минут -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: доступа наружу нет"
                 else
                     logt "движок не поднимается пять минут -- перехват снят, дом остаётся с интернетом и без туннеля"
@@ -2367,9 +2407,21 @@ cmd_watch() {
     # `u guard` здесь не проверяется намеренно -- как и у block_on выше:
     # выключенный сторож не должен оставлять дом с запретом, снять который
     # некому.
+    # Движок вернулся при стоящем запрете -- поднимаем перехват, а запрет
+    # снимает удачный plumb on сам. Прежде запрет снимался отдельно, а
+    # plumb on звался лишь при guard не 0: с guard 0 (и при неудачном plumb on)
+    # дом оставался без туннеля И без запрета -- трафик списка шёл напрямую.
+    # guard здесь не спрашиваем: это не починка, а возврат из запрета.
     if [ -n "$_pid" ] && [ -f "$BLOCK_MARK" ]; then
-        block_off
-        logt "движок вернулся -- запрет «не пускать мимо VPN» снят"
+        if [ "$(u enabled)" != "1" ]; then
+            block_off
+        elif cmd_plumb on >/dev/null 2>&1; then
+            logt "движок вернулся -- перехват поднят, запрет «не пускать мимо VPN» снят"
+            _healed="(healed)"
+        else
+            logt "движок вернулся, но перехват не поднялся -- запрет «не пускать мимо VPN» остаётся"
+            _healed="(failed)"
+        fi
     fi
     if [ -n "$_pid" ] && [ "$(u enabled)" = "1" ] &&
        [ "$(u guard)" != "0" ] && [ ! -f "$PLUMB_DOWN" ]; then
@@ -2440,10 +2492,19 @@ cmd_watch() {
     # чтобы он о выпуске узнал и понимал, за что платит перезапуском.
     #
     # Отдельной задачи в cron не заводим: едем на том же пятиминутном
-    # пробуждении, но не чаще раза в сутки.
+    # пробуждении. Промежуток -- случайный, 12-36 часов: запрос к GitHub в
+    # одно и то же время каждые сутки выделялся бы из прочего трафика, а
+    # случайный похож на человека, зашедшего на GitHub. В UPMARK лежит
+    # промежуток до следующей проверки в минутах, mtime -- время прошлой.
     if [ "$(u update_check)" != "0" ]; then
-        if [ -z "$(find "$UPMARK" -mmin -1440 2>/dev/null)" ]; then
-            : > "$UPMARK"
+        _upm=$(cat "$UPMARK" 2>/dev/null || true)
+        case "$_upm" in ''|*[!0-9]*) _upm=1440 ;; esac
+        if [ -z "$(find "$UPMARK" -mmin -"$_upm" 2>/dev/null)" ]; then
+            # Случайность -- из uuid ядра: od и hexdump есть не в каждой
+            # сборке busybox, а /proc/sys/kernel/random/uuid -- в любой.
+            _ur=$(cut -c1-4 /proc/sys/kernel/random/uuid 2>/dev/null || echo 0)
+            case "$_ur" in ''|*[!0-9a-f]*) _ur=0 ;; esac
+            printf '%s\n' "$(( 720 + 0x$_ur % 1441 ))" > "$UPMARK"
             _uv=$(latest_version)
             _uc=${_uv%% *}; _un=${_uv#* }
             if [ -n "$_un" ] && [ "$_un" != "$_uc" ] && ver_gt "$_un" "$BYWAY_NUM"; then
@@ -2579,6 +2640,7 @@ cmd_watch() {
             # В ПОДОБОЛОЧКЕ: cmd_update при отказе загрузки зовёт die, а это
             # exit -- без скобок он уносил весь прогон сторожа.
             _aurc=0
+            _autun0=0; tunnel_ok && _autun0=1
             ( cmd_update ) >/dev/null 2>&1 || _aurc=1
             # ⚠️ Судим ДЕЛОМ и на ветке отказа тоже. Установщик идёт под set -e
             # и успевает подложить новый бинарник ДО того, как упадёт на
@@ -2606,7 +2668,7 @@ cmd_watch() {
                 _auok=0
                 for _aut in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
                     sleep 10
-                    if alive_ok; then _auok=1; break; fi
+                    if alive_ok && { [ "$_autun0" = 0 ] || tunnel_ok; }; then _auok=1; break; fi
                 done
                 if [ "$_auok" = 1 ]; then
                     _f 'обновлено до %s, %s\n' "$_au" "$(date '+%Y-%m-%d %H:%M')" > "$AULOG"
@@ -3136,6 +3198,8 @@ cmd_doctor() {
     _other=$(uci show firewall 2>/dev/null | grep -c "mark='$_mk" || true)
     if [ "${_other:-0}" -gt 1 ]; then
         _d_warn "$(_f 'правил firewall с меткой %s: %s' "$_mk" "$_other")" "лишнее оставит дыру после удаления byway — проверить: uci show firewall | grep mark"
+    elif [ "${_other:-0}" -eq 0 ]; then
+        _d_warn "$(_t 'правила firewall для помеченного трафика нет')" "гостевые и другие зоны с input REJECT остаются без туннеля; byway заводит правило заново при подъёме перехвата: /etc/init.d/byway restart"
     else
         _d_ok "$(_f 'правил firewall с меткой byway: %s' "${_other:-0}")"
     fi
@@ -3347,7 +3411,7 @@ EXPORT_KEYS="enabled conn_mode node_url sub_url outbound_json conn_label
              list_mode ru_direct preset interface fakeip_pool dns_upstream
              dns_upstream2 dns_bootstrap dns_listen tproxy_port local_proxy_port redirect_port
              router_via_vpn mark self_mark log_level ipv6 fakeip6_pool
-             show_usage mux_concurrency probe_interval guard block_quic
+             show_usage mux_concurrency probe_interval guard block_quic allow_insecure
              lists_update dns_route on_failure node_urls lang update_check
              auto_update auto_update_hour"
 
@@ -3702,9 +3766,12 @@ eng_bin_set() {   # 1 путь
 # обновления: обвязку после старта поднимает фоновый цикл службы, и ему нужно
 # до ~65 с сверх запуска движка.
 eng_wait() {
+    eng_idle && return 0
+    # Сервер проверяем, только если он отвечал ДО замены (_etun0): мёртвый
+    # сервер -- не вина нового ядра, и откатывать его за это нельзя.
     for _ew in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
         sleep 10
-        alive_ok && return 0
+        alive_ok && { [ "${_etun0:-0}" = 0 ] || tunnel_ok; } && return 0
     done
     return 1
 }
@@ -3807,6 +3874,8 @@ cmd_engine() {
     # Рядом -- если на флеше есть весь размер ядра и 5 МБ сверху. Сжатие
     # ubifs не угадать заранее, поэтому меряется по несжатому.
     _efree=$(eng_free_kb || echo 0)
+    _etun0=0
+    eng_idle || { tunnel_ok && _etun0=1; } || true
     if [ "$(( ${_efree:-0} * 1024 ))" -ge "$(( _esz + 5242880 ))" ]; then
         eng_side
     else
@@ -3822,6 +3891,12 @@ eng_side() {
     if ! "$_enew" version >/dev/null 2>&1; then
         rm -f "$_enew" 2>/dev/null || true
         die "новое ядро не запускается на этом железе — удалено, работает прежнее"
+    fi
+    if eng_idle; then
+        eng_bin_set "$_enew"
+        case "$_eold" in /usr/local/bin/xray-*) rm -f "$_eold" 2>/dev/null || true ;; esac
+        sayf "служба не работает (выключена или нет ключа) — ядро заменено без проверки туннеля: Xray %s" "$_env"
+        return 0
     fi
     if ! eng_gen "$_enew"; then
         tail -6 "$_ed/gen.log" | sed 's/^/    /'
@@ -3870,7 +3945,8 @@ eng_ram() {
         dief "архив прежней версии %s не получен — без копии для отката замена не начата" "$_eov"
 
     warn "остановка службы: туннель пропадёт примерно на минуту"
-    /etc/init.d/byway stop >/dev/null 2>&1 || true
+    # При «не пускать мимо VPN» запрет держится всю минуту (stop_service).
+    BYWAY_KEEP_BLOCK=1 /etc/init.d/byway stop >/dev/null 2>&1 || true
     # Сторож не должен «чинить» остановленную службу посреди замены. Метку
     # снимает plumb on при запуске.
     : > "$PLUMB_DOWN" 2>/dev/null || true
@@ -3887,7 +3963,8 @@ eng_ram() {
         eng_ram_back
     fi
     rm -f "$_ed/new.zip" 2>/dev/null || true
-    if ! eng_gen "$_etmp"; then
+    # Без ключа конфига нет -- сверять нечего (eng_idle, как у eng_side).
+    if ! eng_idle && ! eng_gen "$_etmp"; then
         tail -6 "$_ed/gen.log" | sed 's/^/    /'
         eng_gen "$_eold" || true
         warn "новый движок не принял конфиг"
@@ -3911,7 +3988,7 @@ eng_ram() {
         sayf "готово: Xray %s, на флеше свободно %s МБ" "$_env" "$(( $(eng_free_kb || echo 0) / 1024 ))"
         return 0
     fi
-    /etc/init.d/byway stop >/dev/null 2>&1 || true
+    BYWAY_KEEP_BLOCK=1 /etc/init.d/byway stop >/dev/null 2>&1 || true
     rm -f "$_enew" 2>/dev/null || true
     warn "туннель на новом движке не поднялся"
     eng_ram_restore
@@ -3961,15 +4038,17 @@ eng_ram_restore() {
 REPORT_KEYS="enabled conn_mode list_mode ru_direct preset interface
              fakeip_pool dns_upstream dns_upstream2 dns_bootstrap dns_listen tproxy_port local_proxy_port
              redirect_port router_via_vpn mark self_mark log_level ipv6 fakeip6_pool
-             show_usage mux_concurrency probe_interval guard block_quic
+             show_usage mux_concurrency probe_interval guard block_quic allow_insecure
              lang xray_bin conn_label"
 
 cmd_report() {
     _out=${1:-}
     if [ -n "$_out" ]; then
         path_ok "$_out" || dief "сюда писать нельзя: %s" "$_out"
-        ( report_body ) > "$_out" 2>&1
-        chmod 600 "$_out" 2>/dev/null || true
+        # Сразу под 600, а не chmod после: файл с ключом иначе какое-то время
+        # лежит 0644, а существующий файл и вовсе сохраняет прежние права.
+        ( umask 077; report_body > "$_out.new.$$" 2>&1 )
+        mv "$_out.new.$$" "$_out"
         sayf "отчёт записан: %s" "$_out"
         say "  секреты убраны, но перед отправкой файл стоит просмотреть"
     else
@@ -4068,7 +4147,7 @@ report_body() {
       sed -E 's/^([A-Z][a-z]{2} [A-Z][a-z]{2} +[0-9]+ [0-9:]+ [0-9]{4}) [^:]*: /\1 /
               s/[0-9]{1,3}(\.[0-9]{1,3}){3}/x.x.x.x/g
               s/\[[0-9a-fA-F]*:[0-9a-fA-F:]*\]|[0-9a-fA-F]*::[0-9a-fA-F:]+/x::x/g
-              s/([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/ИМЯ/g' || true
+              s/([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/'"$(_t ИМЯ)"'/g' || true
 }
 
 export_body() {
@@ -4202,11 +4281,15 @@ path_ok() {
 }
 
 cmd_export() {
-    _nokey=0; _dest=""
+    # Без ключа ПО УМОЛЧАНИЮ (с 0.3.0): выгрузку чаще пересылают, чем
+    # восстанавливают из неё, а ключ в ней -- доступ к VPN. --no-key принят
+    # по-прежнему, чтобы старые команды и записи не ломались.
+    _nokey=1; _dest=""
     for _a in "$@"; do
         case "$_a" in
-            --no-key) _nokey=1 ;;
-            -*)       die "byway export [файл] [--no-key]" ;;
+            --no-key)   _nokey=1 ;;
+            --with-key) _nokey=0 ;;
+            -*)       die "byway export [файл] [--with-key]" ;;
             *)        _dest="$_a" ;;
         esac
     done
@@ -4216,8 +4299,9 @@ cmd_export() {
         return 0
     fi
     path_ok "$_dest" || die "сюда писать нельзя: системные каталоги закрыты"
-    export_body > "$_dest"
-    chmod 600 "$_dest" 2>/dev/null || true
+    # Под umask 077 во временный и mv -- см. cmd_report.
+    ( umask 077; export_body > "$_dest.new.$$" )
+    mv "$_dest.new.$$" "$_dest"
     sayf "выгружено: %s (%s байт)" "$_dest" "$(wc -c < "$_dest")"
     if [ "$_nokey" = 1 ]; then
         say "ключ не записан — файл можно показывать кому угодно"
@@ -4246,8 +4330,7 @@ cmd_import() {
     _bak=$LISTS/before-import
     mkdir -p "$_bak"
     chmod 700 "$_bak" 2>/dev/null || true
-    cp "$CONF" "$_bak/config" 2>/dev/null || true
-    chmod 600 "$_bak/config" 2>/dev/null || true
+    ( umask 077; rm -f "$_bak/config"; cp "$CONF" "$_bak/config" ) 2>/dev/null || true
     cp "$LISTS/domains.lst" "$_bak/domains.lst" 2>/dev/null || true
     cp "$LISTS/subnets.lst" "$_bak/subnets.lst" 2>/dev/null || true
 
@@ -4433,6 +4516,21 @@ cmd_import() {
 cmd_probe() {
     [ -x "$XRAY" ] ||
         dief "движка нет (%s) — ключ проверить нечем; сам ключ тут ни при чём" "$XRAY"
+    # --all -- каждый ключ автовыбора своим процессом: «который из ключей
+    # мёртв» иначе выяснялся перебором руками.
+    if [ "${1:-}" = "--all" ]; then
+        _keys=$(uci -q get byway.main.node_urls || true)
+        [ -n "$_keys" ] || die "ключей автовыбора нет (byway.main.node_urls) — проверять нечего"
+        _i=0; _okn=0
+        for _k in $_keys; do
+            _i=$((_i + 1))
+            case "$_k" in *#*) _kl=$(pctd "${_k##*#}") ;; *) _kl="" ;; esac
+            printf '\n'; sayf "ключ %s %s" "$_i" "$_kl"
+            if "$0" probe "$_k"; then _okn=$((_okn + 1)); fi
+        done
+        printf '\n'; sayf "работают %s из %s" "$_okn" "$_i"
+        return 0
+    fi
     # Без аргумента в режиме «свой конфиг» проверяется он, как и у check:
     # прежде probe брал node_url, то есть проверял не то, что работает.
     if [ -z "${1:-}" ] && [ "$(u conn_mode)" = "outbound" ]; then
@@ -4546,7 +4644,7 @@ cmd_gen() {
         fi
         # Подоболочка: один негодный ключ не должен уносить с собой сборку
         # целиком -- у остальных направлений и главного ключа своя жизнь.
-        if ! ( parse_node "$_rurl" >/dev/null 2>&1 ); then
+        if ! ( parse_node "$_rurl" && build_stream ) >/dev/null 2>&1; then
             warnf "направление «%s»: ключ не разбирается, пропущено" "$_rn"
             continue
         fi
@@ -4834,7 +4932,10 @@ $_rs
       # данные для «чем пользуются». При выключенном сборе он не нужен и
       # только ест память -- а при включённом без него статистика оставалась
       # мёртвой: галочка в панели есть, экран пустой.
-      *)          if [ "$(u show_usage)" = "1" ]; then
+      # В режиме «всё через VPN» сбора нет: журнал писал бы адрес каждого
+      # соединения дома. Панель галочку там прячет, а включённая раньше
+      # продолжала работать.
+      *)          if [ "$(u show_usage)" = "1" ] && [ "$(u list_mode)" != "all" ]; then
                       ACCESSLOG=', "access": "'"$ACCESS"'"'
                   else
                       ACCESSLOG=', "access": "none"'
@@ -5183,6 +5284,18 @@ END
         # каждое «Сохранить и применить», procd зовёт его же по своему
         # триггеру, и оба вместе давали две записи во флеш на одно нажатие
         # даже тогда, когда собранный конфиг был байт в байт прежним.
+        # Отброшенное называем вслух и показываем первые строки: молчаливая
+        # потеря записей выглядит как «byway не работает с этим доменом».
+        # До сравнения с рабочим: кривая строка при неизменном конфиге -- ровно
+        # тот случай, когда сказать о ней нужнее всего.
+        # Считаем УНИКАЛЬНЫЕ: список читается дважды -- для DNS и для правила
+        # маршрутизации, -- и одна плохая строка иначе показывалась бы дважды.
+        _bad=$(sort -u "$BADLIST" 2>/dev/null | grep -c . || true)
+        if [ "${_bad:-0}" -gt 0 ]; then
+            warnf "записей отброшено как неподходящие: %s" "$_bad"
+            sort -u "$BADLIST" 2>/dev/null | head -3 | sed 's/^/    /'
+            warn "  причина: не похоже ни на домен (буквы, цифры, дефис и точки; последняя часть — не короче двух букв), ни на подсеть IPv4, либо длиннее 253 знаков"
+        fi
         if cmp -s "$TMP" "$OUT"; then
             rm -f "$TMP" 2>/dev/null || true
             rm -rf "$_lock" 2>/dev/null || true
@@ -5200,16 +5313,6 @@ END
         # процесс на роутере, а не только root -- при том, что пользы от
         # такого доступа нет никому.
         chmod 600 "$OUT" 2>/dev/null || true
-        # Отброшенное называем вслух и показываем первые строки: молчаливая
-        # потеря записей выглядит как «byway не работает с этим доменом».
-        # Считаем УНИКАЛЬНЫЕ: список читается дважды -- для DNS и для правила
-        # маршрутизации, -- и одна плохая строка иначе показывалась бы дважды.
-        _bad=$(sort -u "$BADLIST" 2>/dev/null | grep -c . || true)
-        if [ "${_bad:-0}" -gt 0 ]; then
-            warnf "записей отброшено как неподходящие: %s" "$_bad"
-            sort -u "$BADLIST" 2>/dev/null | head -3 | sed 's/^/    /'
-            warn "  причина: не похоже ни на домен (буквы, цифры, дефис и точки; последняя часть — не короче двух букв), ни на подсеть IPv4, либо длиннее 253 знаков"
-        fi
         sayf "конфиг собран и проверен движком: %s (%s байт)" "$OUT" "$(wc -c < "$OUT")"
         _own=$(count_list "$D")
         _all=$(count_list "$MERGED")
@@ -6006,6 +6109,14 @@ dns_up() {
         esac
     done
     uci add_list "$DNSSEC.server=$_l"
+    # Firefox в РФ с 2022 включает DoH сам и уходит мимо byway целиком.
+    # Выключается он канарейкой: NXDOMAIN на use-application-dns.net.
+    # `server=/имя/` без адреса -- «только локально», то есть NXDOMAIN.
+    _dnew=0
+    case " $(uci -q get "$DNSSEC.server" 2>/dev/null) " in
+      *" $CANARY "*) ;;
+      *) uci add_list "$DNSSEC.server=$CANARY"; _dnew=1 ;;
+    esac
     uci set "$DNSSEC.noresolv=1"
     # НЕ коммитим намеренно. Правка остаётся дельтой в /tmp/.uci: её видит
     # /etc/init.d/dnsmasq при сборке своего конфига, но перезагрузка её
@@ -6027,7 +6138,10 @@ dns_up() {
     # ни за что, а кэш сбрасывается сигналом и без них. Так уходит второе из
     # двух окон при перезапуске службы и единственное окно при «Сохранить и
     # применить», когда сменился только список интерфейсов или метка.
-    if dns_live_ok "$_l"; then
+    # Новую строку server dnsmasq читает только при перезапуске: HUP
+    # сбрасывает кэш, но конфиг не перечитывает (канарейка на боевом
+    # 2026-10-02 так и не встала после рестарта byway).
+    if dns_live_ok "$_l" && [ "$_dnew" = 0 ]; then
         dns_flush
     else
         /etc/init.d/dnsmasq restart >/dev/null 2>&1
@@ -6073,7 +6187,7 @@ dns_down() {
         # Только их: всё остальное в списке -- это апстримы, и решает про них
         # снимок.
         for s in $_dcur; do
-            case "$s" in /*) ;; *) continue ;; esac
+            case "$s" in "$CANARY") continue ;; /*) ;; *) continue ;; esac
             case "$_dseen" in *" $s "*) continue ;; esac
             _dseen="$_dseen$s "
             uci add_list "$DNSSEC.server=$s"
@@ -6149,6 +6263,28 @@ AUFAIL=/etc/byway/.au-failed  # выпуск, который уже не под�
 # byway и так проверяет по отдельности: движок жив, обвязка на месте, резолвер
 # отдаёт подставной адрес. Нужна для автоотката: без канала извещений судить
 # об удаче обновления должен сам роутер.
+# Связь ЧЕРЕЗ СЕРВЕР: запрос через прокси-вход к PROBE_DOMAIN (он всегда в
+# туннеле). alive_ok видит процесс, таблицу и подставной адрес, но не сервер:
+# ядро, которое встало, но с сервером не договаривается, проходило проверку.
+tunnel_ok() {
+    _tl=$(u local_proxy_port); _tl=${_tl:-1603}
+    _tc=$(curl -s -o /dev/null --max-time 8 -w '%{http_code}' \
+          --proxy "http://127.0.0.1:$_tl" "https://$PROBE_DOMAIN/" 2>/dev/null || true)
+    [ "${_tc:-000}" != "000" ]
+}
+
+# Служба не работает (выключена или ключа нет) -- проверять на новом ядре
+# нечего: прежде byway engine без ключа откатывался, потому что туннель «не
+# поднялся», и заменить ядро на ненастроенном роутере было нельзя.
+eng_idle() {
+    [ "$(u enabled)" != "1" ] && return 0
+    case "$(u conn_mode)" in
+      urltest|selector) [ -z "$(u node_urls)" ] ;;
+      outbound)         [ -z "$(u outbound_json)" ] ;;
+      *)                [ -z "$(u node_url)" ] ;;
+    esac
+}
+
 alive_ok() {
     [ -n "$(xray_pid)" ] || return 1
     nft list table inet "$TABLE" >/dev/null 2>&1 || return 1
@@ -6178,10 +6314,18 @@ dnsmasq_confdir() {
 }
 
 block_on() {
-    [ "$(u on_failure)" = "closed" ] || return 0
-    [ -f "$BLOCK_MARK" ] && return 0
+    [ "$(u on_failure)" != "open" ] || return 0
     _ifs=$(u interface); _ifs=${_ifs:-br-lan}
     _ifl=$(echo "$_ifs" | awk '{for(i=1;i<=NF;i++) printf "%s\"%s\"", (i>1?", ":""), $i}')
+    # Стоящий запрет пересобирается, если сменилось то, из чего он строится:
+    # прежде он держался до block_off, и смена списков или режима при
+    # закрытом доме ничего не меняла. Подпись -- режим, сети, IPv6, списки.
+    # Пересборка -- на месте, без снятия: окна, когда запрета нет, не бывает.
+    _bsig=$( { u list_mode; echo "$_ifs"; v6on && echo v6; cat "$(merged_domains)" "$(merged_subnets)" 2>/dev/null; } | md5sum | cut -c1-32)
+    if [ -f "$BLOCK_MARK" ] && [ "$(cat "$BLOCK_MARK.sig" 2>/dev/null)" = "$_bsig" ]; then
+        return 0
+    fi
+    printf '%s\n' "$_bsig" > "$BLOCK_MARK.sig"
 
     # Режим «всё через VPN» закрывается ОТДЕЛЬНЫМ правилом, а не выжимкой из
     # списков, и это не украшение.
@@ -6210,7 +6354,16 @@ block_on() {
     # `nft -c` на выдуманном имени таблицы: три прогона аудита читали эти
     # строки и ничего не заметили, потому что читать их мало.
     if [ "$(u list_mode)" = "all" ]; then
+        # Остаток режима списков (имена) здесь не нужен.
+        _cdir=$(dnsmasq_confdir)
+        if [ -n "$_cdir" ] && [ -f "$_cdir/byway-block.conf" ]; then
+            rm -f "$_cdir/byway-block.conf"
+            /etc/init.d/dnsmasq restart >/dev/null 2>&1
+        fi
+        # Прелюдия table/delete -- замена одной транзакцией (см. nft_ruleset).
         _nfterr=$(nft -f - 2>&1 <<NFTA || true
+table inet ${TABLE}_block
+delete table inet ${TABLE}_block
 table inet ${TABLE}_block {
 	set privnets {
 		type ipv4_addr
@@ -6268,8 +6421,12 @@ NFTA
         _bl_src=$(merged_domains)
         _bl_all=$(grep -cvE '^[[:space:]]*(//|#|$)' "$_bl_src" 2>/dev/null || true)
         _bl_all=${_bl_all:-0}
+        # `address=/имя/` БЕЗ адреса -- NXDOMAIN на запрос ЛЮБОГО типа. С
+        # 0.0.0.0 закрывалась только запись A: AAAA и HTTPS dnsmasq 2.86+
+        # отправлял наверх, то есть провайдеру, и клиент с IPv6 уходил по
+        # настоящему адресу (находка 2026-10-02).
         plain_domains "$_bl_src" |
-          awk '{ printf "address=/%s/0.0.0.0\n", $0 }' > "$_bf.new"
+          awk '{ printf "address=/%s/\n", $0 }' > "$_bf.new"
         # Синтаксис проверяем ДО подмены: битый файл не даст dnsmasq
         # подняться, и дом останется без резолва вообще -- ровно то, чего
         # fail-open и избегает.
@@ -6278,7 +6435,9 @@ NFTA
             warnf "«не пускать мимо VPN»: %s записей списка нельзя закрыть по имени (keyword:, regexp: и подобные) — они останутся ОТКРЫТЫМИ" \
                   "$((_bl_all - _bl_dom))"
         fi
-        if dnsmasq --test -C "$_bf.new" >/dev/null 2>&1; then
+        if cmp -s "$_bf.new" "$_bf"; then
+            rm -f "$_bf.new"
+        elif dnsmasq --test -C "$_bf.new" >/dev/null 2>&1; then
             mv "$_bf.new" "$_bf"
             /etc/init.d/dnsmasq restart >/dev/null 2>&1
         else
@@ -6325,6 +6484,8 @@ NFTA
         # `forward`, а не `fwd` -- см. разбор выше: с `fwd` ядро отвергало
         # таблицу целиком, а ошибка уходила в /dev/null.
         _nfterr=$(nft -f - 2>&1 <<NFTB || true
+table inet ${TABLE}_block
+delete table inet ${TABLE}_block
 table inet ${TABLE}_block {$_b4set$_b6set
 	chain forward {
 		type filter hook forward priority filter - 5; policy accept;
@@ -6336,6 +6497,8 @@ NFTB
         [ -n "$_nfterr" ] && warnf "«не пускать мимо VPN»: подсети закрыть не вышло — %s" \
             "$(printf '%s' "$_nfterr" | head -2 | tr '\n' ' ')"
         nft list table inet "${TABLE}_block" >/dev/null 2>&1 && _bl_net=1
+    else
+        nft delete table inet "${TABLE}_block" 2>/dev/null || true
     fi
     # Говорим то, что есть на самом деле. Прежде строка про закрытый доступ
     # печаталась безусловно -- в том числе когда закрывать было нечего.
@@ -6356,7 +6519,7 @@ block_off() {
         /etc/init.d/dnsmasq restart >/dev/null 2>&1
     fi
     nft delete table inet "${TABLE}_block" 2>/dev/null || true
-    rm -f "$BLOCK_MARK" 2>/dev/null || true
+    rm -f "$BLOCK_MARK" "$BLOCK_MARK.sig" 2>/dev/null || true
 }
 
 cmd_nft() { nft_ruleset; }
@@ -6424,6 +6587,21 @@ cmd_plumb() {
         # положенное.
         _fwm=$(nft_val mark "$(u mark)" '^0x[0-9a-fA-F]{1,8}$' 0x100000)
         _fwr=$(uci -q get firewall.bywaytproxy.mark 2>/dev/null || true)
+        # Правила нет вовсе (удалили руками, сброс firewall) -- заводим, как
+        # установщик: без него зоны с input REJECT (гостевая) молча теряют
+        # туннель, а doctor докладывал «правил: 0» как норму.
+        if [ -z "$(uci -q get firewall.bywaytproxy 2>/dev/null)" ]; then
+            uci -q set firewall.bywaytproxy=rule
+            uci -q set firewall.bywaytproxy.name='byway-tproxy'
+            uci -q set firewall.bywaytproxy.src='*'
+            uci -q set firewall.bywaytproxy.proto='all'
+            uci -q set firewall.bywaytproxy.mark="$_fwm/$_fwm"
+            uci -q set firewall.bywaytproxy.target='ACCEPT'
+            uci commit firewall
+            /etc/init.d/firewall reload >/dev/null 2>&1 || true
+            say "правила firewall для помеченного трафика не было — заведено заново"
+            _fwr="$_fwm/$_fwm"
+        fi
         if [ -n "$_fwr" ] && [ "$_fwr" != "$_fwm/$_fwm" ]; then
             sayf "метка сменилась (%s -> %s) — правило firewall переписывается" \
                  "$_fwr" "$_fwm/$_fwm"
@@ -7258,8 +7436,12 @@ cmd_sub() {
     _u=$1
     [ -n "$_u" ] || die "byway sub <адрес подписки>"
     case "$_u" in
-      http://*|https://*) ;;
-      *) die "это не адрес подписки: ожидается http:// или https://" ;;
+      https://*) ;;
+      # Открытый HTTP провайдер читает и правит на лету (страницы блокировок
+      # подставляются так же): дописанный ключ в автовыборе выиграл бы по
+      # задержке, и весь туннель пошёл бы через чужой сервер.
+      http://*) die "подписка по http:// не принимается: ключи в ней может подменить кто угодно на пути — нужен https://" ;;
+      *) die "это не адрес подписки: ожидается https://" ;;
     esac
 
     # ⚠️ Куда именно идём. Подкоманда достижима держателем роли панели:
@@ -7735,7 +7917,7 @@ case "${1:-}" in
     _help 'gen' 'пересобрать конфиг из настроек и списков'
     _help 'plumb on | off' 'включить или снять перехват трафика (nft, маршрут, DNS)'
     _help 'check [ссылка]' 'разобрать ключ и проверить конфиг, без соединений'
-    _help 'probe [ссылка]' 'проверить ключ отдельно, не трогая работающий туннель'
+    _help 'probe [ссылка|--all]' 'проверить ключ отдельно, не трогая работающий туннель'
     _help 'sub АДРЕС' 'скачать подписку'
     _help 'presets' 'обновить готовые списки'
     _help 'top [N]' 'чем реально пользуются'
@@ -7743,7 +7925,7 @@ case "${1:-}" in
     _help 'engine [ВЕРСИЯ|tested|newest|stable]' 'есть ли обновление ядра Xray-core, и его замена; без аргумента — ещё и подробности'
     _help 'lang [ru|en]' 'язык вывода и панели; английский словарь докачивается при переключении'
     _help 'report [файл]' 'собрать отчёт для обращения, без ключа от VPN'
-    _help 'export [файл]' 'выгрузить настройки; --no-key — без ключа от VPN'
+    _help 'export [файл] [--with-key]' 'выгрузить настройки без ключа от VPN; --with-key — с ключом'
     _help 'import ФАЙЛ' 'принять настройки из выгрузки'
     _help 'clear log|stat|all' 'очистить журнал состояния, статистику или то и другое'
     _help 'version' 'версия'

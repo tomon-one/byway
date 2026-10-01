@@ -19,6 +19,10 @@
 # Идемпотентен. Существующие конфигурацию и списки НЕ трогает — повторный
 # запуск обновляет только программу и панель.
 
+# Весь скрипт -- одной группой в фигурных скобках: оболочка разбирает её
+# целиком до исполнения. Оборванная загрузка `sh -c "$(wget …)"` без
+# закрывающей скобки даёт синтаксическую ошибку, а не исполненную половину.
+{
 set -e
 
 # Язык установщика. Словари byway лежат в /etc/byway/lang и появляются только
@@ -125,10 +129,7 @@ t() {
       "установка xray-core из пакетов OpenWrt") printf %s "installing xray-core from OpenWrt packages" ;;
       "Xray-core не поставился из пакетов OpenWrt") printf %s "Xray-core did not install from OpenWrt packages" ;;
       "  и указать путь: uci set byway.main.xray_bin=/путь/к/xray") printf %s "  and point byway at it: uci set byway.main.xray_bin=/path/to/xray" ;;
-      "Поставить base64? Нужен только для ключей vmess:// и ss://") printf %s "Install base64? Needed only for vmess:// and ss:// keys" ;;
       "  весь вывод пакетного менеджера: cat %s") printf %s "  full package manager output: cat %s" ;;
-      "base64 не поставился: ключи vmess и ss не разобрать") printf %s "base64 did not install: vmess and ss keys cannot be parsed" ;;
-      "base64 не ставится -- ключи vless, trojan, socks, hysteria2 и wireguard работают без него") printf %s "base64 is skipped -- vless, trojan, socks, hysteria2 and wireguard keys work without it" ;;
       "на флеше свободно %s МБ, а движку нужно около 30 -- он не поместится") printf %s "%s MB free on flash, the core needs about 30 -- it will not fit" ;;
       "  это не поправить настройкой: нужен роутер с большим флешем либо extroot на USB") printf %s "  no setting fixes this: you need a router with more flash, or extroot on USB" ;;
       "на флеше меньше 2 МБ свободно") printf %s "less than 2 MB free on flash" ;;
@@ -933,35 +934,10 @@ elif ! command -v xray >/dev/null 2>&1 && [ ! -x /usr/bin/xray ] &&
     fi
 fi
 
-# base64 нужен ТОЛЬКО для ключей vmess и ss: у vless, trojan и socks всё
-# лежит в ссылке открытым текстом. Поэтому спрашиваем, а не ставим молча --
-# на роутере с сорока мегабайтами флеша лишний пакет это не мелочь.
-# ⚠️ Судим ЗАПУСКОМ, а не наличием. `command -v base64` на этом роутере
-# отвечает `/bin/base64` -- но это ссылка на busybox, у которого апплета
-# base64 нет вовсе: `echo -n x | base64` даёт «applet not found». Проверка по
-# наличию файла молча пропускала вопрос про coreutils-base64, и человек с
-# ключом vmess:// или ss:// упирался в отказ уже в работе, без единой
-# подсказки при установке. Поймано приёмкой владельца 2026-09-07.
-have_base64() { printf x | base64 >/dev/null 2>&1; }
-
-if ! have_base64; then
-    # Умолчание -- НЕТ: base64 нужен только ключам vmess:// и ss://, а
-    # подавляющее большинство ключей сегодня vless://. Ставить пакет на флеш
-    # «на всякий случай» -- не то, что делают по умолчанию на роутере с
-    # сорока мегабайтами. Просьба владельца на приёмке 2026-09-07.
-    if ask "Поставить base64? Нужен только для ключей vmess:// и ss://" n; then
-        add_pkg coreutils-base64 || true   # см. про set -e у вызова для модулей
-        have_base64 ||
-            { warn "base64 не поставился: ключи vmess и ss не разобрать"; pkg_why; }
-    else
-        say "base64 не ставится -- ключи vless, trojan, socks, hysteria2 и wireguard работают без него"
-    fi
-fi
-
 if [ "$BAD" -gt 0 ]; then
     echo
     # Почти всё выше не ставится по одной причине -- нет интернета. Отдельными
-    # строками про curl, модули и base64 это выглядит как три беды, и человек
+    # строками про curl и модули это выглядит как отдельные беды, и человек
     # чинит их поочерёдно. Проверено на стенде: гость с опущенным wan получал
     # ровно такой отказ. Диагноз ставится ТОЛЬКО на пути отказа, лишней
     # задержки в обычной установке от него нет.
@@ -1372,3 +1348,4 @@ _C "/etc/init.d/byway reload"
 printf '     %s\n' "готовые списки качаются через туннель, а reload переносит их в конфиг"
 printf '\n  %s   %s\n' "Проверить окружение: byway doctor" "Состояние: byway"
 fi
+}

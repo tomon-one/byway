@@ -27,11 +27,14 @@ lets you switch between them with one option.
 The path comes from the settings, and the web UI edits those too, so byway
 does not run just anything from it. The file must be in `/usr/bin`,
 `/usr/sbin`, `/usr/local/bin`, `/bin` or `/sbin`, the path must not contain
-`..`, the file must be a regular executable, and the first line of its
-`version` output must start with the word `Xray`. Otherwise byway prints
-`the core path was rejected: …` and falls back to the default engine. An
-engine on a USB stick such as `/mnt/sda1/xray` is therefore not accepted; for
-USB, see "Flash".
+`..`, the file name must start with `xray`, the file must be a regular
+executable with an ELF header, and the first line of its `version` output
+must start with the word `Xray`. The name and the header are checked before
+anything is run: otherwise `xray_bin=/sbin/reboot` would reboot the router on
+every byway call. If a check fails, byway prints
+`the core path was rejected: …` and falls back to the default engine. A path
+such as `/mnt/sda1/xray` is therefore not accepted, but a symlink
+`/usr/local/bin/xray-…` to that file is; for USB, see "Flash".
 
 If `xray_bin` is empty, the `byway` command looks for `xray` in `PATH`, then
 `/usr/bin/xray`; the service goes straight to `/usr/bin/xray`.
@@ -122,9 +125,9 @@ The release archive (about 14 MB) is downloaded to `/tmp`, that is, into
 memory, and checked against the SHA2-256 sum from the `.dgst` file of the same
 release. If it did not download, there is no `.dgst`, the sum does not match,
 or the archive has no `xray` file, the archive is discarded and nothing is
-touched. The check guards against a broken download and tampering on the way,
-but it is not a signature: `.dgst` sits next to the archive on the same
-GitHub.
+touched. The check guards against a broken download, not against tampering:
+through the mirror `.dgst` comes from the same mirror, and directly HTTPS to
+GitHub already stops a middleman. XTLS publishes no signatures.
 
 The version number and the archive are fetched through byway's local proxy
 inbound first (`local_proxy_port`, 1603 by default), then directly. If GitHub
@@ -167,7 +170,8 @@ one is there:
 2. While the tunnel is still up, the archive of the previous version is
    downloaded — the way back. After the service stops, GitHub may become
    unreachable. If it does not download, the replacement does not start.
-3. The service stops: the tunnel drops for about a minute.
+3. The service stops: the tunnel drops for about a minute. With "Block" the
+   block goes up for that time and holds until interception comes up.
 4. Memory is checked: the engine size plus 20 MB (about 55 MB). Too little —
    the service starts with the previous engine.
 5. The new engine is unpacked to `/tmp` and checked there: does it run, does
@@ -187,21 +191,28 @@ the command to install it by hand. The archive lives until reboot.
 The check is the same as for byway's own update rollback: the Xray process is
 running, the interception nft table is in place, and the router's resolver
 returns a substitute address from the fakeip pool for the first domain on the
-lists. With empty domain lists the third sign is not checked. **This check
-does not test a connection through the server.** An engine that started and
-accepted the config but cannot talk to the server will not be caught by the
-rollback. After a swap, open a site from your list or run `byway health`.
+lists. With empty domain lists the third sign is not checked. The fourth is
+the connection through the server: a request through the proxy inbound
+(`local_proxy_port`, 1603) to `example.com`, any HTTP answer will do. byway
+checks it only if it passed before the swap: an unreachable server is not the
+new engine's fault, and the engine must not be rolled back for it.
 
 ### Without a key
 
-Without a key (or your own config) the config does not build for any engine.
-The replacement still starts, but stops at the config build with
-`the new engine rejected the config`; the reason is one line above:
-`no key is set`. In a swap through memory the service has already been
-stopped by then and is started again. Set the key before replacing the engine.
+The service is off (`enabled 0`) or there is no key (no `node_url`, no
+`node_urls`, no custom config) — there is nothing to check on the new engine.
+In a side-by-side swap byway makes sure the new engine runs on this hardware,
+switches `xray_bin`, deletes the previous `/usr/local/bin/xray-*` and prints
+`the service is not running (disabled or no key) — the core was replaced
+without a tunnel check`; the service is not restarted. A swap through memory
+still builds the config for the new engine, so without a key it stops with
+`the new engine rejected the config` (the reason is one line above: `no key
+is set`), and the service starts with the previous engine. With a key and the
+service off, the wait for the tunnel is skipped.
 
-`byway update`, the five-minute check (`byway watch`) and byway's auto-update do not touch the
-engine. The outcome of each swap goes to the system log (`logread -e byway`).
+`byway update`, the five-minute check (`byway watch`) and byway's
+auto-update do not touch the engine. The outcome of each swap goes to the
+system log (`logread -e byway`).
 
 ---
 
@@ -248,13 +259,23 @@ the config differently or refuses up front:
 | below 25.8.29 | VLESS encryption (`encryption=mlkem768x25519plus`): refused |
 | below 26.3.27 | `hysteria2`: refused |
 | below 26.3.27 | certificate check by fingerprint or name (`pcs=`, `pinSHA256=`, `vcn=`): refused |
-| below 26.3.27 | `allowInsecure=1` (or `insecure=1`): written to the config, with a warning that the connection can be spoofed |
+| below 26.3.27 | `allowInsecure=1` (or `insecure=1`) without a fingerprint: refused; with `allow_insecure 1` in the settings, written to the config with a warning that the connection can be spoofed |
 | 26.3.27 and newer | `allowInsecure=1` without a fingerprint: refused, the engine does not allow turning off certificate checks. With a fingerprint, only the fingerprint is written |
 | below 26.7.11 | `obfs=salamander` on hysteria2: refused |
+| below 26.7.11 | vless and trojan without TLS or reality to a public address: refused, as by the engine from 26.7.11; `allow_insecure 1` lifts it. Private IPv4 addresses pass |
 | 26.9.8 and newer | for the direct outbound, name resolution (`UseIP`) goes into `sockopt`, not `settings`: the engine declared the old field deprecated |
 
 A refusal is a message naming the required version and suggesting
-`byway engine tested`; the working config is not changed.
+`byway engine tested`; the working config is not changed. The refusals over
+`allowInsecure` and over a key without TLS name a command for your own server
+with a self-signed certificate instead:
+
+```sh
+uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload
+```
+
+The option is console only. It does not override an engine from 26.3.27 on
+(from 26.7.11 on for a key without TLS).
 
 If the version cannot be determined (the second word of `xray version` output
 has no digits), byway treats the engine as the newest and writes the config in
@@ -266,7 +287,8 @@ itself catches them in `xray run -test`, and byway explains the reason:
 
 - vless and trojan without TLS or reality to a public address are refused by
   the engine since 26.7.11; a private address is the exception. This is fixed
-  on the server: the key needs `security=tls` or `reality`.
+  on the server: the key needs `security=tls` or `reality`. On an engine below
+  26.7.11 byway refuses itself (see the table above).
 - `h2` (`http`) and `quic` are removed from the engine. byway warns and hands
   the config to the engine, which rejects it and names the replacement —
   `xhttp`.
@@ -301,8 +323,9 @@ previous config. It is worse when the engine was updated around
 `byway engine`, for example with `apk upgrade xray-core`. On the next service
 start (router reboot, `restart`) the new engine checks the previous config.
 If it accepts it, the service comes up on it. If not, the service does not
-start, the interception is taken down, and the router goes to the internet
-directly. With `on_failure=closed`, the domains on the list stay blocked.
+start and the interception is taken down. With `on_failure=closed` (the
+default) what went through the VPN stays closed; with `open` it
+goes to the internet directly.
 
 `byway gen` shows the reason in its last lines — the engine's answer. If it
 is the key (no TLS, `allowInsecure`, a removed transport), rolling back the
@@ -337,8 +360,12 @@ says so: no setting fixes this, it takes a router with more flash or extroot.
 
 With extroot (the root filesystem on a USB drive) `/usr/local/bin` ends up on
 the drive, there is room for two engines, and the swap goes side by side.
-Putting the engine on a separately mounted USB stick and pointing at it does
-not work: byway does not accept a path outside the system directories.
+Putting the engine on a separately mounted USB stick and pointing at it
+directly does not work: byway does not accept a path outside the system
+directories. A symlink named `xray*` in a system directory does work:
+`ln -s /mnt/sda1/xray /usr/local/bin/xray-usb` and
+`uci set byway.main.xray_bin=/usr/local/bin/xray-usb`. The stick has to be
+mounted by the time the service starts, or there is no engine.
 
 A firmware upgrade (sysupgrade) keeps byway's files but not the engine: 35 MB
 are not added to the keep list, because sysupgrade packs it in memory. After
@@ -370,18 +397,22 @@ The value comes from the `byway.main.xray_memlimit` option:
 |---|---|
 | not set | 40 % of `MemTotal`, but no less than 32 MiB |
 | `0`, `off` or `no` | no limit is set |
-| anything else | passed as is, in Go form: `96MiB`, `128MiB` |
+| Go form: `B`, `KiB`, `MiB`, `GiB`, `TiB` | passed as is: `96MiB`, `128MiB` |
+| `MB` or `M`, `GB` or `G` | converted to `MiB` and `GiB`: `128MB` → `128MiB` |
+| a bare number | megabytes: `96` → `96MiB` |
+| anything else | a line in the system log that the limit could not be parsed; the limit is as when unset |
 
 On a router with 256 MB (`MemTotal` about 234 MB) the automatic value is
-`93MiB`; Xray normally uses 30–50 MB. byway does not validate the value:
-whatever is written goes into `GOMEMLIMIT`.
+`93MiB`; Xray normally uses 30–50 MB. Without the conversion Go would refuse
+`128MB`, and the engine would crash on every start.
 
 ```sh
 uci set byway.main.xray_memlimit=128MiB && uci commit byway
-/etc/init.d/byway restart
+/etc/init.d/byway reload
 ```
 
-The limit is set when the process starts, hence the `restart`. `byway status`
+The limit is set when the process starts. `reload` compares it with the
+running engine's environment and restarts the engine if they differ. `byway status`
 reads it from the running process's environment, not from the settings: the
 `memory … MB, limit …` line shows what is actually in effect.
 

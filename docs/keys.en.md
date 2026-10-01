@@ -32,14 +32,14 @@ address in the key is not supported: … — an IPv4 address or a name is needed
 |---|---|---|
 | VLESS | `vless://` | — |
 | Trojan | `trojan://` | — |
-| VMess | `vmess://` | the `coreutils-base64` package |
-| Shadowsocks | `ss://` | `coreutils-base64` for the base64 form |
+| VMess | `vmess://` | — |
+| Shadowsocks | `ss://` | — |
 | SOCKS5 | `socks://` | — |
 | Hysteria2 | `hysteria2://`, `hy2://` | Xray-core 26.3.27 or newer |
 | WireGuard | `wireguard://`, `wg://` | — |
 
-BusyBox on OpenWrt usually has no base64. Without the package, vmess links and
-base64-form ss links are rejected, and byway prints the install command.
+BusyBox on OpenWrt usually has no base64; byway decodes base64 itself, no
+extra package is needed.
 
 ### VLESS and Trojan
 
@@ -88,8 +88,8 @@ ss://aes-256-gcm:PASSWORD@example.com:8388#Name
 The first form is base64 of `method:password`; base64url without `=` padding
 is accepted. The second is the same in plain text, fully percent-decoded. The
 old form, with the whole link wrapped in base64
-(`ss://BASE64(method:password@address:port)#Name`), is parsed as well and also
-needs `coreutils-base64`. The address is split off at the last `@`, so an `@`
+(`ss://BASE64(method:password@address:port)#Name`), is parsed as well. The
+address is split off at the last `@`, so an `@`
 in the password is fine. The transport is always tcp, the security `none`.
 
 Parameters after `?` other than `plugin` are not carried over, and there is no
@@ -107,8 +107,7 @@ socks://user:pass@example.com:1080#Name
 
 User name and password are plain text separated by a colon, and may be absent.
 Some clients encode `user:pass` as base64 (`socks://dXNlcjpwYXNz@…`). byway
-decodes this form; without the `coreutils-base64` package it warns that the
-user name and password cannot be read.
+decodes this form.
 
 ### Hysteria2
 
@@ -197,12 +196,11 @@ A parameter not in this table does not reach the config, and byway warns:
 `byway does not carry link parameter "…" into the config`. This is not a
 refusal, but it is worth checking whether the server needs it.
 
-In these parameters only `%2F %3A %2C %20 %3D %26` (`/ : , space = &`) are
-decoded. Anything else stays as is: `%3F` in `path` goes into the config
-literally. Full percent-decoding applies to trojan and hysteria2 passwords,
-the socks user name and password, the method and password of a plain-text ss
-link, wireguard keys, address and `reserved`, `obfs-password`, and the name
-after the hash.
+Parameter values are fully percent-decoded: `path=%2F%3Fed%3D2048` (the way
+v2rayN writes early data) goes into the config as `/?ed=2048`. A quote, a
+backslash or a control character after decoding means a refusal (see
+"Suspicious links"). The exception is `extra`: only `%2F %3A %2C %20 %3D %26`
+and the braces and quotes `%7B %7D %22 %5B %5D` are decoded in it.
 
 ## Transports
 
@@ -246,16 +244,30 @@ and a recent engine rejects it. Such a key has to be changed on the server.
 allowed), `vcn` → `verifyPeerCertByName` (a host name).
 
 Since 26.3.27 Xray-core does not allow turning off server certificate checks.
-So `allowInsecure=1` or `true` (the same for `insecure`) is handled as follows:
+On an engine below 26.3.27 byway enforces the same rule itself, but lets you
+lift it with the `allow_insecure` option (unset by default). `allowInsecure=1`
+or `true` (the same for `insecure`) is handled as follows:
 
 | engine | `pcs`/`pinSHA256` or `vcn` in the key | what byway does |
 |---|---|---|
-| below 26.3.27 | no | writes `allowInsecure` and warns that the connection can be spoofed |
+| below 26.3.27 | no, `allow_insecure` unset | refuses and says how to allow it |
+| below 26.3.27 | no, `allow_insecure 1` | writes `allowInsecure` and warns that the connection can be spoofed |
 | below 26.3.27 | yes | refuses: the engine understands the fingerprint and name only from 26.3.27 |
 | 26.3.27 or newer | yes | drops the flag; the certificate is checked by fingerprint or name |
 | 26.3.27 or newer | no | refuses: the key needs a fingerprint, or the server a real certificate |
 
 `pcs`, `pinSHA256` and `vcn` themselves need engine 26.3.27 or newer.
+
+`allow_insecure` is meant for your own server with a self-signed certificate.
+The option is not in the panel, only in the console; `byway export` includes
+it:
+
+```sh
+uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload
+```
+
+On engine 26.3.27 or newer the engine decides, and the option does not
+override it.
 
 ### reality
 
@@ -266,9 +278,16 @@ are written only if present in the link.
 ### none
 
 Since 26.7.11 Xray-core rejects vless and trojan without TLS or Reality when
-the server is on a public address. A private address is fine. The key is what
-the server issued, and it can only be fixed there. After the engine refuses,
-byway explains that a key with `security=tls` or `reality` is needed.
+the server is on a public address. On an engine below 26.7.11 byway refuses
+the same: "a vless or trojan key without TLS to a public address: the key and
+the traffic are visible to anyone on the path". Private addresses (`10/8`,
+`172.16/12`, `192.168/16`, `127/8`, `169.254/16`) pass; byway treats a server
+name as a public address. `allow_insecure 1` lifts byway's refusal (see
+"tls"), not the recent engine's.
+
+The key is what the server issued, and it can only be fixed there. After the
+engine refuses, byway explains that a key with `security=tls` or `reality` is
+needed.
 
 ### VLESS encryption
 
@@ -298,9 +317,9 @@ cannot be parsed, the engine is treated as recent.
 | VLESS encryption | 25.8.29 | refused |
 | Hysteria2 | 26.3.27 | refused |
 | `pcs`, `pinSHA256`, `vcn` | 26.3.27 | refused |
-| `allowInsecure`, `insecure` | 26.3.27 | written; from this version refused without `pcs`/`vcn` |
+| `allowInsecure`, `insecure` | 26.3.27 | refused without `allow_insecure 1`, written with it; from this version refused without `pcs`/`vcn` |
 | `obfs=salamander` | 26.7.11 | refused |
-| vless, trojan without TLS to a public address | 26.7.11 | works; from this version the engine refuses |
+| vless, trojan without TLS to a public address | 26.7.11 | byway refuses without `allow_insecure 1`; from this version the engine refuses |
 | kcp `header`, `seed` | recent versions | written as in the link, the engine decides |
 | h2/http, quic | removed | the engine refuses |
 
@@ -355,7 +374,7 @@ The method is the "Connection method" field on the Overview tab (`conn_mode`).
 | Several, automatic | `urltest` | every key in the "Keys" list (`node_urls`) |
 | Custom config | `outbound` | the JSON object in "Outbound config" (`outbound_json`) |
 
-**Subscription.** The address is a plain `https://` URL where the service
+**Subscription.** The address is an `https://` URL where the service
 publishes its list of keys, usually as base64. "Load the list of keys"
 downloads it, and the panel decodes it and shows the keys. Types byway cannot
 handle (`ssr`, `hysteria`, `tuic`, `warp`) are listed but cannot be picked;
@@ -363,9 +382,11 @@ lines with other schemes are not listed at all. All usable keys go into the
 "Keys" list, so switching to "Several, …" later needs no second download. The
 download goes through byway's local proxy inbound and, if that fails,
 directly; an address pointing at the router itself or into a private network
-is refused. byway does not refresh the subscription
-on its own: the list is taken when the button is pressed. In the console,
-`byway sub ADDRESS` prints the subscription response as is, without decoding.
+is refused. A subscription over `http://` is not accepted: "a subscription
+over http:// is not accepted: anyone on the path can replace the keys in it —
+https:// is needed". byway does not refresh the subscription on its own: the
+list is taken when the button is pressed. In the console, `byway sub ADDRESS`
+prints the subscription response as is, without decoding.
 
 **Several, manual.** Only the active key is in use; switching is done in the
 panel. The other keys in the list do not go into the config unless a route
@@ -376,12 +397,12 @@ uses them.
 `https://www.google.com/generate_204`, and a balancer with the `leastPing`
 strategy sends traffic through the key with the lowest latency. The interval
 is "Key check interval" on the Advanced tab (`probe_interval`), `3m` by
-default; the format is a number followed by `s`, `m` or `h`. A key that does
-not parse is skipped with a warning. If a key parses but byway refuses it while
-building the transport or security (allowInsecure without a fingerprint on a
-recent engine, hysteria2 or pcs on an old one, xhttp on a 1.x engine), the
-whole build stops and the previous config keeps running; remove such a key
-from the list. If no key parses, the build fails as well.
+default; the format is a number followed by `s`, `m` or `h`. A key that byway
+refuses while parsing it or while building the transport and security
+(allowInsecure without a fingerprint, hysteria2 or pcs on an old engine, xhttp
+on a 1.x engine) is skipped with the warning "key skipped: reason", and the
+rest go into the config. If no key is usable, the build fails and the previous
+config keeps running.
 
 **Custom config.** For what byway cannot parse from a link: HTTP(S) proxies,
 MASQUE, XDRIVE, non-standard settings. The field takes a whole Xray-core
@@ -420,9 +441,9 @@ same forms as the main lists (`full:`, `keyword:`, `regexp:`).
 Route rules come before the general ones: a domain that is in both goes
 through the route's key. The route's key follows the same parsing, transport
 and multiplexing rules as the main one. A route is skipped with a warning if
-its list is empty, if none of the added keys has that name, or if the key does
-not parse; the rest of the build carries on. A refusal while building a route's
-key (see "Several, automatic") stops the whole build, not just that route.
+its list is empty, if none of the added keys has that name, or if its key is
+refused while parsing or building (`route "…": the key does not parse,
+skipping`); the rest of the build carries on.
 
 A route is switched off without deleting it with the "Enabled" flag in the
 table or `uci set byway.NAME.enabled=0`. A disabled route is skipped without a
@@ -475,5 +496,9 @@ lines from the engine log. If the engine rejected the config, the output says
 so and gives the reason. The port and the test URL can be changed with the
 `PROBE_PORT` and `PROBE_URL` variables. Without an argument `byway probe`
 takes the object from "Outbound config" in "Custom config" mode, otherwise
-`node_url`. In "Several, automatic" mode `node_url` is not in use, so check the
-keys from the list one at a time as arguments.
+`node_url`.
+
+**`byway probe --all`** checks every key in the "Keys" list (`node_urls`) in
+turn: a `key N NAME` line before each, and `N of M work` at the end. This is
+how to find a dead key in "Several, automatic" mode, where `node_url` is not in
+use.

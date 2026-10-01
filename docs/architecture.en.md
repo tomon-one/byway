@@ -120,10 +120,10 @@ Two more consequences of that. `tproxy-in` listens on `0.0.0.0`, not loopback,
 because the packet arrives with destination `198.18.x.x`. And the firewall
 needs the `firewall.bywaytproxy` rule (src `*`, proto `all`, `mark M/M`,
 `ACCEPT`) that `install.sh` creates; without it a zone with `input REJECT`
-drops intercepted packets. If `mark` changes, `byway plumb on` rewrites the
-rule before loading its own table. If the rule is deleted, `plumb on` does
-not recreate it; only `install.sh` creates it, so rerun the installer to get
-it back.
+drops intercepted packets. Before loading its own table, `byway plumb on`
+creates the rule again if it is missing (`uci commit firewall` and a firewall
+reload) and rewrites it if `mark` changes. `byway doctor` warns when the rule
+is missing.
 
 The ruleset is applied as one transaction and starts with `table inet byway` +
 `delete table inet byway`. `nft -f` adds to an existing table instead of
@@ -181,7 +181,11 @@ With `conn_mode urltest` there are several outbounds (`proxy-0`, `proxy-1`,
 …), and rules point to the `auto` balancer (`leastPing`). `observatory` probes
 each key with a request to `https://www.google.com/generate_204` every
 `probe_interval`: `3m` is the default in code, the shipped config does not
-have this option.
+have this option. Each key is first parsed and built in a subshell
+(`parse_node` and `build_stream`): a refusal at either step gives
+`key skipped: REASON`, and the key stays out of the balancer. A route's key is
+checked the same way, and on refusal the route is skipped. If no auto-select
+key is usable, the build fails.
 
 ### lists and all modes
 
@@ -208,7 +212,9 @@ should the server address end up in the lists.
 
 DNS decides the route. A device that got its address somewhere other than the
 router (DoH in the browser, Android Private DNS, a custom resolver) gets the
-real address, and the pool never comes into play. For that device only the
+real address, and the pool never comes into play. The exception is Firefox
+that turned DoH on by itself: the `use-application-dns.net` canary turns it
+off (see "dnsmasq"). For that device only the
 subnet works: `@subnets` intercepts by destination address.
 
 Interception is not the same as tunnelling, though. Sniffing replaces the
@@ -219,7 +225,7 @@ the client was connecting to. A different CDN node, and the connection goes
 `direct`. So a service gets both a domain (for the engine's decision) and a
 subnet (for clients with their own DNS). To check: `grep NAME
 /tmp/byway-access.log` should show `-> proxy`; the log is written with
-`show_usage 1` or `log_level` `info`/`debug`.
+`show_usage 1` (except in `list_mode all`) or `log_level` `info`/`debug`.
 
 ## The router's own traffic
 
@@ -334,17 +340,19 @@ when the kernel rejects the rules (`nft -c`) or fails to load them (`nft -f`);
 on a load failure the route in table 100 and the previous `inet byway` table
 are removed as well. What happens next depends on `on_failure`.
 
-`open` (default): `block_on` does nothing. The home has internet and no
+`open`: `block_on` does nothing. The home has internet and no
 tunnel. **The list does not stop working, it works around the VPN:** names
 resolve to real addresses, connections leave from your home address, and from
 the outside everything looks fine.
 
-`closed`, "no traffic outside the VPN" (the "Block" setting in the panel).
+`closed`, "no traffic outside the VPN" (the "Block" setting in the panel),
+the default (in the shipped config and in the code: anything but `open`
+counts as `closed`; installs with `open` written in their config keep it).
 What gets closed depends on `list_mode`:
 
 | mode | what `block_on` sets up |
 |---|---|
-| `lists` | `byway-block.conf` in dnsmasq's `conf-dir`: `address=/NAME/0.0.0.0` for plain names on the list (after `dnsmasq --test`); table `inet byway_block`, chain `forward`: from the listed bridges to `@blocked` / `@blocked6` (subnets), `reject` |
+| `lists` | `byway-block.conf` in dnsmasq's `conf-dir`: `address=/NAME/` for plain names on the list, NXDOMAIN to a query of any type, A, AAAA and HTTPS (after `dnsmasq --test`); table `inet byway_block`, chain `forward`: from the listed bridges to `@blocked` / `@blocked6` (subnets), `reject` |
 | `all` | table `inet byway_block`, chain `forward`: everything from the listed bridges except traffic between them and to `privnets`, `reject` |
 
 The block hooks `forward`. The router's own traffic stays open, so the engine
@@ -353,19 +361,26 @@ are unaffected; bridges outside `list interface` are not blocked. `keyword:`
 and `regexp:` entries cannot be blocked by name (dnsmasq matches by suffix),
 and byway reports how many there are. The outcome goes to
 `/tmp/byway-blocked`: `lists`, `all` or `none` (nothing to block, or the
-kernel rejected the rule). While the file exists, another `block_on` does
-nothing, `none` included: the block is rebuilt only after `block_off`.
-Changing the lists or `list_mode` while a block is in place does not change
-it.
+kernel rejected the rule), and next to it `/tmp/byway-blocked.sig` holds the
+md5 of the mode, the bridges, IPv6 and the merged lists. Another `block_on`
+with the same signature does nothing; with a different one it rebuilds the
+block in place, without lifting it: the table is replaced in one transaction
+(a `table`/`delete table` prelude), the dnsmasq file after `dnsmasq --test`
+and only if it changed. In `all` mode the names file is removed.
 
 With `closed`, the service calls `byway plumb close` before starting the
 engine: after a reboot dnsmasq comes up with the ISP resolvers before byway
 does, and the list would leak directly during the wait.
 
-The block is lifted by a successful `plumb on`, by `byway watch` once the
-engine is back, by `byway plumb off` and by stopping the service. On failure
-paths the service and `byway watch` call `plumb off --keep-block`, which
-leaves the block in place.
+A stop followed by a start (restart, reload with a new config, an update,
+`BYWAY_KEEP_DNS`) and an engine replacement (`BYWAY_KEEP_BLOCK` from
+`byway engine`, through RAM included) first call `plumb close` under `closed`
+and remove interception with `--keep-block`: there is no window in which the
+list's subnets go direct.
+
+The block is lifted by a successful `plumb on`, by `byway plumb off` and by
+a real stop of the service. On failure paths the service and `byway watch`
+call `plumb off --keep-block`, which leaves the block in place.
 
 A pin in `/etc/hosts` overrides fakedns: dnsmasq answers it directly, so the
 name neither goes through the tunnel nor gets blocked. `byway doctor` counts
@@ -387,12 +402,12 @@ such pins.
    -test -c`. Rejected: the draft stays, the error and a hint are printed, the
    working config is untouched, exit code 1. Accepted: the engine's
    deprecation warnings are shown.
-5. Identical to the working config (`cmp`): nothing changes. Otherwise free
+5. List lines that look like neither a name nor a subnet are dropped
+   (`/tmp/byway-bad-entries`); for an accepted config the count and the first
+   three are printed before the comparison with the working one, so also when
+   the config did not change.
+6. Identical to the working config (`cmp`): nothing changes. Otherwise free
    space is checked and the draft is `mv`ed over the working config, mode 600.
-6. List lines that look like neither a name nor a subnet are dropped
-   (`/tmp/byway-bad-entries`); the count and the first three are printed
-   only if the config changed. When it matches the working one, `gen` says
-   nothing about them, even though the file is filled.
 
 The service runs `byway gen` on every start. If the build fails but the
 previous config still passes `xray run -test`, the engine starts on the
@@ -400,17 +415,25 @@ previous one.
 
 Memory. The init script passes `GOMEMLIMIT` to the engine via `procd_set_param
 env` (function `xray_memlimit`): with `xray_memlimit` unset, 40 % of
-`MemTotal`, at least 32 MiB; `0`/`off`/`no`, not set; anything else is passed
-as is, in Go format (`96MiB`). Without a limit Go lets the heap grow to twice
+`MemTotal`, at least 32 MiB; `0`/`off`/`no`, not set; Go format (`B`, `KiB`,
+`MiB`, `GiB`, `TiB`), passed as is; `MB`/`M` → `MiB`, `GB`/`G` → `GiB`; a bare
+number means megabytes (`96` → `96MiB`); anything else, a line in the system
+log that the limit could not be parsed, and 40 %. Without the conversion Go
+would refuse `128MB`, the engine would crash on start, and procd would keep
+restarting it. Without a limit Go lets the heap grow to twice
 the live data, and on a router with little memory the kernel OOM-kills the
 engine. The limit is soft: live data is never cut, Go just collects garbage
 more often. uci drops empty options, so the default lives in code. `byway
 status` shows the effective value.
 
 Engine path: `xray_bin`. It is accepted only if it lies in `/usr/bin`,
-`/usr/sbin`, `/usr/local/bin`, `/bin` or `/sbin`, contains no `..`, is
-executable and its `version` starts with `Xray `. Otherwise both the script
-and the init script fall back to `xray` from `PATH`, then `/usr/bin/xray`.
+`/usr/sbin`, `/usr/local/bin`, `/bin` or `/sbin`, contains no `..`, the file
+name starts with `xray`, the file is executable, begins with an ELF header,
+and its `version` starts with `Xray `. The name and the ELF header are checked
+before anything is run: otherwise `xray_bin=/sbin/reboot` would reboot the
+router on every byway call. A symlink named `xray*` in one of these
+directories passes wherever it points. Otherwise both the script and the
+init script fall back to `xray` from `PATH`, then `/usr/bin/xray`.
 
 ## The procd service
 
@@ -446,7 +469,10 @@ watch` would not restore the rules after a failed start.
 `restart`, and the reload branch for "config changed", pass `--keep-dns`: the
 resolver stays on the DNS inbound and only its cache is flushed. Switching to
 the ISP and back would mean two windows without DNS. If the engine does not
-answer, `plumb on` hands dnsmasq back to the ISP on its failure path.
+answer, `plumb on` hands dnsmasq back to the ISP on its failure path. Under
+`closed` the block goes up before interception is removed and stays until a
+successful `plumb on` (see [When the engine does not come
+up](#when-the-engine-does-not-come-up)).
 
 `reload`. `service_triggers` registers `procd_add_reload_trigger byway`, so
 procd calls reload on `reload_config`, that is, on every "Save & Apply" in
@@ -458,7 +484,9 @@ often, so `reload_service` restarts only what changed:
 1. `enabled 1` and the engine not running: `start`; `enabled 0` and running:
    `stop`.
 2. The running engine is not the binary the engine path now points to (checked
-   via `/proc/PID/exe`): `stop` + `start` with `--keep-dns`.
+   via `/proc/PID/exe`), or it runs with a different memory limit
+   (`GOMEMLIMIT` in `/proc/PID/environ` against `xray_memlimit`): `stop` +
+   `start` with `--keep-dns`.
 3. `byway gen`. If it fails, the old config keeps running.
 4. md5 of `config.json` ≠ first snapshot line: `stop` + `start` with
    `--keep-dns`.
@@ -495,7 +523,9 @@ in order:
    second miss in a row, if dnsmasq points at the DNS inbound, `plumb off
    --service --keep-block`: resolver back to the ISP, block stays. Logged as
    `(nodns)`.
-2. Engine is back and a block is in place: `block_off`.
+2. Engine is back and a block is in place: `plumb on` regardless of `guard`;
+   a successful one lifts the block (`(healed)`), a failed one leaves it
+   (`(failed)`). With `enabled` other than `1`, just `block_off`.
 3. Engine running, `enabled 1`, `guard` not `0`, no "removed by hand" marker
    (`/tmp/byway-plumb-down`), but the table, rule, route or byway's address in
    `dhcp.@dnsmasq[0].server` is missing: `plumb on`, logged as `(healed)` or
@@ -515,8 +545,10 @@ in order:
 
 cron runs `byway stat` every hour at :07, whatever the settings. It always
 extends the address map (below), but there is something to count only if the
-access log is being written (`show_usage 1` or `log_level` `info`/`debug`;
-otherwise the config has `"access": "none"`).
+access log is being written (`show_usage 1` with `list_mode lists`, or
+`log_level` `info`/`debug`; otherwise the config has `"access": "none"`). In
+`all` mode collection is off even with `show_usage 1`: the log would record
+the address of every connection in the home.
 
 Xray-core logs a line when it accepts a connection, before sniffing, so the
 line holds the pool address, not the name. `byway stat` therefore builds a
@@ -543,8 +575,11 @@ presets`, errors to syslog, `/etc/init.d/byway reload`. It fires on the first
 
 ### Version check and auto-update
 
-`update_check 1` (default): once a day (`/tmp/byway-upcheck`) a request to the
-GitHub API `releases/latest`. If newer: the version goes to
+`update_check 1` (default): a request to the GitHub API `releases/latest`
+every random 12–36 hours. `/tmp/byway-upcheck` holds the interval until the
+next check in minutes (720–2160, randomness from
+`/proc/sys/kernel/random/uuid`); the file's mtime is the time of the last
+one. If newer: the version goes to
 `/tmp/byway-newver`, the first line of the release notes to
 `/tmp/byway-relnote`, the time it was first seen to `/etc/byway/.newver-seen`,
 and a line to syslog. Nothing is downloaded.
@@ -567,8 +602,10 @@ nothing to install. All of these must hold:
 Sequence: copy the script to `/etc/byway/byway.prev` (if that fails, abort),
 `byway update` (the tag archive from GitHub and its `install.sh`), then up to
 150 seconds of `alive_ok` checks: engine process, `inet byway` table, fake
-address from the resolver (skipped when the list is empty). If it does not
-come up, `byway.prev` is copied back
+address from the resolver (skipped when the list is empty). If `tunnel_ok`
+passed before the update — a `curl` request through the proxy inbound
+(`local_proxy_port`, 1603) to `example.com`, any HTTP answer will do — it has
+to pass after it too. If it does not come up, `byway.prev` is copied back
 to `/usr/local/bin/byway`, the service restarts, and the version is recorded
 in `.au-failed`. **Rollback restores only the script:** the init script, panel
 and dictionaries stay at the new version. The outcome goes to
@@ -591,8 +628,13 @@ After success the old `/usr/local/bin/xray-*` is deleted; a packaged
 the old binary is in `/usr/local/bin/xray-*`; with a packaged one byway
 refuses. The old version's archive is downloaded first for rollback, then the
 service stops for about a minute, and for that time `/tmp/byway-plumb-down`
-is set so that `byway watch` stays out of the way. Either way `alive_ok`
-checks the result, and on failure the old engine is put back. Lock:
+is set so that `byway watch` stays out of the way; the stop runs with
+`BYWAY_KEEP_BLOCK=1`, so under `closed` the block holds for the whole minute.
+Either way `alive_ok` checks the result and, if the connection through the
+server worked before the replacement, `tunnel_ok` too; on failure the old
+engine is put back. With the service off or without a key the check is
+skipped, and on the side-by-side path the service restart too; without a key
+the path through RAM stops at the config build. Lock:
 `/var/run/byway-engine.lock`.
 
 ## dnsmasq
@@ -607,7 +649,14 @@ checks the result, and on failure the old engine is put back. Lock:
 3. `server` += `127.0.0.42`, `noresolv=1`. Without `noresolv` dnsmasq would
    also ask the ISP, take the first answer, and some listed names would get
    real addresses.
-4. If dnsmasq already points at the DNS inbound, SIGHUP; otherwise `restart`.
+   `server=/use-application-dns.net/` goes in as well, if missing: an entry
+   without an address means "local only", and dnsmasq answers NXDOMAIN. This
+   is the Firefox canary: Firefox turns off DoH it enabled by itself (the
+   default in Russia since 2022) on this answer and asks the router. DoH
+   turned on by hand, Android Private DNS and iOS DNS profiles ignore it.
+4. If dnsmasq already points at the DNS inbound and the canary was already
+   there, SIGHUP; otherwise `restart`: dnsmasq reads a new `server` line only
+   on a restart.
 
 **The `dhcp` change is never committed.** It lives as a delta in `/tmp/.uci`:
 `/etc/init.d/dnsmasq` sees it, and a reboot wipes it along with tmpfs.
@@ -619,7 +668,7 @@ the DHCP page in LuCI commits all pending changes, this one included.
 `dns_down`: `uci revert dhcp` (this also drops anyone else's uncommitted
 `dhcp` changes); if byway's address still made it into the saved config, the
 resolvers are restored from `dns-saved` explicitly, keeping `/domain/address`
-entries, and `uci commit dhcp` runs; `dns-saved` is deleted; dnsmasq is
+entries (except the canary), and `uci commit dhcp` runs; `dns-saved` is deleted; dnsmasq is
 restarted if it still points at the DNS inbound or its state cannot be
 determined, otherwise it gets SIGHUP. So `byway plumb off` returns the
 resolver to the ISP even if someone else committed the change.
@@ -663,7 +712,7 @@ the interception rules.
 | `/tmp/byway-config.new.json` | draft config; kept if the engine rejected it |
 | `/tmp/byway-domains-all.lst`, `byway-subnets-all.lst` (+ `.sig`) | merged lists |
 | `/tmp/byway-bad-entries` | dropped list lines |
-| `/tmp/byway-blocked` | active block: `lists`, `all`, `none` |
+| `/tmp/byway-blocked`, `.sig` | active block: `lists`, `all`, `none`; the signature it is rebuilt by |
 | `/tmp/byway-plumb-down` | rules removed by hand |
 | `/tmp/byway-route-mine`, `byway-route-mine6` | the route in table 100 was created by byway |
 | `/tmp/byway-watch.last`, `byway-nopid` | previous state and miss counter of `byway watch` |
@@ -677,11 +726,10 @@ the interception rules.
 
 Everything under `/tmp` and `/var/run` lives in RAM and is gone after a
 reboot. `install.sh` adds `/etc/byway/`, the init script, the `/etc/rc.d`
-links and the script files to `/etc/sysupgrade.conf`. The engine and the
-panel are not on that list: reinstall the engine after a sysupgrade, and when
-you rerun `install.sh`, it asks about the panel with "no" as the default
-(byway is there but the panel is not, so it assumes you declined it). Answer
-"yes".
+links, the script files and the panel files to `/etc/sysupgrade.conf`. The
+engine is not on that list (35 MB): after a sysupgrade the service does not
+start until the install line puts the engine back; it records the new path
+itself.
 
 ## Where to look
 

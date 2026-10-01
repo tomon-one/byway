@@ -83,9 +83,9 @@ accordingly.
 scripts plus a LuCI panel. Xray-core carries the traffic, while byway decides
 what goes where, builds the engine's config, installs the firewall rules and
 makes sure they stay in place. byway itself encrypts nothing and sends no
-traffic anywhere. It goes online only for lists and updates, and once a day it
-asks GitHub whether a newer version is out (this can be turned off, see
-[Updating](#updating)).
+traffic anywhere. It goes online only for lists and updates, and once every
+12–36 hours it asks GitHub whether a newer version is out (this can be turned
+off, see [Updating](#updating)).
 
 ---
 
@@ -156,13 +156,18 @@ Worth knowing before installing, not after.
   the browser, past the router) asks someone other than the router and gets the
   real address. But byway recognises the traffic to take precisely by the
   placeholder — a made-up address it hands out itself (see [How it
-  works](#how-it-works)). The router cannot tell such devices apart, so
-  `byway doctor` in "By lists" mode always reminds you of this. Either of two
-  things helps: turn encrypted DNS off on the device, or add the service's
-  **subnets** alongside its domains. A subnet works by address, and so works
-  for a device that asked someone else for it; subnets complement domains
-  rather than replace them. Unless IPv6 is enabled they cover IPv4 only, and a
-  device that got an IPv6 address goes around them. Intercepting port 53 in the
+  works](#how-it-works)). The exception is Firefox that turned DoH on by
+  itself (the default in Russia since 2022): while interception is up, dnsmasq
+  answers NXDOMAIN for `use-application-dns.net`, and Firefox takes this
+  network signal to turn DoH off. DoH turned on in Firefox by hand, Android
+  Private DNS and iOS DNS profiles ignore the signal. The router cannot tell
+  such devices apart, so `byway doctor` in "By lists" mode always reminds you
+  of this. Either of two things helps: turn encrypted DNS off on the device,
+  or add the service's **subnets** alongside its domains. A subnet works by
+  address, and so works for a device that asked someone else for it; subnets
+  complement domains rather than replace them. Unless IPv6 is enabled they
+  cover IPv4 only, and a device that got an IPv6 address goes around them.
+  Intercepting port 53 in the
   firewall only helps against a device with a plain third-party DNS server
   typed in by hand (8.8.8.8, say): encrypted lookups go to ports 853 and 443
   and never pass through it.
@@ -227,7 +232,10 @@ not touch the network otherwise:
 - the link points at a **tag**, not a branch: you install what is marked with a
   version, not what the author published a minute ago;
 - it is one readable file: `wget -O - …` without `| sh` shows all of it;
-- it names every step it takes and does nothing silently.
+- it names every step it takes and does nothing silently;
+- all of it is one `{ … }` group, which the shell parses in full before running
+  it: a download cut short during the one-line install gives a syntax error,
+  not half a script executed.
 
 **The first two ways download twice.** The one-liner puts only `install.sh` on
 the router; it downloads the rest of byway's files with a second request — the
@@ -235,7 +243,7 @@ same version (tag) that is written into it. If that tag does not exist, it says
 it took the `main` branch, rather than pretending it installed a tagged version.
 The third way fetches byway once, entirely in front of you.
 
-**The installer asks up to four questions.** Mandatory pieces are installed
+**The installer asks up to three questions.** Mandatory pieces are installed
 without asking.
 
 1. **Language** — first, before any checks. Only the chosen language's
@@ -245,9 +253,7 @@ without asking.
    get it from, the installer decides for you — details in [Engine
    version](#engine-version). If an engine is already installed, there is no
    question.
-3. **`base64`** — needed for `vmess://` keys, most `ss://` keys and `socks://`
-   keys with a base64 login; not installed by default.
-4. **The LuCI web UI** — last, yes by default. The default is "no" only on a
+3. **The LuCI web UI** — last, yes by default. The default is "no" only on a
    repeat run after the panel was removed; answering "no" while the panel is
    installed removes it. The panel files survive a firmware upgrade. If the
    router has no LuCI, there is no question and no panel: you manage byway from
@@ -372,10 +378,13 @@ cure for every fault.
   — 26.7.11, VLESS encryption — 25.8.29. On an older version byway refuses
   right away and names the version it needs. xhttp needs 1.8.24 or newer: the
   OpenWrt 22.03 packages carry 1.8.3, and on it byway refuses and suggests
-  updating the engine or taking a ws key. - **Several keys at once:** pick one
-  by hand or let Xray-core do it — it measures latency and routes through the
-  fastest live one.
-- **Subscription:** fetch a list of keys by URL and pick one.
+  updating the engine or taking a ws key.
+- **Several keys at once:** pick one by hand or let Xray-core do it — it
+  measures latency and routes through the fastest live one. A key byway
+  refuses is skipped with the reason, the others work.
+- **Subscription:** fetch a list of keys from an `https://` URL and pick one.
+  byway does not accept a subscription over `http://`: anyone on the path can
+  replace the keys in it.
 - **Your own outbound config** — for what byway does not parse from a link.
   byway adds only the tag to it; multiplexing and the mark for redirecting the
   router's own traffic (`sockopt.mark`) you write in yourself.
@@ -404,11 +413,13 @@ understands and why byway refuses — [keys and connection](docs/keys.en.md).
   fails to come up on two passes in a row, the watchdog removes the
   interception so the home's DNS does not go nowhere; with the "Block" setting
   the block stays. The watchdog is turned off with the "Interception
-  auto-restore" setting on the "Advanced" tab.
+  auto-restore" setting on the "Advanced" tab; an engine that comes back while
+  the block is in place is picked up even then: byway brings interception up,
+  and the block is lifted.
 - **Failure behaviour** is a choice — see [How it works](#how-it-works).
 - **Checks:** `byway doctor` for the environment, `byway health` for whether it
   works right now, `byway probe` to test a key in isolation without touching the
-  working tunnel.
+  working tunnel (`byway probe --all` checks every auto-select key in turn).
 - **A state log** — what changed and when: engine restarts and crashes,
   interception removed and restored, dnsmasq's resolver changed. Checked every
   five minutes, written only on a change. Whether the VPN server answers is not
@@ -428,15 +439,15 @@ work](docs/troubleshooting.en.md).
   (`byway report`) and experimental IPv6.
 - **A console menu** — `byway menu`, the same actions.
 - **Export and import.** Settings and lists as one piece of text:
-  `byway export` and `byway import`. The export comes with or without the key
-  (`--no-key`); `byway import --no-key` keeps the current key. The engine path
-  and the memory limit are not exported — each router has its own.
+  `byway export` and `byway import`. The export leaves the key out by default,
+  `--with-key` puts it in; `byway import --no-key` keeps the current key. The
+  engine path and the memory limit are not exported — each router has its
+  own.
 - **Usage statistics** (off by default): which list entries are actually used.
   Useful when deciding what to remove from a list. Everything stays on the
-  router. In "Everything through the VPN" mode the web UI does not offer it,
-  but collection switched on earlier keeps going: turn it off on the
-  "Maintenance" tab before changing the mode, or afterwards with `uci set
-  byway.main.show_usage=0 && uci commit byway && /etc/init.d/byway reload`.
+  router. In "Everything through the VPN" mode there is no collection: the web
+  UI does not offer it, and the access log is not written even if collection
+  was switched on earlier.
 
 ---
 
@@ -468,27 +479,32 @@ Where things go:
 | the English dictionary | `/etc/byway/lang/en.tsv`, only if English is chosen; the panel's `lang.js` always comes with the web UI, without the translation lines when Russian is chosen |
 | besides files | two cron jobs, the `byway-tproxy` firewall rule, paths in `/etc/sysupgrade.conf` |
 
-**If Xray-core did not come up, interception is not enabled either.** The
-house is left with the internet and without the tunnel, rather than without
-DNS — that is a deliberate choice.
+**If Xray-core did not come up, interception is not enabled either,** and the
+home's DNS goes back to the ISP rather than being left without a resolver.
+What happens next is decided by the "If the VPN does not come up" setting on
+the "Overview" tab (`on_failure`).
 
-This is easy to get wrong, so plainly: **without the tunnel the list does not
-stop working — it starts working AROUND the VPN.** The domains resolve to real
-addresses, connections open as usual, and from your home address. Sites open,
-everything looks intact, there is no protection — and nothing tells you so.
-
-That does not happen with the second failure behaviour — **"Block"**. What
-exactly it closes depends on the list mode, and the difference is large:
+**"Block"** is the default for new installs; updating byway leaves the
+setting as it was. What went through the VPN is closed, and what exactly that
+is depends on the list mode — the difference is large:
 
 | mode | what stays closed while Xray-core is not running |
 |---|---|
-| by lists | the list; the rest of the internet works. `keyword:` and `regexp:` entries and domains overridden in `/etc/hosts` cannot be closed and stay open |
+| by lists | the list; the rest of the internet works. Names from the list get a "no such name" answer to a query of any type. `keyword:` and `regexp:` entries and domains overridden in `/etc/hosts` cannot be closed and stay open |
 | everything through the VPN | the way out from the networks listed in "Interfaces" (`byway.main.interface`). Other networks and programs on the router itself are not blocked |
 
-The block switches on when Xray-core on the router is not running. If the
-engine is alive and the server is unreachable, list traffic still goes into
-the engine and does not leave around the VPN. Access to the router itself
-(LuCI, ssh) stays open in both modes. The switch is on the "Overview" tab.
+**"Go direct"** leaves the home with the internet and without the tunnel. This
+is easy to get wrong, so plainly: **without the tunnel the list does not stop
+working — it starts working AROUND the VPN.** The domains resolve to real
+addresses, connections open as usual, and from your home address. Sites open,
+everything looks intact, there is no protection — and nothing tells you so.
+
+The block switches on when Xray-core on the router is not running or
+interception did not come up. If the engine is alive and the server is
+unreachable, list traffic still goes into the engine and does not leave around
+the VPN. The block also holds while the service restarts, updates or replaces
+the engine, and a successful start of interception lifts it. Access to the
+router itself (LuCI, ssh) stays open in both modes.
 
 The packet path, the service and periodic tasks, the files and what happens on
 a failure — [how byway works](docs/architecture.en.md).
@@ -529,7 +545,7 @@ a failure — [how byway works](docs/architecture.en.md).
 | `byway gen` | rebuild the config from settings and lists; the engine picks it up after `/etc/init.d/byway reload` |
 | `byway plumb on\|off` | raise or remove interception |
 | `byway check [LINK]` | parse a key and verify the config, no connections |
-| `byway probe [LINK]` | test a VPN in isolation without touching the working tunnel |
+| `byway probe [LINK\|--all]` | test a VPN in isolation without touching the working tunnel; `--all` checks every auto-select key in turn |
 | `byway sub URL` | fetch a subscription and show the keys |
 | `byway presets` | download the ready-made lists; they take effect after `/etc/init.d/byway reload` |
 | `byway top [N]` | which list entries are actually used; needs statistics collection on (`show_usage`) |
@@ -538,7 +554,7 @@ a failure — [how byway works](docs/architecture.en.md).
 | `byway engine [VERSION\|tested\|newest\|stable]` | whether an Xray-core update exists, and replacing the engine |
 | `byway lang ru\|en` | output and web UI language |
 | `byway report [file]` | a report for a bug thread: state and diagnostics, no key |
-| `byway export [file]` | export settings; `--no-key` leaves the VPN key out |
+| `byway export [file] [--with-key]` | export settings without the VPN key; `--with-key` puts it in |
 | `byway import FILE` | apply settings from an export, the service restarts; `--no-key` keeps the current key |
 | `byway clear log\|stat\|all` | clear the state log, the statistics, or both |
 | `byway show` | a summary of the built config: size, domain and subnet counts, addresses — without the key |
@@ -560,7 +576,7 @@ byway update --force     # install the latest release even if it is not newer
 ```
 
 An update does not touch settings or lists. The installer asks about the
-language and the web UI again (and about base64 if it is missing), offering
+language and the web UI again, offering
 your previous answers as defaults. At the end the service restarts if it is
 enabled, and the tunnel drops for a few seconds. Clear the
 browser cache afterwards — see the warning in [The web UI](#the-web-ui).
@@ -593,19 +609,20 @@ auto-update has nothing to install.
 
 | | default | what it does |
 |---|---|---|
-| `update_check` | **on** | asks GitHub once a day whether a newer release exists |
+| `update_check` | **on** | asks GitHub every 12–36 hours whether a newer release exists |
 | `auto_update` | off | installs what the check found on its own, at a set hour; does nothing without `update_check` |
 | `auto_update_hour` | `04` | that hour, by the router's clock |
 
-The version check goes to GitHub at regular intervals, and noticing that
-regularity is enough for the ISP to conclude that byway is installed here — no
-traffic inspection needed. It is turned off with a checkbox on the
-"Maintenance" tab or `option update_check '0'`.
+The interval between version checks is picked at random each time: a request
+to GitHub at the same time every day would stand out from other traffic, and
+that regularity alone would tell the ISP that byway is installed here. The
+check is turned off with a checkbox on the "Maintenance" tab or `option
+update_check '0'`.
 
-**The same is true of refreshing the ready-made lists** (`lists_update`) — it
-also goes to GitHub on a schedule. The difference is the default: the version
-check is on, the list refresh is **off**, and you set the interval yourself.
-Both go through byway's proxy inbound: into the tunnel if GitHub is in your
+**Refreshing the ready-made lists** (`lists_update`) goes to GitHub at regular
+intervals, and the ISP can notice that regularity. It is **off** by default,
+and you set the interval yourself. The version check and the list refresh go
+through byway's proxy inbound: into the tunnel if GitHub is in your
 lists (the ready-made byway list has it) or the mode is "Everything through
 the VPN", direct otherwise. If the proxy does not answer, the request goes
 direct too.
@@ -625,16 +642,17 @@ warns in its "Updates" section if the clock runs on UTC.
 Auto-update installs a release no sooner than three days after the router
 first sees it (important ones immediately), and only if the first two numbers
 of the version match: `0.1.1` to `0.1.4` yes, `0.1.4` to `0.2.1` no. It leaves
-a hand-edited byway file alone. If the tunnel does not come up within two and
-a half minutes, byway puts the previous program file back (the service and the
-web UI stay from the new release) and will not install that release by itself
-again; by hand — `byway update`.
+a hand-edited byway file alone. If within two and a half minutes
+interception does not come up, or the connection through the server that
+worked before the update is gone, byway puts the previous program file back
+(the service and the web UI stay from the new release) and will not install
+that release by itself again; by hand — `byway update`.
 
 **After a firmware upgrade** byway's settings, lists, service and web UI are
 kept, but the Xray-core engine is not: its 35 MB are left out of the list of
-files kept across upgrades. The service does not start and there is no tunnel.
-To get it back, run the install line again: it installs the engine and records
-its path itself.
+files kept across upgrades. The service does not start, there is no tunnel,
+and with "Block" what went through the VPN is closed. To get it back, run the
+install line again: it installs the engine and records its path itself.
 
 ---
 
@@ -696,10 +714,12 @@ on a router with 40 MB for your own files), the replacement goes through
 memory: the tunnel drops for about a minute, and an archive of the previous
 version is downloaded in advance for the way back. If interception does not
 come up on the new engine (the process is alive, the rules are in place, the
-resolver hands out placeholder addresses), the previous one comes back by
-itself. This check does not test a connection through the server — after a
-replacement, open a listed site or run `byway health`. Any replacement needs
-at least 40 MB of free RAM, a replacement through memory about 55.
+resolver hands out placeholder addresses) or the connection through the
+server that worked before the replacement is gone, the previous one comes back
+by itself. On a router where the service is off or there is no key, the
+tunnel check is skipped; without a key a replacement through memory still
+fails, since it needs a built config. Any replacement needs at least 40 MB of
+free RAM, a replacement through memory about 55.
 
 A previous engine from the OpenWrt packages is not removed — uninstall it with
 the package manager. If there is no room for a second engine and the previous
@@ -731,10 +751,13 @@ public address without TLS or reality — byway says so plainly. And since
 (`allowInsecure=1` in the key): the key needs a certificate fingerprint
 (`pcs=` or `pinSHA256=`) or a name to check (`vcn=`), or the server needs a
 real certificate, and byway says so right away, without handing the config to
-the engine. If the engine was updated around `byway engine` (as a package, for
-example), `byway engine NUMBER` can go back to the version that worked if
-there is room on flash for a second engine; if there is not, see above for an
-engine from a package.
+the engine. On an engine below these versions byway refuses both cases
+itself; for your own server with a self-signed certificate,
+`uci set byway.main.allow_insecure=1` lifts the refusal (console only, details
+in [keys](docs/keys.en.md)). If the engine was updated around
+`byway engine` (as a package, for example), `byway engine NUMBER` can go back
+to the version that worked if there is room on flash for a second engine; if
+there is not, see above for an engine from a package.
 
 And [report it](https://github.com/tomon-one/byway/issues): if the engine
 changed what byway generates, that is fixed in byway rather than worked around

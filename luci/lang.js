@@ -74,7 +74,7 @@ var DICT = {
 		"Показывается в строке «Подключение» вверху страницы.": "Shown in the \"Connection\" line at the top of the page.",
 		"свой конфиг": "custom config",
 		"Если VPN не поднялся": "If the VPN does not come up",
-		"Когда сервер не отвечает или ключ устарел. «Пустить напрямую» — интернет работает, но то, что шло через VPN, идёт без него. «Не пускать» — это закрывается: в режиме «по спискам» — сайты из списков, в режиме «всё через VPN» — весь интернет. Доступ к роутеру остаётся.": "When the server does not answer or the key has expired. \"Go direct\" — the internet keeps working, but what went through the VPN goes without it. \"Block\" — that traffic is cut: in by-lists mode, the listed sites; in everything-through-VPN mode, the whole internet. Access to the router stays.",
+		"Когда движок VPN на роутере не работает или перехват не лёг. Недоступный сервер при работающем движке сюда не относится: трафик и так уходит в движок и мимо VPN не идёт. «Пустить напрямую» — интернет работает, но то, что шло через VPN, идёт без него. «Не пускать» — это закрывается: в режиме «по спискам» — сайты из списков, в режиме «всё через VPN» — весь интернет. Доступ к роутеру остаётся.": "When the VPN engine on the router is not running or interception did not come up. An unreachable server with a running engine does not count: traffic goes into the engine anyway and does not bypass the VPN. \"Go direct\" — the internet keeps working, but what went through the VPN goes without it. \"Block\" — that traffic is cut: in by-lists mode, the listed sites; in everything-through-VPN mode, the whole internet. Access to the router stays.",
 		"Пустить напрямую": "Go direct",
 		"Не пускать": "Block",
 		"Сеть": "Network",

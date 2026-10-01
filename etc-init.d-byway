@@ -68,6 +68,11 @@ xray_ok() {
     esac
     case "$1" in *..*) return 1 ;; esac
     [ -f "$1" ] && [ -x "$1" ] || return 1
+    # Имя xray* и заголовок ELF -- до запуска: `xray_bin=/sbin/reboot` с
+    # панели иначе перезагружал роутер на каждом вызове byway (cron -- раз в
+    # пять минут, при загрузке -- по кругу).
+    case "${1##*/}" in xray*) ;; *) return 1 ;; esac
+    head -c 4 "$1" 2>/dev/null | grep -q ELF || return 1
     "$1" version 2>/dev/null | head -1 | grep -qi "^Xray " || return 1
 }
 
@@ -94,10 +99,21 @@ fi
 # Умолчание живёт здесь, а не в поставке: uci выбрасывает пустые опции.
 xray_memlimit() {
     _ml=$(uci -q get byway.main.xray_memlimit || true)
+    # Go понимает B, KiB, MiB, GiB, TiB или голое число БАЙТ; на чём-то другом
+    # движок падает при старте, и procd поднимал бы его по кругу. Привычное
+    # MB/M/GB переводим, голое число считаем мегабайтами («96» байт -- вечная
+    # сборка мусора), прочее -- в журнал и авто.
     case "$_ml" in
         0|off|no) return 0 ;;
         '') ;;
-        *) printf '%s' "$_ml"; return 0 ;;
+        *[!0-9]*[!A-Za-z]*|[!0-9]*)
+            logger -t byway "предел памяти «$_ml» не разобран -- взят авто" ;;
+        *[0-9]B|*[0-9]KiB|*[0-9]MiB|*[0-9]GiB|*[0-9]TiB)
+            printf '%s' "$_ml"; return 0 ;;
+        *[0-9]MB|*[0-9]M|*[0-9]Mi) printf '%sMiB' "${_ml%%[!0-9]*}"; return 0 ;;
+        *[0-9]GB|*[0-9]G|*[0-9]Gi) printf '%sGiB' "${_ml%%[!0-9]*}"; return 0 ;;
+        *[!0-9]*) logger -t byway "предел памяти «$_ml» не разобран -- взят авто" ;;
+        *) printf '%sMiB' "$_ml"; return 0 ;;
     esac
     _kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || true)
     [ -n "$_kb" ] || return 0
@@ -177,7 +193,7 @@ plumb_off_try() {   # аргументы -- дополнительные фла�
 # с --keep-block, выключение через `option enabled 0` -- без него, это решение
 # человека, а не поломка.
 plumb_off_fail() {
-	if [ "$(uci -q get byway.main.on_failure)" = "closed" ]; then
+	if [ "$(uci -q get byway.main.on_failure)" != "open" ]; then
 		plumb_off_try --keep-block
 	else
 		plumb_off_try
@@ -210,7 +226,7 @@ start_service() {
 	# Закрываем ДО движка, а не после его отказа. Разбор -- в ветке `close`
 	# у cmd_plumb: запрет от движка не зависит, и ждать его подъёма, чтобы
 	# потом закрыться, значит держать дверь открытой всё время ожидания.
-	[ "$(uci -q get byway.main.on_failure)" = "closed" ] && "$BYWAY" plumb close
+	[ "$(uci -q get byway.main.on_failure)" != "open" ] && "$BYWAY" plumb close
 
 	[ -x "$XRAY" ] || {
 		echo "нет $XRAY — движок не найден"
@@ -389,10 +405,21 @@ stop_service() {
 	# restart и ветка reload «конфиг изменился». На настоящей остановке флага
 	# нет, и резолвер честно возвращается провайдеру -- иначе дом остался бы
 	# смотреть в порт, который никто больше не слушает.
+	# При «не пускать мимо VPN» остановка, за которой следует старт (restart,
+	# reload с новым конфигом, обновление) или замена ядра (BYWAY_KEEP_BLOCK
+	# от byway engine), закрывает дом ДО снятия перехвата и оставляет запрет:
+	# прежде на это окно -- секунды, а при замене через память минуту --
+	# подсети списка шли напрямую. Снимет запрет удачный plumb on.
+	local _kb=""
+	if [ "$(uci -q get byway.main.on_failure)" != "open" ] &&
+	   { [ "${BYWAY_KEEP_DNS:-0}" = 1 ] || [ "${BYWAY_KEEP_BLOCK:-0}" = 1 ]; }; then
+		"$BYWAY" plumb close >/dev/null 2>&1 || true
+		_kb=--keep-block
+	fi
 	if [ "${BYWAY_KEEP_DNS:-0}" = 1 ]; then
-		plumb_off_try --keep-dns
+		plumb_off_try --keep-dns $_kb
 	else
-		plumb_off_try
+		plumb_off_try $_kb
 	fi
 }
 
@@ -437,8 +464,17 @@ reload_service() {
 	local _xp _xe
 	_xp=$(cat /var/run/byway.pid 2>/dev/null)
 	_xe=$(readlink "/proc/$_xp/exe" 2>/dev/null || true)
+	# Предел памяти живёт в окружении процесса, конфиг от него не меняется:
+	# без этой сверки reload его не видел, нужен был restart руками.
+	local _mlw _mlr
+	_mlw=$(xray_memlimit)
+	_mlr=$(tr '\0' '\n' < "/proc/$_xp/environ" 2>/dev/null | sed -n 's/^GOMEMLIMIT=//p')
+	if [ -n "$_xe" ] && [ "$_mlw" != "$_mlr" ]; then
+		logger -t byway "reload: сменился предел памяти, перезапуск"
+		_xe=changed
+	fi
 	if [ -n "$_xe" ] && [ "$_xe" != "$(readlink -f "$XRAY" 2>/dev/null)" ]; then
-		logger -t byway "reload: сменилось ядро, перезапуск"
+		[ "$_xe" = changed ] || logger -t byway "reload: сменилось ядро, перезапуск"
 		BYWAY_KEEP_DNS=1
 		stop
 		BYWAY_KEEP_DNS=0

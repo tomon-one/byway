@@ -88,7 +88,7 @@ outbound config: settings are printed from an allow-list, everything else is
 connection lines and with addresses and names replaced by `x.x.x.x`, `x::x`
 and `ИМЯ`.
 
-`byway report FILE` writes to a file with mode 600. Paths like
+`byway report FILE` creates the file with mode 600 from the start. Paths like
 `/tmp/byway-…` are refused, byway keeps its working files there.
 `/tmp/report.txt` works.
 
@@ -142,10 +142,13 @@ your line. The key can be checked on its own, without the running tunnel:
 byway check              # parse the key, no connections: ACCEPTED or REJECTED
 byway probe              # one connection through the key: WORKS or DOES NOT WORK
 byway probe 'vless://…'  # the same for any other key
+byway probe --all        # every auto-select key in turn, then "N of M work"
 ```
 
-In auto-select mode there is no key in `node_url`; pass the link as an
-argument.
+In auto-select mode there is no key in `node_url`: use `byway probe --all`, or
+pass the link as an argument. A key that byway refuses during the build does
+not enter auto-select: `byway gen` prints `key skipped: REASON`, and the other
+keys keep working.
 
 `tunnel fail` with `vpn ok`: the server is reachable, but it did not accept
 the key or does not let traffic out. Engine errors:
@@ -175,9 +178,9 @@ Whether a domain is on the list shows on the router with
 was changed) means it is on the list and goes through the VPN. A real address
 means it is not on the list, or a pin in `/etc/hosts` overrides it
 (`byway doctor` counts them), or `byway gen` dropped the line as unsuitable,
-naming the count and examples. If the config did not change, gen says
-nothing about dropped lines; the count is in `byway report`, the
-`lines dropped` line. A plain entry covers subdomains too, `full:`
+naming the count and examples even when the config did not change because of
+it; the count is also in `byway report`, the `lines dropped` line. A plain
+entry covers subdomains too, `full:`
 covers only the name itself.
 
 After editing `/etc/byway/domains.lst` or `subnets.lst` in the console, run
@@ -242,6 +245,13 @@ real one means it has its own DNS. Where to look: Android, "Private DNS"
 HTTPS (Firefox "DNS over HTTPS", Chrome "Use secure DNS"); iOS and macOS, DNS
 profiles and apps that set their own resolver.
 
+Firefox that turned DoH on by itself rather than by the user's setting (the
+default in Russia since 2022) goes through byway: while interception is up,
+dnsmasq answers NXDOMAIN for `use-application-dns.net`, and Firefox takes this
+signal to turn DoH off. Check from a PC: `nslookup use-application-dns.net`
+answers `NXDOMAIN`. DoH turned on in Firefox by hand, Android Private DNS and
+iOS DNS profiles ignore the signal.
+
 If encrypted DNS cannot be turned off on the device, two ways remain.
 Intercepting port 53 in the firewall catches plain queries to other
 resolvers, not encrypted ones; byway does not set it up, that is the network
@@ -283,7 +293,10 @@ uci add_list byway.main.interface=br-guest && uci commit byway && /etc/init.d/by
 
 The installer adds the firewall rule `byway-tproxy`, which accepts
 intercepted packets from any zone, so a guest zone with closed input does not
-block the tunnel. Guests' DNS queries to the router must be allowed.
+block the tunnel. If the rule was deleted, `byway doctor` reports `there is
+no firewall rule for marked traffic`, and bringing interception up
+(`/etc/init.d/byway restart`) creates it again. Guests' DNS queries to the
+router must be allowed.
 
 ---
 
@@ -329,11 +342,13 @@ seconds. Traces: `dmesg | grep -i killed`; current use: the `memory` line of
 of the router's memory by default, at least 32 MiB. Your own limit:
 
 ```sh
-uci set byway.main.xray_memlimit=64MiB && uci commit byway && /etc/init.d/byway restart
+uci set byway.main.xray_memlimit=64MiB && uci commit byway && /etc/init.d/byway reload
 ```
 
-`0` means no limit. It has to be a restart: the setting does not change the
-engine config, so reload does not notice it.
+`0` means no limit. A bare number means megabytes; `MB` and `M` become `MiB`,
+`GB` and `G` become `GiB`. A value that does not parse is noted in the system
+log (`logread -e byway`) and the automatic limit is used. reload compares the
+limit of the running engine and restarts it when the limit has changed.
 
 Restarts. The state log shows `(restart)` and a new `pid`; `logread -e byway`
 has the line `the core restarted — dnsmasq cache flushed`. The `(healed)`
@@ -373,8 +388,9 @@ with the same first two version numbers, at the set hour by the router's
 clock; a regular release no earlier than three days after the router first
 saw it, an important one at once. The current file is copied to
 `/etc/byway/byway.prev` first. Then byway waits up to two and a half minutes
-for the engine to run, the interception rules to be in place and the
-resolver to hand out placeholder addresses. If that does not happen, it
+for the engine to run, the interception rules to be in place, the resolver
+to hand out placeholder addresses and, if the connection through the server
+worked before the update, for it to work after. If that does not happen, it
 restores the previous version and never installs that release on its own
 again.
 
@@ -402,16 +418,23 @@ so an incompatibility does not pass silently: `byway gen` shows the refusal,
 and the previously built config is not replaced. If the new engine accepts
 it, the service runs on it. For known refusals byway names the cause: for
 example, new Xray-core versions refuse vless and trojan without TLS to a
-public address and do not allow turning off server certificate checks. A
-key without TLS is fixed on the server. Instead of a disabled check the key
-needs the certificate fingerprint (`pcs=` or `pinSHA256=`), or the server
-needs a real certificate.
+public address and do not allow turning off server certificate checks; on
+older versions byway refuses the same itself. A key without TLS is fixed on
+the server. Instead of a disabled check the key needs the certificate
+fingerprint (`pcs=` or `pinSHA256=`), or the server needs a real certificate.
+For your own server with a self-signed certificate on an engine below 26.3.27
+(without TLS, below 26.7.11), `uci set byway.main.allow_insecure=1 && uci
+commit byway && /etc/init.d/byway reload` lifts byway's refusal; the option
+does not override a recent engine.
 
 `byway engine` checks the archive against the release checksum, tests the
 config with the new engine and waits up to two and a half minutes for the
-tunnel; if it does not come up, the previous engine is restored
-automatically. If a package manager updated the engine, go back to the
-version that worked:
+tunnel, and, if the connection through the server worked before the
+replacement, for that too; if it does not come up, the previous engine is
+restored automatically. With the service off or without a key the tunnel
+check is skipped (without a key only in a side-by-side swap, see
+[engine](engine.en.md#without-a-key)). If a package manager updated the
+engine, go back to the version that worked:
 
 ```sh
 byway engine              # what is installed and what XTLS has
@@ -516,10 +539,11 @@ lists and names the overlaps. byway does not check zapret2 hostlists
 ## "Block" shut off the internet
 
 The setting "If the VPN does not come up" (Overview tab, `on_failure`) set to
-"Block" closes what should go through the VPN while there is no tunnel. In
-list mode that is the list's domains (dnsmasq answers `0.0.0.0` for them)
-and subnets; in "Everything through the VPN" mode, all outbound traffic from
-the listed networks. Access to the router (LuCI, ssh) stays.
+"Block" closes what should go through the VPN while there is no tunnel;
+it is the default for new installs. In list mode that is the
+list's domains (dnsmasq answers NXDOMAIN to a query of any type for them) and
+subnets; in "Everything through the VPN" mode, all outbound traffic from the
+listed networks. Access to the router (LuCI, ssh) stays.
 
 `byway status` then shows `WARNING … the list is CLOSED` or `WARNING … ALL
 traffic outside the VPN is BLOCKED`, and the web UI shows it on the Overview
@@ -528,7 +552,11 @@ DIRECT`, means the block is on but the lists are empty. The block goes up on
 every service start, before interception is in place, and stays if the engine
 did not start or the interception rules did not load. In the second case the
 engine is alive, and `service`, `vpn`, `tunnel` in `byway health` may be `ok`:
-the tunnel check goes around interception.
+the tunnel check goes around interception. A restart, an update or an engine
+replacement does not lift the block; a change of lists, mode or networks
+rebuilds it. `byway watch` picks up an engine that came back by itself, even
+with the watchdog off: it brings interception up, and a successful start lifts
+the block.
 
 To open access until the tunnel is fixed:
 
@@ -569,8 +597,8 @@ byway report /tmp/report.txt
 
 Read the file before sending. It has no key and no server address, but it
 does have the key name (the `key` line), the first list domain (the `fakeip`
-line) and the router's network names. Do not attach: `byway export` without
-`--no-key`, `/etc/config/byway` and `/etc/byway/config.json`, which hold the
+line) and the router's network names. Do not attach: `byway export
+--with-key`, `/etc/config/byway` and `/etc/byway/config.json`, which hold the
 key; the output of `byway gen`, `byway check`, `byway probe`, which holds the
 server address; the access log and a detailed `logread -e xray`, which hold
 the address of everything opened on the network.

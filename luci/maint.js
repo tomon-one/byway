@@ -204,7 +204,7 @@ return view.extend({
 		o.onclick = function () {
 			var noKeyNow = noKey.formvalue('main') === '1';
 			var args = [ 'export' ];
-			if (noKeyNow) args.push('--no-key');
+			if (!noKeyNow) args.push('--with-key');
 			var el = expOut.getUIElement('main');
 			shownNoKey = null;
 			el.setValue(_('идёт сбор…'));

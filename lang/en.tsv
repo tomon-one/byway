@@ -99,7 +99,6 @@ byway: неизвестная команда «%s». Список: byway\n	byway
 выключено	off
 включён	on
 выключен	off
-для этой ссылки нужен декодер base64: %s	this link needs a base64 decoder: %s
 %s: записей %s, взяты первые %s — остальное отброшено	%s: %s entries, taking the first %s — the rest is dropped
 выбран свой конфиг, но он пуст	a custom config is selected, but it is empty
 ключ не задан	no key is set
@@ -117,7 +116,6 @@ flow=%s с транспортом %s не работает: Xray-core приме
 mux отключён: он не сочетается с flow=%s (Vision делит поток сам)	mux off: it does not go together with flow=%s (Vision splits the stream itself)
 mux отключён: у транспорта %s своё мультиплексирование, второй слой поверх только вредит	mux off: transport %s multiplexes on its own, a second layer on top only hurts
 выбран автовыбор, но ни одного ключа не добавлено	auto-select is on, but no keys were added
-ключ пропущен: не разобрался	key skipped: could not be parsed
 ни один ключ не разобрался	none of the keys could be parsed
 неизвестный пресет: %s	unknown preset: %s
 %s: не скачался, остаётся прежняя копия	%s: did not download, the previous copy stays
@@ -129,7 +127,7 @@ mux отключён: у транспорта %s своё мультиплекс
 журнал состояния очищен	the state log has been cleared
 статистика использования очищена	the usage statistics have been cleared
 журнал и статистика очищены	the log and the statistics have been cleared
-byway export [файл] [--no-key]	byway export [file] [--no-key]
+byway export [файл] [--with-key]	byway export [file] [--with-key]
 сюда писать нельзя: системные каталоги закрыты	cannot write there: system directories are closed
 выгружено: %s (%s байт)	exported: %s (%s bytes)
 ключ не записан — файл можно показывать кому угодно	the key was not written — this file is safe to show
@@ -177,7 +175,8 @@ xray не запущен, считать нечего	xray is not running, nothi
 новых соединений в журнале нет	no new connections in the log
 учёт пуст. Собирается задачей cron; вручную: byway stat	the tally is empty. It is filled by a cron job; by hand: byway stat
 byway sub <адрес подписки>	byway sub <subscription address>
-это не адрес подписки: ожидается http:// или https://	this is not a subscription address: http:// or https:// expected
+это не адрес подписки: ожидается https://	this is not a subscription address: https:// expected
+подписка по http:// не принимается: ключи в ней может подменить кто угодно на пути — нужен https://	a subscription over http:// is not accepted: anyone on the path can replace the keys in it — https:// is needed
 подписка не скачалась: стоит проверить адрес и связь	the subscription did not download: check the address and the connection
 меню работает только с терминала: byway menu	the menu only works from a terminal: byway menu
 не OpenWrt	not OpenWrt
@@ -244,14 +243,13 @@ dnsmasq не направлен на byway	dnsmasq does not point at byway
 скачать подписку	download a subscription
 обновить готовые списки	update the ready-made lists
 чем реально пользуются	what is actually used
-выгрузить настройки; --no-key — без ключа от VPN	export the settings; --no-key leaves out the VPN key
 принять настройки из выгрузки	import settings from an export
 очистить журнал состояния, статистику или то и другое	clear the state log, the statistics, or both
 версия	version
 check [ссылка]	check [link]
-probe [ссылка]	probe [link]
+probe [ссылка|--all]	probe [link|--all]
 sub АДРЕС	sub ADDRESS
-export [файл]	export [file]
+export [файл] [--with-key]	export [file] [--with-key]
 import ФАЙЛ	import FILE
 рядом включён %s	%s is also enabled
 рядом РАБОТАЕТ %s	%s is RUNNING alongside byway
@@ -444,7 +442,6 @@ itdoginfo: подсети для сервисов, которые работаю
 путь к движку отклонён: %s	the core path was rejected: %s
 движок не поднимается пять минут -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: доступа наружу нет	the core has not come up for five minutes -- interception removed, the "no traffic outside the VPN" block STAYS: no internet access
 движок не поднимается пять минут -- перехват снят, дом остаётся с интернетом и без туннеля	the core has not come up for five minutes -- interception removed, the home network keeps internet access without the tunnel
-движок вернулся -- запрет «не пускать мимо VPN» снят	the core is back -- the "no traffic outside the VPN" block is lifted
 byway watch: правил перехвата нет при работающем движке -- восстановление	byway watch: interception rules missing while the core is running -- restoring
 автообновление: byway правлен руками -- не трогается	auto-update: byway has been edited by hand -- leaving it alone
 автообновление: сумма выложенной версии неизвестна -- не трогается	auto-update: the checksum of the published version is unknown -- leaving it alone
@@ -473,9 +470,9 @@ byway работает только на firewall4, это OpenWrt 22.03 и но
 режим «всё через VPN», а эти сети идут мимо него целиком:%s	"everything through the VPN" mode, yet these networks bypass it entirely:%s
 в таблице маршрутизации %s нет маршрута local default	routing table %s has no local default route
 движок старый: транспорт httpupgrade он может не знать, и тогда конфиг соберётся, а туннель не встанет	the engine is old: it may not know the httpupgrade transport, and then the config builds but the tunnel never comes up
-движку %s транспорт xhttp неизвестен — обновить Xray-core или взять ключ на ws	engine %s does not know the xhttp transport - update Xray-core or use a ws key
+движку %s транспорт xhttp неизвестен (нужен Xray-core 1.8.24 или новее) — обновить: byway engine tested, либо взять ключ на ws	engine %s does not know the xhttp transport (Xray-core 1.8.24 or newer is needed) — update: byway engine tested, or use a ws key
   пинов в /etc/hosts перебивают записи списка: %s	  /etc/hosts pins override list entries: %s
-  и запрет «не пускать мимо VPN» их не закроет: пин старше address=/домен/0.0.0.0	  and the "no traffic outside the VPN" block will not cover them either: a pin outranks address=/domain/0.0.0.0
+  и запрет «не пускать мимо VPN» их не закроет: пин старше address=/домен/	  and the "no traffic outside the VPN" block will not cover them either: a pin outranks address=/domain/
 туннеля нет, и трафик перечисленных сетей мимо VPN закрыт: так велит настройка «не пускать мимо VPN». Сети вне byway.main.interface запрет не закрывает	no tunnel, and traffic from the listed networks is blocked outside the VPN: the "no traffic outside the VPN" setting says so. Networks outside byway.main.interface are not covered by the block
 правила не легли в ядро — %s	rules did not reach the kernel - %s
 и домены, и подсети закрывают только IPv4: клиент, получивший AAAA, предпочтёт его и уйдёт напрямую. Выключить IPv6 на WAN -- либо помнить, что подсети сервиса его не покрывают	both domains and subnets cover IPv4 only: a client that got an AAAA record will prefer it and go direct. Turn IPv6 off on the WAN - or remember that the service subnets do not cover it
@@ -634,7 +631,6 @@ mux к wireguard не применяется: у него нет потока, �
 диапазон портов в ключе не переносится: соединение идёт на порт %s	the port range in the key is not carried over: the connection goes to port %s
 scy=%s у vmess Xray-core не знает: есть auto, aes-128-gcm, chacha20-poly1305, none, zero	Xray-core does not know scy=%s for vmess: there are auto, aes-128-gcm, chacha20-poly1305, none, zero
 plugin у shadowsocks не переносится: Xray-core плагины не запускает, сервер с плагином не ответит	the shadowsocks plugin is not carried over: Xray-core does not run plugins, and a server with a plugin will not answer
-у socks логин и пароль, похоже, в base64, а декодера нет: %s	the socks login and password look like base64, and there is no decoder: %s
 не отвечает	not responding
 трафик не проходит	traffic does not pass
 не выдаёт адрес	gives no address
@@ -642,3 +638,17 @@ plugin у shadowsocks не переносится: Xray-core плагины не
 aid у vmess — не число: %s	vmess aid is not a number: %s
 ss-ссылка не разобралась	the ss link could not be parsed
 flow=%s у trojan Xray-core не поддерживает — пропущен	Xray-core does not support flow=%s for trojan — skipped
+ключей автовыбора нет (byway.main.node_urls) — проверять нечего	no auto-select keys (byway.main.node_urls) — nothing to check
+ключ %s %s	key %s %s
+работают %s из %s	%s of %s work
+ключ пропущен: %s	key skipped: %s
+правила firewall для помеченного трафика нет	there is no firewall rule for marked traffic
+гостевые и другие зоны с input REJECT остаются без туннеля; byway заводит правило заново при подъёме перехвата: /etc/init.d/byway restart	guest and other zones with input REJECT are left without the tunnel; byway recreates the rule when interception comes up: /etc/init.d/byway restart
+правила firewall для помеченного трафика не было — заведено заново	the firewall rule for marked traffic was missing — created again
+в ключе отключена проверка сертификата (allowInsecure): соединение может подменить любой на пути. Для своего сервера с самоподписанным сертификатом: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload	the key turns off the certificate check (allowInsecure): anyone on the path can tamper with the connection. For your own server with a self-signed certificate: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload
+ключ vless или trojan без TLS к публичному адресу: ключ и трафик видны любому на пути. Нужен ключ с security=tls или reality; разрешить всё же: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload	a vless or trojan key without TLS to a public address: the key and the traffic are visible to anyone on the path. A key with security=tls or reality is needed; to allow it anyway: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload
+движок вернулся -- перехват поднят, запрет «не пускать мимо VPN» снят	the core is back -- interception is up, the "no traffic outside the VPN" block is lifted
+движок вернулся, но перехват не поднялся -- запрет «не пускать мимо VPN» остаётся	the core is back, but interception did not come up -- the "no traffic outside the VPN" block stays
+выгрузить настройки без ключа от VPN; --with-key — с ключом	export the settings without the VPN key; --with-key — with the key
+ИМЯ	NAME
+служба не работает (выключена или нет ключа) — ядро заменено без проверки туннеля: Xray %s	the service is not running (disabled or no key) — the core was replaced without a tunnel check: Xray %s
