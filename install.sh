@@ -1059,8 +1059,12 @@ fi
 # (/usr/local/bin/xray-26.7.28), а служба искала /usr/bin/xray и не
 # стартовала -- то есть весь путь «взять движок с GitHub» кончался
 # неработающим byway. Ищем и уже стоявший движок: при установке поверх
-# скачивания не будет, а путь всё равно нужен.
-if [ -z "$(uci -q get byway.main.xray_bin)" ]; then
+# скачивания не будет, а путь всё равно нужен. Только что скачанное ядро
+# записывается всегда, и мёртвый путь (ядро не пережило sysupgrade, пакет
+# снят) тоже ищется заново: прежде непустой xray_bin не трогали вовсе, и
+# служба не стартовала с новым ядром на диске.
+_xb=$(uci -q get byway.main.xray_bin)
+if [ -n "$XRAY_PATH" ] || [ -z "$_xb" ] || [ ! -x "$_xb" ]; then
     if [ -z "$XRAY_PATH" ]; then
         if command -v xray >/dev/null 2>&1; then
             XRAY_PATH=$(command -v xray)
@@ -1124,6 +1128,9 @@ _PANEL_FILES="/www/luci-static/resources/view/byway /www/luci-static/resources/b
 if [ "$PANEL" = 0 ] && [ -d /www/luci-static/resources/view/byway ]; then
     # shellcheck disable=SC2086
     rm -rf $_PANEL_FILES 2>/dev/null || true
+    for P in $_PANEL_FILES; do
+        grep -vxF "$P" /etc/sysupgrade.conf > /tmp/su.$$ 2>/dev/null && mv /tmp/su.$$ /etc/sysupgrade.conf
+    done
     for c in /tmp/luci-indexcache*; do [ -e "$c" ] && : > "$c"; done
     /etc/init.d/rpcd restart >/dev/null 2>&1 || true
     say "панель LuCI убрана"
@@ -1178,6 +1185,13 @@ for P in /etc/byway/ /etc/init.d/byway /etc/rc.d/S90byway /etc/rc.d/K10byway \
          /usr/local/bin/byway /usr/local/bin/byway-uninstall          /usr/bin/byway /usr/bin/byway-uninstall; do
     grep -qxF "$P" /etc/sysupgrade.conf 2>/dev/null || echo "$P" >> /etc/sysupgrade.conf
 done
+# Панель -- тоже: без неё повторная установка считала, что от панели
+# отказались, и не ставила её по умолчанию.
+if [ "$PANEL" = 1 ]; then
+    for P in $_PANEL_FILES; do
+        grep -qxF "$P" /etc/sysupgrade.conf 2>/dev/null || echo "$P" >> /etc/sysupgrade.conf
+    done
+fi
 say "файлы byway переживут обновление прошивки (/etc/sysupgrade.conf)"
 
 # /usr/local/bin в PATH OpenWrt НЕ входит: /etc/profile задаёт его жёстко
@@ -1267,7 +1281,10 @@ echo
 # памятку «Дальше» получал бы и человек, у которого повторный запуск -- это
 # первая удачная установка после неудачной: программа лежала, ключа не было,
 # и три шага ему нужнее всего.
-if [ "$WAS_INSTALLED" = 1 ] && [ -n "$(uci -q get byway.main.node_url 2>/dev/null)" ]; then
+# Настроен -- любым из способов: ключ, список ключей, свой конфиг. Прежде
+# смотрели только node_url, и автовыбор после обновления жил на старой сборке.
+_cfgd=$(uci -q get byway.main.node_url 2>/dev/null)$(uci -q get byway.main.node_urls 2>/dev/null)$(uci -q get byway.main.outbound_json 2>/dev/null)
+if [ "$WAS_INSTALLED" = 1 ] && [ -n "$_cfgd" ]; then
     # Конфиг движка собран ПРЕЖНЕЙ версией программы. Один перезапуск поднял
     # бы движок на нём же: новая программа на диске, работает старая сборка,
     # и человек считает, что обновление ничего не изменило.

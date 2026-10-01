@@ -32,7 +32,7 @@ sing-box's list of transports is closed: HTTP, WebSocket, QUIC, gRPC,
 HTTPUpgrade. Its documentation names what is absent — mKCP is listed explicitly,
 and xhttp never existed there at all.
 
-byway parses six transports, and sing-box cannot carry two of them. Some keys
+byway parses seven transports, and sing-box cannot carry two of them. Some keys
 that work today would stop working on the second engine, and people would have
 to know which key goes with which engine.
 

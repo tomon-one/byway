@@ -718,11 +718,16 @@ parse_node() {
         [ -n "$_j" ] || die "vmess-ссылка не раскодировалась"
         jf() { printf '%s' "$_j" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" | head -1; }
         N_HOST=$(jf add); N_PORT=$(jf port); N_UUID=$(jf id)
+        case "$N_HOST" in *:*) dief "адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя" "$N_HOST" ;; esac
+        # aid уходит в конфиг без кавычек -- только число.
         N_AID=$(jf aid); [ -n "$N_AID" ] || N_AID=0
+        case "$N_AID" in *[!0-9]*) dief "aid у vmess — не число: %s" "$N_AID" ;; esac
         N_TYPE=$(jf net); [ -n "$N_TYPE" ] || N_TYPE=tcp
         N_PATH=$(jf path); [ -n "$N_PATH" ] || N_PATH=/
         N_WSHOST=$(jf host)
-        N_HDR=$(jf type)
+        # type=none клиенты пишут почти всегда; как заголовок mkcp его
+        # свежее ядро отвергает, значит «нет заголовка» -- пусто.
+        N_HDR=$(jf type); [ "$N_HDR" = none ] && N_HDR=""
         [ "$(jf tls)" = "tls" ] && N_SEC=tls
         N_SNI=$(jf sni); [ -n "$N_SNI" ] || N_SNI=${N_WSHOST:-$N_HOST}
         [ -n "$N_WSHOST" ] || N_WSHOST=$N_HOST
@@ -738,7 +743,8 @@ parse_node() {
         _v=$(jf fp); [ -n "$_v" ] && N_FP=$_v
         # У vmess имя сервиса gRPC лежит в path (так пишут v2rayN и прочие),
         # а не в отдельном поле: без этого serviceName уходил пустым.
-        if [ "$N_TYPE" = "grpc" ]; then N_SVC=$N_PATH; fi
+        # Сырой path, а не N_PATH: пустой там заменён на «/».
+        if [ "$N_TYPE" = "grpc" ]; then N_SVC=$(jf path); fi
         N_PROTO=vmess
         node_json_ok
         # Проверка порта СВОЯ у каждой ветки, а не одна общая в конце. Общая
@@ -752,8 +758,14 @@ parse_node() {
     if [ "$N_SCHEME" = "ss" ]; then
         # Два вида: ss://<base64 от method:password>@host:port  и
         # ss://method:password@host:port. Второй встречается реже.
-        _ui=${_rest%%@*}
-        _hp=${_rest#*@}
+        # Старая форма: в base64 вся ссылка, ss://BASE64(метод:пароль@адрес:порт).
+        case "$_rest" in *@*) ;; *)
+            _rest=$(b64d "${_rest%%\?*}")
+            case "$_rest" in *@*) ;; *) die "ss-ссылка не разобралась" ;; esac ;;
+        esac
+        # По ПОСЛЕДНЕЙ собаке: в открытом пароле она законна.
+        _ui=${_rest%@*}
+        _hp=${_rest##*@}
         # Плагин (obfs-local, v2ray-plugin) Xray-core не запускает -- без
         # него сервер с плагином не ответит. Говорим вслух, а не теряем.
         case "$_hp" in *plugin=*)
@@ -762,9 +774,10 @@ parse_node() {
         _hp=${_hp%%\?*}
         _hp=${_hp%%/*}
         case "$_ui" in
-          *:*) _plain=$_ui ;;
+          *:*) _plain=$(pctd "$_ui") ;;
           *)   _plain=$(b64d "$_ui") ;;
         esac
+        case "$_hp" in \[*) dief "адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя" "$_hp" ;; esac
         N_METHOD=${_plain%%:*}
         N_PASS=${_plain#*:}
         N_HOST=${_hp%%:*}
@@ -787,6 +800,8 @@ parse_node() {
     _hostport=${_rest2%%\?*}
     # hysteria2 пишет «host:port/?sni=…» -- косая перед вопросом не порт.
     _hostport=${_hostport%%/*}
+    # [2001:db8::1]:443 резался по первому двоеточию в «[2001».
+    case "$_hostport" in \[*) dief "адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя" "$_hostport" ;; esac
     N_HOST=${_hostport%%:*}
     N_PORT=${_hostport##*:}
     if [ "$N_PORT" = "$N_HOST" ]; then N_PORT=443; fi
@@ -844,6 +859,10 @@ parse_node() {
     _v=$(qp path);     [ -n "$_v" ] && N_PATH=$_v
     N_WSHOST=$(qp host); [ -n "$N_WSHOST" ] || N_WSHOST=$N_HOST
     N_PBK=$(qp pbk); N_SID=$(qp sid); N_FLOW=$(qp flow)
+    # flow у trojan в конфиг не пишется, а mux при нём отключался.
+    if [ "$N_PROTO" = trojan ] && [ -n "$N_FLOW" ]; then
+        warnf "flow=%s у trojan Xray-core не поддерживает — пропущен" "$N_FLOW"; N_FLOW=""
+    fi
     N_MODE=$(qp mode); N_ALPN=$(qp alpn); N_HDR=$(qp headerType)
     N_SEED=$(qp seed); N_SVC=$(qp serviceName); N_AUTH=$(qp authority)
     N_SPX=$(qp spx); N_PQV=$(qp pqv); N_ENC=$(qp encryption)
@@ -1364,7 +1383,7 @@ build_stream() {
     # есть приходит снаружи. Прошлым заходом я закрыл этим же способом пул,
     # адрес резолвера и оба порта -- а mux, уровень журнала и интервал пробы
     # пропустил: они собираются в другом месте файла и на глаза не попались.
-    _mux=$(val_or mux_concurrency "$(uci -q get byway.main.mux_concurrency || true)" \
+    _mux=$(val_or mux_concurrency "$(u mux_concurrency)" \
            '^[0-9]{1,3}$' 0 "$(_t 'конфига движка')")
     if [ -n "$_mux" ] && [ "$_mux" != "0" ]; then
         if [ -n "$N_FLOW" ]; then
@@ -3270,7 +3289,7 @@ cmd_doctor() {
         # причину не нашёл, потому что видна она только тому, кто уже знает
         # про подставные адреса и цепочку output. Строка дешевле поисков.
         _d_warn "$(_t 'роутер сам до сайтов из списка не достаёт')" \
-                "заворот своего трафика выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && byway plumb off && byway plumb on"
+                "заворот своего трафика выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload"
     fi
 
     # Маршрут в своей таблице. Спрашиваем только при поднятой обвязке -- без
@@ -4043,8 +4062,13 @@ report_body() {
     _r "== системный журнал движка (последние 20) =="
     # Только жалобы движка. Строки об обращениях сюда попасть не должны: в них
     # адрес каждого посещённого сайта, а отчёт уходит постороннему человеку.
+    # Адреса и имена вымарываются: в «dial tcp …» -- адрес сервера.
     logread -e xray 2>/dev/null | grep -iE "error|warn|fail|reject" |
-      grep -v "tproxy-in" | tail -20 || true
+      grep -v "tproxy-in" | tail -20 |
+      sed -E 's/^([A-Z][a-z]{2} [A-Z][a-z]{2} +[0-9]+ [0-9:]+ [0-9]{4}) [^:]*: /\1 /
+              s/[0-9]{1,3}(\.[0-9]{1,3}){3}/x.x.x.x/g
+              s/\[[0-9a-fA-F]*:[0-9a-fA-F:]*\]|[0-9a-fA-F]*::[0-9a-fA-F:]+/x::x/g
+              s/([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/ИМЯ/g' || true
 }
 
 export_body() {
@@ -5007,7 +5031,7 @@ HEAD
       //
       // Пользоваться так:
       //   https_proxy=http://127.0.0.1:$LOCAL_PORT curl ...
-      //   wget тоже понимает эту переменную
+      //   busybox wget по https через прокси не ходит
       // Маршрутизация обычная: домен из списка уйдёт через ноду, прочее
       // напрямую.
       "tag": "local-in",

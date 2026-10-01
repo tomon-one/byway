@@ -325,6 +325,8 @@ say "программа и панель удалены"
 KEEP_RE='^/etc/init\.d/byway$\|^/etc/rc\.d/[SK][0-9]*byway$'
 KEEP_RE="$KEEP_RE"'\|^/usr/local/bin/byway$\|^/usr/bin/byway$'
 KEEP_RE="$KEEP_RE"'\|^/usr/local/bin/byway-uninstall$\|^/usr/bin/byway-uninstall$'
+KEEP_RE="$KEEP_RE"'\|^/www/luci-static/resources/view/byway$\|^/www/luci-static/resources/byway$'
+KEEP_RE="$KEEP_RE"'\|^/usr/share/luci/menu\.d/luci-app-byway\.json$\|^/usr/share/rpcd/acl\.d/luci-app-byway\.json$'
 [ "$PURGE" = "1" ] && KEEP_RE="$KEEP_RE"'\|^/etc/byway/$'
 if [ -f /etc/sysupgrade.conf ]; then
     if [ "$DRY" = "1" ]; then

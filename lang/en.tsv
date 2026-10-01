@@ -516,7 +516,7 @@ byway возьмёт другое значение сам; задать своё
 резолвер задан именем, а bootstrap не задан — разрешать имя нечем, взяты поставочные адреса	the resolver is given by name, but no bootstrap is set -- there is nothing to resolve the name with, stock addresses taken
   вписать: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway	  set it: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway
 роутер сам до сайтов из списка не достаёт	the router itself cannot reach the sites on the list
-заворот своего трафика выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && byway plumb off && byway plumb on	routing the router's own traffic is off: programs on the router — zapret updates, your own scripts — hang on a fake address until they time out. To turn it on: uci set byway.main.router_via_vpn=1 && uci commit byway && byway plumb off && byway plumb on
+заворот своего трафика выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload	routing the router's own traffic is off: programs on the router — zapret updates, your own scripts — hang on a fake address until they time out. To turn it on: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload
   Xray-core с 26.7.11 не пускает vless и trojan без TLS или reality к публичному адресу	  since 26.7.11 Xray-core refuses vless and trojan without TLS or reality to a public address
   нужен ключ с security=tls или reality; без шифрования транспорта — только сервер в частной сети	  a key with security=tls or reality is needed; no transport encryption only works for a server on a private network
 замена движка	engine replacement
@@ -638,3 +638,7 @@ plugin у shadowsocks не переносится: Xray-core плагины не
 не отвечает	not responding
 трафик не проходит	traffic does not pass
 не выдаёт адрес	gives no address
+адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя	an IPv6 address in the key is not supported: %s — use IPv4 or a name
+aid у vmess — не число: %s	vmess aid is not a number: %s
+ss-ссылка не разобралась	the ss link could not be parsed
+flow=%s у trojan Xray-core не поддерживает — пропущен	Xray-core does not support flow=%s for trojan — skipped

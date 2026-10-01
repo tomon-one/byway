@@ -20,19 +20,23 @@ is built, what is running and what is in the kernel.
 |---|---|
 | `config` | size of the built engine config; `NO` means no config has been built |
 | `transport`, `key` | transport and security from the config, key name (the part after `#` in the link) |
+| `connection`, `now` | in auto-select mode, instead of the two lines above: how many keys there are and which one is in use |
 | `engine`, `xray` | Xray-core version and path, PID or `not running` |
 | `memory` | how much the engine uses and the memory limit it runs under |
 | `nft table`, `ip rule`, `route` | the three parts of the interception rules; all `yes` while byway works |
 | `dnsmasq ->` | where dnsmasq forwards queries; while byway works, the byway resolver, `127.0.0.42` by default |
-| `fakeip` | the first domain on the list and the placeholder address it got |
+| `routes with their own exit` | how many routes have their own exit; absent when there are none |
+| `fakeip` | the first domain on the list and the placeholder address it got; `NOT issued` means the resolver did not answer with a pool address |
 | `in tproxy` | packets intercepted so far; grows while devices open sites on the list |
 | `overnight` | how the automatic update ended |
+| `update` | a new byway version is out; its description and the install command follow |
 
-`WARNING` lines matter more than the rest. "Config was built for another
-mode" is fixed by `byway gen`; the lines about blocked access are covered in
-the last section. The web UI shows them on the Overview tab; the full output
-is under Maintenance → Full status. `byway status --short` prints only the
-top part, up to the `engine` line.
+`WARNING` lines matter more than the rest. "Config was built for another mode"
+is fixed by `byway gen`; the lines about blocked access are covered in
+["Block" shut off the internet](#block-shut-off-the-internet). The web UI
+shows them on the Overview tab; the full output is under Maintenance → Full
+status. `byway status --short` prints only the top part, up to the `engine`
+line.
 
 ### `byway health`
 
@@ -81,7 +85,8 @@ security, port), settings, list sizes, interception rules, the last lines of
 the logs. It contains no key, server address, subscription address or custom
 outbound config: settings are printed from an allow-list, everything else is
 `<hidden>`, and only errors are taken from the engine log, without
-connection lines.
+connection lines and with addresses and names replaced by `x.x.x.x`, `x::x`
+and `ИМЯ`.
 
 `byway report FILE` writes to a file with mode 600. Paths like
 `/tmp/byway-…` are refused, byway keeps its working files there.
@@ -107,7 +112,8 @@ when something changed. In the web UI: Maintenance → State log.
 `pid` is the engine process, a new one means a restart. `nft`, `rule`,
 `route` are the parts of the interception rules, `dns` is where dnsmasq
 points, `fakeip` is whether the resolver hands out placeholder addresses.
-Marks: `(restart)` the engine restarted, `(healed)` someone removed the
+Marks: `(start)` the first entry after a reboot or `byway clear log`,
+`(restart)` the engine restarted, `(healed)` someone removed the
 rules and they were put back, `(failed)` putting them back failed, `(nodns)`
 the engine has not come up for over five minutes and interception was
 removed.
@@ -144,7 +150,7 @@ argument.
 `tunnel fail` with `vpn ok`: the server is reachable, but it did not accept
 the key or does not let traffic out. Engine errors:
 `logread -e xray | tail -30`. If `probe` works and `tunnel` does not, run
-`/etc/init.d/byway restart` and `byway status` again.
+`/etc/init.d/byway restart` and `byway health` again.
 
 `dns fail`: the byway resolver does not answer. The `dnsmasq ->` line of
 `byway status` should show `127.0.0.42` (or your `dns_listen`). Another
@@ -169,7 +175,9 @@ Whether a domain is on the list shows on the router with
 was changed) means it is on the list and goes through the VPN. A real address
 means it is not on the list, or a pin in `/etc/hosts` overrides it
 (`byway doctor` counts them), or `byway gen` dropped the line as unsuitable,
-naming the count and examples. A plain entry covers subdomains too, `full:`
+naming the count and examples. If the config did not change, gen says
+nothing about dropped lines; the count is in `byway report`, the
+`lines dropped` line. A plain entry covers subdomains too, `full:`
 covers only the name itself.
 
 After editing `/etc/byway/domains.lst` or `subnets.lst` in the console, run
@@ -319,8 +327,13 @@ engine back after 5 seconds, and from the outside it is a drop of a few
 seconds. Traces: `dmesg | grep -i killed`; current use: the `memory` line of
 `byway status`. The engine runs under a soft memory limit (`GOMEMLIMIT`): 40 %
 of the router's memory by default, at least 32 MiB. Your own limit:
-`uci set byway.main.xray_memlimit=64MiB`, no limit: `0`; takes effect after
-`/etc/init.d/byway restart`.
+
+```sh
+uci set byway.main.xray_memlimit=64MiB && uci commit byway && /etc/init.d/byway restart
+```
+
+`0` means no limit. It has to be a restart: the setting does not change the
+engine config, so reload does not notice it.
 
 Restarts. The state log shows `(restart)` and a new `pid`; `logread -e byway`
 has the line `the core restarted — dnsmasq cache flushed`. The `(healed)`
@@ -372,8 +385,14 @@ installs it. If the rollback itself failed (`ROLLBACK FAILED`), restore by
 hand:
 
 ```sh
-cp /etc/byway/byway.prev /usr/local/bin/byway && /etc/init.d/byway restart
+cp /etc/byway/byway.prev /usr/local/bin/byway
+md5sum /usr/local/bin/byway | cut -d' ' -f1 > /etc/byway/.binmd5
+/etc/init.d/byway restart
 ```
+
+Without the second line automatic updates take the file for a hand-edited
+one and stop touching it: `.binmd5` still holds the checksum of the release
+that failed.
 
 Automatic updates leave alone a file edited by hand or not placed by the
 installer, and `byway doctor` says so.
@@ -383,8 +402,10 @@ so an incompatibility does not pass silently: `byway gen` shows the refusal,
 and the previously built config is not replaced. If the new engine accepts
 it, the service runs on it. For known refusals byway names the cause: for
 example, new Xray-core versions refuse vless and trojan without TLS to a
-public address and do not allow turning off server certificate checks. Such
-a key is fixed on the server.
+public address and do not allow turning off server certificate checks. A
+key without TLS is fixed on the server. Instead of a disabled check the key
+needs the certificate fingerprint (`pcs=` or `pinSHA256=`), or the server
+needs a real certificate.
 
 `byway engine` checks the archive against the release checksum, tests the
 config with the new engine and waits up to two and a half minutes for the
@@ -396,6 +417,10 @@ version that worked:
 byway engine              # what is installed and what XTLS has
 byway engine 26.9.9       # a specific version; tested: the one tested with byway
 ```
+
+If the flash has no room for a second engine and the current one came from a
+package, `byway engine` refuses: remove the package with the package manager
+first.
 
 A replacement needs at least 40 MB of free memory. On MIPS without a
 floating-point unit GitHub builds do not run, and `byway engine` refuses:
@@ -417,8 +442,12 @@ The redirect is the setting "VPN for programs on the router" (Network tab,
 list`. To turn it on:
 
 ```sh
-uci set byway.main.router_via_vpn=1 && uci commit byway && byway plumb off && byway plumb on
+uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload
 ```
+
+Reloading the rules is not enough here: the setting adds an inbound for the
+router's traffic to the engine config, and reload rebuilds it and restarts
+the service.
 
 Only TCP to placeholder addresses is redirected, that is, to list domains;
 subnets do not apply to programs on the router. byway downloads through its
@@ -479,7 +508,8 @@ and pool can be changed on the Network tab, the table number cannot.
 If zapret runs alongside, one domain must not sit on both lists: the session
 splits across two exits. `byway presets` compares the zapret hostlist at
 `/opt/zapret/ipset/zapret-hosts-user.txt` with the ready-made and your own
-lists and names the overlaps.
+lists and names the overlaps. byway does not check zapret2 hostlists
+(`/opt/zapret2/ipset/`); compare those by hand.
 
 ---
 
@@ -491,12 +521,14 @@ list mode that is the list's domains (dnsmasq answers `0.0.0.0` for them)
 and subnets; in "Everything through the VPN" mode, all outbound traffic from
 the listed networks. Access to the router (LuCI, ssh) stays.
 
-`byway status` then shows `WARNING … the list is CLOSED` or
-`WARNING … ALL traffic outside the VPN is BLOCKED`, and the web UI shows it
-on the Overview tab. The block goes up when the engine did not start or the
-interception rules did not load. In the second case the engine is alive, and
-`service`, `vpn`, `tunnel` in `byway health` may be `ok`: the tunnel check
-goes around interception.
+`byway status` then shows `WARNING … the list is CLOSED` or `WARNING … ALL
+traffic outside the VPN is BLOCKED`, and the web UI shows it on the Overview
+tab. A third variant, `WARNING … there was nothing to block — traffic goes
+DIRECT`, means the block is on but the lists are empty. The block goes up on
+every service start, before interception is in place, and stays if the engine
+did not start or the interception rules did not load. In the second case the
+engine is alive, and `service`, `vpn`, `tunnel` in `byway health` may be `ok`:
+the tunnel check goes around interception.
 
 To open access until the tunnel is fixed:
 
@@ -519,7 +551,7 @@ rm -f DIRECTORY/byway-block.conf /tmp/byway-blocked
 
 The block does not close `keyword:` and `regexp:` entries, and byway warns
 about that when it goes up. Domains pinned in `/etc/hosts` stay open too;
-`byway doctor` names them.
+`byway doctor` says how many.
 
 ---
 
