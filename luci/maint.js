@@ -104,13 +104,33 @@ return view.extend({
 		/* ── Журнал состояния ─────────────────────────────────────────── */
 
 		ss = block('_log', _('Журнал состояния'),
-			_('Пишется раз в пять минут и только когда что-то изменилось. Смена pid — это перезапуск службы.'));
+			_('Пишется раз в пять минут и только когда что-то изменилось. Смена pid — это перезапуск службы. Здесь — последние десять записей, свежие сверху.'));
+
+		/* Журнал копится месяцами (до 200 строк): целиком он занимал всю
+		   вкладку. На странице -- хвост, полный -- в окне поверх. */
+		var hlog = (data[2] || '').trim().split('\n').filter(function (l) { return l; }).reverse();
 
 		o = ss.option(form.DummyValue, '_hlog', _('Записи'));
 		o.cfgvalue = function () {
-			return bwui.table((data[2] || '').trim() ||
+			return bwui.table(hlog.slice(0, 10).join('\n') ||
 				_('пока пусто — значит ничего не менялось'));
 		};
+
+		if (hlog.length > 10) {
+			o = ss.option(form.Button, '_hlogall', _('Весь журнал'));
+			o.inputstyle = 'action';
+			o.inputtitle = _('Открыть весь журнал');
+			o.onclick = function () {
+				ui.showModal(_('Журнал состояния'), [
+					E('pre', {
+						'style': 'white-space:pre;font-size:90%;max-height:70vh;overflow:auto;margin:0'
+					}, [ hlog.join('\n') ]),
+					E('div', { 'class': 'right' }, [
+						E('button', { 'class': 'btn', 'click': ui.hideModal }, [ _('Закрыть') ])
+					])
+				]);
+			};
+		}
 
 		o = ss.option(form.Button, '_logclear', _('Очистить'));
 		o.inputstyle = 'negative';

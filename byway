@@ -5721,8 +5721,22 @@ eng_local() {
 # сотни соединений и OOM (Xray#6797, сборки XTLS с 26.9.8). Тег сборки виден
 # в buildinfo бинарника. $1 -- путь к ядру.
 eng_dial_bug() {
-    "$1" version 2>/dev/null | head -1 | grep -q '(go1\.27[.) ]' || return 1
-    ! grep -q 'http2legacy' "$1" 2>/dev/null
+    # Поиск по файлу ядра -- 36 МБ с флеша, секунды; итог помним для этого
+    # файла (inode, размер, время) в /tmp. Наша сборка помечена и в version.
+    _dk=$(ls -lni "$1" 2>/dev/null)
+    _dc=/tmp/byway-dialbug
+    if [ -n "$_dk" ] && [ "$(sed -n 1p "$_dc" 2>/dev/null)" = "$_dk" ]; then
+        [ "$(sed -n 2p "$_dc" 2>/dev/null)" = 1 ]
+        return
+    fi
+    _db=0
+    _dv=$("$1" version 2>/dev/null | head -1)
+    case "$_dv" in
+      *http2legacy*) ;;
+      *'(go1.27.'*|*'(go1.27 '*|*'(go1.27)'*) grep -q 'http2legacy' "$1" 2>/dev/null || _db=1 ;;
+    esac
+    printf '%s\n%s\n' "$_dk" "$_db" > "$_dc" 2>/dev/null || true
+    [ "$_db" = 1 ]
 }
 
 # Словари перевода для консоли и панели (byway lang).
