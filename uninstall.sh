@@ -46,6 +46,7 @@ t() {
       "очистить кэш меню LuCI:") printf %s "clear the LuCI menu cache:" ;;
       "программа и панель удалены") printf %s "the program and the panel are removed" ;;
       "пути byway убраны из /etc/sysupgrade.conf") printf %s "byway paths removed from /etc/sysupgrade.conf" ;;
+      "пользователь byway удалён") printf %s "the byway user removed" ;;
       "── 6. Настройки и списки ──") printf %s "── 6. Settings and lists ──" ;;
       "удалены, включая ключ VPN") printf %s "removed, the VPN key included" ;;
       "── 6. Настройки и списки ОСТАВЛЕНЫ ──") printf %s "── 6. Settings and lists are KEPT ──" ;;
@@ -248,6 +249,13 @@ if [ -x /etc/init.d/byway ]; then
     do_ /etc/init.d/byway disable
     do_ rm -f /etc/init.d/byway /etc/rc.d/S90byway /etc/rc.d/S21byway /etc/rc.d/K10byway
     say "остановлена и снята с автозапуска"
+fi
+# Пользователь, от которого работал движок: строки дописал user_add в конец,
+# удаление по имени возвращает файлы к виду до установки.
+if grep -q '^byway:' /etc/passwd /etc/group 2>/dev/null; then
+    do_ sed -i '/^byway:/d' /etc/passwd /etc/group /etc/shadow
+    do_ rm -f /var/run/byway-caps.json
+    say "пользователь byway удалён"
 fi
 
 echo

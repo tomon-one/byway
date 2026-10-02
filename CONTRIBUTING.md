@@ -21,7 +21,7 @@
 Что нужно знать о коде:
 
 - **POSIX sh под busybox ash**, без bash-измов: `[[ ]]`, массивы, `echo -e` не годятся. Проверка синтаксиса — `sh -n`.
-- **Код — в `src/`**, по модулю на область: разбор ключей, конфиг Xray, списки, перехват, сторож, ядро. Файл `byway` собирается из них командой `sh src/build.sh` — правьте модуль, а не `byway`, и коммитьте оба.
+- **Код — в `src/`**: каталог на область (`core`, `keys` — разбор ключей, `config` — конфиг Xray, `lists`, `plumb` — перехват, `service` — сторож и состояние, `diag`, `update` — обновление и ядро, `data`, `ui`), файл на тему; разборщик ключей — `keys/parse.uc` на ucode. Файл `byway` собирается командой `sh src/build.sh` в порядке `src/ORDER` — правьте `src/`, а не `byway`, и коммитьте оба.
 - **Всё, что видит человек, переводится.** Русская строка в коде — ключ,
   английский перевод лежит отдельно:
   - `byway` — в `lang/en.tsv`: русская строка целиком, табуляция, перевод;
@@ -67,9 +67,12 @@ What to know about the code:
 
 - **POSIX sh under busybox ash**, no bashisms: `[[ ]]`, arrays, `echo -e` will
   not do. Check syntax with `sh -n`.
-- **The code lives in `src/`**, one module per area: key parsing, Xray config,
-  lists, interception, watchdog, engine. `byway` is built from them with
-  `sh src/build.sh` — edit the module, not `byway`, and commit both.
+- **The code lives in `src/`**: a directory per area (`core`, `keys` — key
+  parsing, `config` — the Xray config, `lists`, `plumb` — interception,
+  `service` — watchdog and status, `diag`, `update` — updates and the engine,
+  `data`, `ui`), a file per topic; the key parser is `keys/parse.uc` in ucode.
+  `byway` is built with `sh src/build.sh` in the order of `src/ORDER` — edit
+  `src/`, not `byway`, and commit both.
 - **Everything a person sees is translated.** The Russian string in the code is
   the key, the English translation lives separately:
   - `byway` — in `lang/en.tsv`: the whole Russian string, a tab, the

@@ -3,30 +3,128 @@
 		"description": "Управление туннелем byway",
 		"read": {
 			"file": {
-				"/etc/byway/domains.lst": [ "read" ],
-				"/etc/byway/subnets.lst": [ "read" ],
-				"/etc/byway/presets/*": [ "read" ],
-				"/etc/byway/routes/*": [ "read" ]
+				"/etc/byway/domains.lst": [
+					"read"
+				],
+				"/etc/byway/subnets.lst": [
+					"read"
+				],
+				"/etc/byway/presets/*": [
+					"read"
+				],
+				"/etc/byway/routes/*": [
+					"read"
+				]
 			},
-			"uci": [ "byway" ],
+			"uci": [
+				"byway"
+			],
 			"ubus": {
-				"luci": [ "getInitList" ],
-				"service": [ "list" ]
+				"luci": [
+					"getInitList"
+				],
+				"service": [
+					"list"
+				]
 			}
 		},
 		"write": {
-			"cgi-io": [ "exec" ],
+			"cgi-io": [
+				"exec"
+			],
 			"file": {
-				"/etc/byway/domains.lst": [ "write" ],
-				"/etc/byway/subnets.lst": [ "write" ],
-				"/etc/byway/routes/*": [ "read", "write" ],
-				"/etc/byway/usage.tsv": [ "read" ],
-				"/etc/byway/health.log": [ "read" ],
-				"/tmp/byway-import.txt": [ "write" ],
-				"/usr/local/bin/byway": [ "exec" ],
-				"/etc/init.d/byway": [ "exec" ]
+				"/etc/byway/domains.lst": [
+					"write"
+				],
+				"/etc/byway/subnets.lst": [
+					"write"
+				],
+				"/etc/byway/routes/*": [
+					"read",
+					"write"
+				],
+				"/etc/byway/usage.tsv": [
+					"read"
+				],
+				"/etc/byway/health.log": [
+					"read"
+				],
+				"/tmp/byway-import.txt": [
+					"write"
+				],
+				"/usr/local/bin/byway version": [
+					"exec"
+				],
+				"/usr/local/bin/byway status": [
+					"exec"
+				],
+				"/usr/local/bin/byway status --short": [
+					"exec"
+				],
+				"/usr/local/bin/byway health": [
+					"exec"
+				],
+				"/usr/local/bin/byway doctor": [
+					"exec"
+				],
+				"/usr/local/bin/byway report": [
+					"exec"
+				],
+				"/usr/local/bin/byway gen": [
+					"exec"
+				],
+				"/usr/local/bin/byway presets": [
+					"exec"
+				],
+				"/usr/local/bin/byway top *": [
+					"exec"
+				],
+				"/usr/local/bin/byway lang *": [
+					"exec"
+				],
+				"/usr/local/bin/byway update --check": [
+					"exec"
+				],
+				"/usr/local/bin/byway engine --check": [
+					"exec"
+				],
+				"/usr/local/bin/byway job update": [
+					"exec"
+				],
+				"/usr/local/bin/byway job engine tested": [
+					"exec"
+				],
+				"/usr/local/bin/byway job log": [
+					"exec"
+				],
+				"/usr/local/bin/byway export": [
+					"exec"
+				],
+				"/usr/local/bin/byway export --with-key": [
+					"exec"
+				],
+				"/usr/local/bin/byway import /tmp/byway-import.txt": [
+					"exec"
+				],
+				"/usr/local/bin/byway import /tmp/byway-import.txt --no-key": [
+					"exec"
+				],
+				"/usr/local/bin/byway clear *": [
+					"exec"
+				],
+				"/usr/local/bin/byway sub *": [
+					"exec"
+				],
+				"/etc/init.d/byway reload": [
+					"exec"
+				],
+				"/etc/init.d/byway restart": [
+					"exec"
+				]
 			},
-			"uci": [ "byway" ]
+			"uci": [
+				"byway"
+			]
 		}
 	}
 }

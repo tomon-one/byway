@@ -671,3 +671,6 @@ xmux не ограничивает соединения: ядро собрано
 ключ не разобрался: сбой разборщика (ucode)	the key could not be parsed: the parser (ucode) failed
 есть ucode (разбор ключей)	ucode is present (key parsing)
 нет ucode — ключи не разбираются	no ucode — keys cannot be parsed
+движок работает от root	the engine runs as root
+движок работает не от root (пользователь byway)	the engine runs as a non-root user (byway)
+права не урезаны: нет /sbin/ujail (пакет procd-ujail) либо задано byway.main.xray_root=1	privileges are not reduced: no /sbin/ujail (procd-ujail package) or byway.main.xray_root=1 is set

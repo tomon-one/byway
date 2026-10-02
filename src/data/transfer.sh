@@ -1,5 +1,5 @@
-# Перенос настроек: export, import, clear. Ключ попадает в выгрузку только
-# с --with-key; import кладёт прежнее в before-import.
+# Перенос настроек: export, import, clear. Ключ в выгрузке -- только с
+# --with-key; import кладёт прежнее в before-import.
 
 # ── перенос настроек ───────────────────────────────────────────────────────
 # Формат -- один текстовый файл, читаемый глазами и вставляемый в переписку:
@@ -16,12 +16,14 @@ EXPORT_KEYS="enabled conn_mode node_url sub_url outbound_json conn_label
              show_usage mux_concurrency probe_interval guard block_quic allow_insecure
              lists_update dns_route on_failure node_urls lang update_check
              auto_update auto_update_hour"
+
 # xray_bin не переносится: это путь к программе, которую byway запускает от
 # root, из чужого файла его брать не надо (xray_ok удержит, но незачем), и
 # он машинный -- на другом роутере пути обычно нет.
 
 # Опции с ключом: ими различаются «поделиться настройкой» и «отдать доступ».
 SECRET_KEYS="node_url node_urls sub_url outbound_json"
+
 # Списочные опции UCI: вводятся через add_list, иначе одна строка с пробелами.
 LIST_KEYS="preset interface node_urls"
 

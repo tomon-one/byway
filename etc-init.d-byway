@@ -141,6 +141,42 @@ byway_running() {
 	ps w 2>/dev/null | grep -q "[r]un -c $CONF"
 }
 
+# Pid самого Xray. Не от root движок идёт через ujail: в pid-файле procd --
+# обёртка, Xray -- её потомок.
+xray_main_pid() {
+	_xp=$(cat /var/run/byway.pid 2>/dev/null)
+	[ "$(readlink "/proc/$_xp/exe" 2>/dev/null)" = /sbin/ujail ] &&
+		_xp=$(pgrep -P "$_xp" 2>/dev/null | head -1)
+	printf '%s' "$_xp"
+}
+
+# Xray не от root: пользователь byway и два права, через ujail, как ntpd и
+# hostapd. CAP_NET_BIND_SERVICE -- DNS-вход на 53-м порту; для tproxy
+# (IP_TRANSPARENT) и метки трафика (SO_MARK) с ядра 5.17 хватает узкого
+# CAP_NET_RAW, раньше SO_MARK требовал CAP_NET_ADMIN. От root -- без ujail
+# (пакет procd-ujail) либо с byway.main.xray_root=1. Код 0 -- от byway.
+CAPS=/var/run/byway-caps.json
+ACCESS=/tmp/byway-access.log
+xray_user_prep() {
+	[ "$(uci -q get byway.main.xray_root)" = "1" ] && return 1
+	[ -x /sbin/ujail ] || return 1
+	if ! user_exists byway; then
+		_g=$(group_add_next byway) || return 1
+		user_add byway "" "$_g" byway /var/run/byway /bin/false || return 1
+	fi
+	_kv=$(uname -r | awk -F. '{ print $1 * 1000 + $2 }')
+	if [ "${_kv:-0}" -ge 5017 ]; then _net=CAP_NET_RAW; else _net=CAP_NET_ADMIN; fi
+	_c="\"$_net\", \"CAP_NET_BIND_SERVICE\""
+	printf '{ "bounding": [ %s ], "effective": [ %s ], "ambient": [ %s ], "permitted": [ %s ], "inheritable": [ %s ] }\n' \
+		"$_c" "$_c" "$_c" "$_c" "$_c" > "$CAPS" || return 1
+	# Конфиг (в нём ключ) -- на чтение группе byway; журнал обращений пишет
+	# сам движок.
+	chgrp byway "$CONF" 2>/dev/null && chmod 640 "$CONF" 2>/dev/null || return 1
+	[ -e "$ACCESS" ] || : > "$ACCESS"
+	chown byway:byway "$ACCESS" 2>/dev/null && chmod 600 "$ACCESS" 2>/dev/null || return 1
+	return 0
+}
+
 # Признак «start_service отказал». Нужен потому, что rc.common зовёт
 # service_started независимо от того, чем кончился start_service: фоновый
 # цикл из трёх попыток подъёма уходил работать даже тогда, когда причина
@@ -299,8 +335,19 @@ start_service() {
 		fi
 	fi
 
+	_xu=0
+	xray_user_prep && _xu=1
+
 	procd_open_instance byway
 	procd_set_param command "$XRAY" run -c "$CONF"
+	if [ "$_xu" = 1 ]; then
+		# Без файлового заключения, как у hostapd: ujail только снимает права.
+		procd_add_jail byway
+		procd_set_param capabilities "$CAPS"
+		procd_set_param user byway
+		procd_set_param group byway
+		procd_set_param no_new_privs 1
+	fi
 	# Последний ноль — retry, и он означает «перезапускать без предела».
 	# Было пять, и это оказалось опасно: procd считает не «пять падений за
 	# час», а сбрасывает счётчик только после прогона длиннее часа. Шесть
@@ -476,8 +523,8 @@ reload_service() {
 	# Ядро сменили опцией xray_bin (руками или из панели): конфиг под новое
 	# ядро нередко выходит тем же байт в байт, и по сверке ниже служба
 	# оставалась на прежнем процессе. Сверяем запущенный файл с заданным.
-	local _xp _xe
-	_xp=$(cat /var/run/byway.pid 2>/dev/null)
+	local _xp _xe _xr
+	_xp=$(xray_main_pid)
 	_xe=$(readlink "/proc/$_xp/exe" 2>/dev/null || true)
 	# Предел памяти живёт в окружении процесса, конфиг от него не меняется:
 	# без этой сверки reload его не видел, нужен был restart руками.
@@ -486,6 +533,16 @@ reload_service() {
 	_mlr=$(tr '\0' '\n' < "/proc/$_xp/environ" 2>/dev/null | sed -n 's/^GOMEMLIMIT=//p')
 	if [ -n "$_xe" ] && [ "$_mlw" != "$_mlr" ]; then
 		logger -t byway "reload: сменился предел памяти, перезапуск"
+		_xe=changed
+	fi
+	# xray_root сменили: от кого движок работает, видно по Uid процесса.
+	_xr=$(awk '/^Uid:/ { print ($2 == 0) ? "root" : "user" }' "/proc/$_xp/status" 2>/dev/null)
+	if [ -n "$_xe" ] && [ -n "$_xr" ] && { [ "$(uci -q get byway.main.xray_root)" = "1" ] || [ ! -x /sbin/ujail ]; } &&
+	   [ "$_xr" = user ]; then
+		logger -t byway "reload: движок переводится на root (xray_root), перезапуск"
+		_xe=changed
+	elif [ -n "$_xe" ] && [ "$_xr" = root ] && [ "$(uci -q get byway.main.xray_root)" != "1" ] && [ -x /sbin/ujail ]; then
+		logger -t byway "reload: движок переводится на пользователя byway, перезапуск"
 		_xe=changed
 	fi
 	if [ -n "$_xe" ] && [ "$_xe" != "$(readlink -f "$XRAY" 2>/dev/null)" ]; then
