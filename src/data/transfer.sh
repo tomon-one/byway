@@ -106,7 +106,7 @@ path_ok() {
         # Свой каталог открыт для выгрузок, но не для СВОИХ рабочих файлов:
         # запись поверх config.json, byway.prev (откат автообновления) или
         # списков читается потом как своё и выглядит как порча данных.
-        /etc/byway/config.json|/etc/byway/byway.prev|/etc/byway/.binmd5|\
+        /etc/byway/config.json|/etc/byway/byway.prev|/etc/byway/prev.tgz|/etc/byway/.binmd5|\
         /etc/byway/dns-saved|/etc/byway/domains.lst|/etc/byway/subnets.lst|\
         /etc/byway/usage.tsv|/etc/byway/health.log|/etc/byway/presets/*|\
         /etc/byway/routes/*|/etc/byway/lang/*) return 1 ;;

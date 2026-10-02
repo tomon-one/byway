@@ -314,7 +314,7 @@ report [файл]	report [file]
 не распаковалось -- ничего не тронуто	unpacking failed -- nothing was touched
 в пакете нет install.sh -- ничего не тронуто	there is no install.sh in the package -- nothing was touched
 установка	installing
-проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же	check for a new byway version and install it; --check only checks, --force reinstalls the current one
+проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же, --rollback — вернуть прежнюю	check whether a new byway version exists and install it; --check — only check, --force — reinstall the same one, --rollback — restore the previous one
 GitHub не ответил -- похоже, нет связи	GitHub did not answer -- looks like there is no connection
 на GitHub нет ни репозитория %s, ни его выпусков	GitHub has neither the %s repository nor its releases
 GitHub ответил «слишком часто спрашиваете» -- подождать час	GitHub answered "too many requests" -- wait an hour
@@ -437,8 +437,8 @@ itdoginfo: подсети для сервисов, которые работаю
 да	yes
 нет	no
 путь к движку отклонён: %s	the core path was rejected: %s
-движок не поднимается пять минут -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: доступа наружу нет	the core has not come up for five minutes -- interception removed, the "no traffic outside the VPN" block STAYS: no internet access
-движок не поднимается пять минут -- перехват снят, дом остаётся с интернетом и без туннеля	the core has not come up for five minutes -- interception removed, the home network keeps internet access without the tunnel
+движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: доступа наружу нет	the core has not come up for five minutes -- interception removed, the "no traffic outside the VPN" block STAYS: no internet access
+движок не поднимается -- перехват снят, дом остаётся с интернетом и без туннеля	the core has not come up for five minutes -- interception removed, the home network keeps internet access without the tunnel
 byway watch: правил перехвата нет при работающем движке -- восстановление	byway watch: interception rules missing while the core is running -- restoring
 автообновление: byway правлен руками -- не трогается	auto-update: byway has been edited by hand -- leaving it alone
 автообновление: сумма выложенной версии неизвестна -- не трогается	auto-update: the checksum of the published version is unknown -- leaving it alone
@@ -486,7 +486,6 @@ dnsmasq отвечает по пину сам, подставного адрес
 адрес подписки указывает на сам роутер	the subscription address points at the router itself
 адрес подписки ведёт внутрь сети (%s) — byway туда не ходит	the subscription address leads inside the network (%s) - byway does not go there
 автообновление: копия для отката не сделалась -- установка ОТМЕНЕНА (место на /overlay?)	auto-update: the rollback copy was not made - installation CANCELLED (space on /overlay?)
-автообновление: ОТКАТ НЕ УДАЛСЯ -- на диске %s, копия в %s. Восстановить руками: cp %s /usr/local/bin/byway	auto-update: ROLLBACK FAILED - %s is on disk, the copy is in %s. Restore by hand: cp %s /usr/local/bin/byway
 у вас это не ночь: в Москве это на три часа позже, во Владивостоке на десять — перезапуск службы среди дня. Лечится в LuCI (Система → Общие настройки → Часовой пояс) либо uci set system.@system[0].timezone=... (именно timezone: zonename часы не двигает)	that is not night where you are: three hours later in Moscow, ten in Vladivostok - the service restarts in the middle of the day. Fix it in LuCI (System - General Settings - Timezone) or uci set system.@system[0].timezone=... (specifically timezone: zonename does not change the clock)
 если причина устранена — поставить вручную: byway update --force	if the cause is gone - install it by hand: byway update --force
 без ярлыка	no label
@@ -674,3 +673,28 @@ xmux не ограничивает соединения: ядро собрано
 движок работает от root	the engine runs as root
 движок работает не от root (пользователь byway)	the engine runs as a non-root user (byway)
 права не урезаны: нет /sbin/ujail (пакет procd-ujail) либо задано byway.main.xray_root=1	privileges are not reduced: no /sbin/ujail (procd-ujail package) or byway.main.xray_root=1 is set
+свой конфиг: включено «VPN для программ на роутере», а метки в нём нет — если адрес сервера попадёт в списки, соединение движка к нему уйдёт в перехват по кругу; дописать в streamSettings поле sockopt.mark = %s	own config: "VPN for programs on the router" is on, but the config has no mark — if the server address ends up in the lists, the engine's connection to it loops back into interception; add the field sockopt.mark = %s to streamSettings
+не отвечает ни один ключ	no key answers
+vpn\tok\tотвечают %s из %s ключей, лучший — %s мс\n	vpn\tok\t%s of %s keys answer, best — %s ms\n
+vpn\twarn\tотвечают %s из %s ключей, лучший — %s мс\n	vpn\twarn\t%s of %s keys answer, best — %s ms\n
+Xray %s уже лежит рядом — переключение без загрузки	Xray %s is already next to it — switching without a download
+этот движок не принял конфиг — остался прежний	this engine rejected the config — the previous one stays
+готово: Xray %s; прежнее ядро осталось рядом: %s	done: Xray %s; the previous core stays next to it: %s
+туннель на этом движке не поднялся — возврат прежнего	the tunnel did not come up on this engine — switching back
+движок переключён: %s -> %s	engine switched: %s -> %s
+рядом включён pbr	pbr is enabled next to it
+он тоже метит трафик и правит ip rule: его метки и таблицы не должны совпадать с меткой byway %s и таблицей %s	it also marks traffic and edits ip rules: its marks and tables must not match the byway mark %s and table %s
+адрес сервера сменился (%s) -- пересборка конфига	the server address changed (%s) -- rebuilding the config
+нет задачи cron byway pulse	the byway pulse cron job is missing
+без неё при отказе движка дом остаётся без DNS до 10 минут вместо 1–2: byway update либо завести вручную: * * * * * /usr/local/bin/byway pulse	without it, if the engine fails, the home stays without DNS for up to 10 minutes instead of 1–2: byway update, or add by hand: * * * * * /usr/local/bin/byway pulse
+откатывать не на что: копия делается при byway update	nothing to roll back to: the copy is made by byway update
+копия прежней версии для отката не сделалась (место на флеше?) -- ничего не тронуто	the rollback copy of the previous version was not made (flash space?) -- nothing touched
+установка оборвалась -- возврат прежней версии	the installation broke off -- restoring the previous version
+проверка туннеля на новой версии (до 2,5 минуты)	checking the tunnel on the new version (up to 2.5 minutes)
+готово: туннель на новой версии работает	done: the tunnel works on the new version
+на новой версии туннель не поднялся -- возврат прежней	the tunnel did not come up on the new version -- restoring the previous one
+копии прежней версии нет	there is no copy of the previous version
+откат не удался -- копия в %s	rollback failed -- the copy is in %s
+откат лёг не целиком -- копия в %s	rollback was only partly applied -- the copy is in %s
+прежняя версия возвращена	the previous version is restored
+автообновление: ОТКАТ НЕ УДАЛСЯ -- копия в %s, вернуть: byway update --rollback	auto-update: ROLLBACK FAILED -- the copy is in %s, restore with: byway update --rollback

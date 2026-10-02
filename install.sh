@@ -64,7 +64,7 @@ t() {
       "контрольная сумма выпуска (.dgst) не получена — архив отброшен") printf %s "the release checksum (.dgst) could not be fetched — archive discarded" ;;
       "архив не сошёлся с контрольной суммой SHA2-256 из выпуска — отброшен") printf %s "the archive does not match the SHA2-256 checksum from the release — discarded" ;;
       "архив сверен с контрольной суммой из выпуска") printf %s "archive matches the release checksum" ;;
-      "нет sha256sum — архив движка не сверен с контрольной суммой выпуска") printf %s "no sha256sum — the core archive is not checked against the release checksum" ;;
+      "нет sha256sum — архив движка нечем сверить, ставится ядро из пакетов OpenWrt") printf %s "no sha256sum — the core archive cannot be checked, the core from OpenWrt packages is installed" ;;
       "-- по умолчанию:") printf %s "-- default:" ;;
       "── Установка ──") printf %s "── Installing ──" ;;
       "── Готово ──") printf %s "── Done ──" ;;
@@ -142,6 +142,7 @@ t() {
       "в cron добавлено НЕ ВСЁ — проверить: crontab -l") printf %s "not everything made it into cron — check: crontab -l" ;;
       "  нет задачи byway watch: не будет ни проверки версии, ни обновления списков") printf %s "  the byway watch job is missing: no version check and no list updates" ;;
       "  нет задачи byway stat: учёт использования собираться не будет") printf %s "  the byway stat job is missing: usage accounting will not be collected" ;;
+      "  нет задачи byway pulse: при отказе движка дом дольше останется без DNS") printf %s "  the byway pulse job is missing: if the engine fails, the home stays without DNS longer" ;;
       "нужна OpenWrt 22.03 или новее: byway работает только с firewall4, а его здесь нет") printf %s "OpenWrt 22.03 or newer is required: byway only works with firewall4, which is missing here" ;;
       "  на 21.02 и старше другой файрвол (iptables): туннель не получат гостевые сети — наполовину рабочий byway не ставится") printf %s "  21.02 and older use a different firewall (iptables): guest networks would not get the tunnel — byway does not install half-working" ;;
       "  узнать свою версию: cat /etc/openwrt_release") printf %s "  check your version: cat /etc/openwrt_release" ;;
@@ -774,8 +775,8 @@ xray_from_github() {
         { warn "не скачался"; rm -f "$_z"; return 1; }
     # Сверка с SHA2-256 из .dgst того же выпуска: от битой загрузки и от
     # посредника, отдавшего не то, -- а зеркало gh-proxy здесь ЧУЖОЕ. Не
-    # подпись: .dgst лежит рядом с архивом. Нет sha256sum -- ставим как
-    # раньше, но говорим вслух: отказ в установке тут хуже непроверенного.
+    # подпись: .dgst лежит рядом с архивом. Нет sha256sum -- архив не ставим,
+    # берётся ядро из пакетов OpenWrt (так же отказывает byway engine).
     if command -v sha256sum >/dev/null 2>&1; then
         _zw=$(dl --max-time 30 "$(gh "$_zu.dgst")" |
               sed -n 's/^SHA2-256= *\([0-9a-f]\{64\}\).*/\1/p' | head -1)
@@ -788,7 +789,8 @@ xray_from_github() {
         fi
         say "архив сверен с контрольной суммой из выпуска"
     else
-        warn "нет sha256sum — архив движка не сверен с контрольной суммой выпуска"
+        warn "нет sha256sum — архив движка нечем сверить, ставится ядро из пакетов OpenWrt"
+        rm -f "$_z"; return 1
     fi
 
     mkdir -p /usr/local/bin
@@ -1217,6 +1219,12 @@ if ! crontab -l 2>/dev/null | grep -q "byway stat"; then
     (crontab -l 2>/dev/null || true; echo "7 * * * * /usr/local/bin/byway stat >/dev/null 2>&1") | crontab -
     NEED_CRON=1
 fi
+# Раз в минуту -- только «движок упал/вернулся»: окно без DNS 1–2 минуты
+# вместо 5–10 у сторожа (byway pulse).
+if ! crontab -l 2>/dev/null | grep -q "byway pulse"; then
+    (crontab -l 2>/dev/null || true; echo "* * * * * /usr/local/bin/byway pulse >/dev/null 2>&1") | crontab -
+    NEED_CRON=1
+fi
 if [ "${NEED_CRON:-0}" = "1" ]; then
     /etc/init.d/cron restart >/dev/null 2>&1 || true
     # Отчитываемся по ФАКТУ, а не по намерению. Прежняя строка сообщала об
@@ -1232,6 +1240,8 @@ if [ "${NEED_CRON:-0}" = "1" ]; then
         [ "$_cw" = 1 ] || warn "  нет задачи byway watch: не будет ни проверки версии, ни обновления списков"
         [ "$_cs" = 1 ] || warn "  нет задачи byway stat: учёт использования собираться не будет"
     fi
+    crontab -l 2>/dev/null | grep -q "byway pulse" ||
+        warn "  нет задачи byway pulse: при отказе движка дом дольше останется без DNS"
 fi
 
 # Правило для зон с политикой input REJECT -- гостевой и подобных. tproxy не

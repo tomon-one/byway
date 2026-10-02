@@ -160,6 +160,11 @@ if (scheme == 'vmess') {
     // N.PATH, где пустой заменён на «/».
     if (N.TYPE == 'grpc') N.SVC = jf('path');
     N.PROTO = 'vmess';
+    // Прочие поля JSON (allowInsecure и т. п.) не переносятся -- называем.
+    for (let k in keys(o))
+        if (!(k in [ 'v', 'ps', 'add', 'port', 'id', 'aid', 'scy', 'net', 'type', 'host',
+                     'path', 'tls', 'sni', 'alpn', 'fp' ]))
+            warnf("параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он", k);
     node_json_ok();
     flush(); stop();
 }
@@ -174,9 +179,16 @@ if (scheme == 'ss') {
     // Делим по последней «@»: в открытом пароле она законна.
     let ui = substr(rest, 0, rindex(rest, '@'));
     let hp = lastafter(rest, '@');
-    // Плагин (obfs-local, v2ray-plugin) Xray-core не запускает.
+    // Плагин (obfs-local, v2ray-plugin) Xray-core не запускает; прочие
+    // параметры не переносятся -- называем.
     if (index(hp, 'plugin=') >= 0)
         warn("plugin у shadowsocks не переносится: Xray-core плагины не запускает, сервер с плагином не ответит");
+    if (index(hp, '?') >= 0)
+        for (let l in split(after(hp, '?'), '&')) {
+            let pn = before(l, '=');
+            if (pn != '' && pn != 'plugin')
+                warnf("параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он", pn);
+        }
     hp = before(before(hp, '?'), '/');
     let plain = index(ui, ':') >= 0 ? pctd(ui) : b64d(ui);
     if (substr(hp, 0, 1) == '[') { flush(); dief("адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя", hp); }

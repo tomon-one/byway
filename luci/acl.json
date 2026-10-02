@@ -120,6 +120,9 @@
 				],
 				"/etc/init.d/byway restart": [
 					"exec"
+				],
+				"/usr/local/bin/byway job engine [0-9]*": [
+					"exec"
 				]
 			},
 			"uci": [

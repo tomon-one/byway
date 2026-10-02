@@ -34,6 +34,7 @@ case "${1:-}" in
   import) shift; cmd_import "$@" ;;
   version|--version|-v) echo "byway $BYWAY_VERSION" ;;
   watch)  cmd_watch ;;
+  pulse)  cmd_pulse ;;
   job)    shift; cmd_job "$@" ;;
   stat)   cmd_stat ;;
   top)    shift; cmd_top "$@" ;;
@@ -60,7 +61,7 @@ case "${1:-}" in
     _help 'sub АДРЕС' 'скачать подписку'
     _help 'presets' 'обновить готовые списки'
     _help 'top [N]' 'чем реально пользуются'
-    _help 'update [--check|--force]' 'проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же'
+    _help 'update [--check|--force|--rollback]' 'проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же, --rollback — вернуть прежнюю'
     _help 'engine [ВЕРСИЯ|tested|newest|stable|restore|/tmp/ФАЙЛ]' 'есть ли обновление ядра Xray-core, и его замена; без аргумента — ещё и подробности'
     _help 'lang [ru|en]' 'язык вывода и панели; английский словарь докачивается при переключении'
     _help 'report [файл]' 'собрать отчёт для обращения, без ключа от VPN'

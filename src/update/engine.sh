@@ -242,6 +242,13 @@ cmd_engine() {
     mkdir -p "$_ed"
     trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT INT TERM
 
+    # Нужная версия уже лежит рядом -- переключение без загрузки.
+    if [ -n "$_eov" ] && [ "$_enew" != "$_eold" ] && xray_ok "$_enew" &&
+       "$_enew" version >/dev/null 2>&1; then
+        eng_switch
+        return 0
+    fi
+
     # Архив в память: ~14 МБ. Меньше 40 МБ доступно -- живой движок рядом с
     # ним рискует OOM, а он и есть туннель.
     _emk=$(eng_mem_kb || echo 0)
@@ -529,4 +536,37 @@ eng_dial_bug() {
     esac
     printf '%s\n%s\n' "$_dk" "$_db" > "$_dc" 2>/dev/null || true
     [ "$_db" = 1 ]
+}
+
+# Переключение на ядро, которое уже лежит рядом: проверка конфига, перезапуск,
+# проверка туннеля; не поднялось -- обратно на прежнее. Оба файла остаются.
+eng_switch() {
+    sayf "Xray %s уже лежит рядом — переключение без загрузки" "$_env"
+    _etun0=0
+    eng_idle || { tunnel_ok && _etun0=1; } || true
+    if eng_idle; then
+        eng_bin_set "$_enew"
+        sayf "служба не работает (выключена или нет ключа) — ядро заменено без проверки туннеля: Xray %s" "$_env"
+        return 0
+    fi
+    if ! eng_gen "$_enew"; then
+        tail -6 "$_ed/gen.log" | sed 's/^/    /'
+        eng_gen "$_eold" || true
+        die "этот движок не принял конфиг — остался прежний"
+    fi
+    eng_bin_set "$_enew"
+    warn "перезапуск службы: туннель пропадёт на несколько секунд"
+    /etc/init.d/byway restart >/dev/null 2>&1 || true
+    say "проверка туннеля на новом движке (до 2,5 минуты)"
+    if eng_wait; then
+        logf 'движок переключён: %s -> %s' "$_eov" "$_env"
+        sayf "готово: Xray %s; прежнее ядро осталось рядом: %s" "$_env" "$_eold"
+        return 0
+    fi
+    warn "туннель на этом движке не поднялся — возврат прежнего"
+    eng_bin_set "$_eold"
+    eng_gen "$_eold" || true
+    /etc/init.d/byway restart >/dev/null 2>&1 || true
+    logf 'движок: %s не поднялся, возвращён %s' "$_env" "$_eov"
+    dief "возвращён %s" "$_eov"
 }

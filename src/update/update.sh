@@ -11,7 +11,8 @@ RELNOTE=/tmp/byway-relnote    # первая строка описания вы�
 
 AULOG=/tmp/byway-autoupdate   # чем кончилось ночное обновление
 
-PREVBIN=/etc/byway/byway.prev # копия прежней версии, для отката
+PREVBIN=/etc/byway/byway.prev # прежняя копия одного скрипта (до 0.3.0), удаляется
+PREVSET=/etc/byway/prev.tgz   # прежняя версия целиком (скрипт, init, панель) для отката
 
 AUTRY=/etc/byway/.au-try      # когда пробовали обновиться; флеш
 
@@ -63,7 +64,14 @@ latest_version() {
         "$(printf '%s' "$_body" | sed -n 's/.*"tag_name"[^"]*"v*\([0-9][^"]*\)".*/\1/p' | head -1)"
 }
 
+# Код выхода для ночного обновления: 0 -- поставлено и туннель работает,
+# 3 -- не поднялось и откачено, 4 -- откат не удался, 5 -- копия для отката
+# не сделалась (ничего не тронуто), прочее -- не скачалось.
 cmd_update() {
+    if [ "${1:-}" = --rollback ]; then
+        upd_restore || die "откатывать не на что: копия делается при byway update"
+        return 0
+    fi
     _lv=$(latest_version)
     _code=${_lv%% *}; _new=${_lv#* }
     if [ -z "$_new" ] || [ "$_new" = "$_code" ]; then
@@ -107,8 +115,75 @@ cmd_update() {
     _src=$(find "$_d" -maxdepth 2 -name install.sh 2>/dev/null | head -1)
     [ -n "$_src" ] || die "в пакете нет install.sh -- ничего не тронуто"
 
+    # Связь до установки: откатывать за мёртвый сервер нельзя (eng_wait).
+    _etun0=0
+    eng_idle || { tunnel_ok && _etun0=1; } || true
+    if ! upd_snapshot; then
+        warn "копия прежней версии для отката не сделалась (место на флеше?) -- ничего не тронуто"
+        exit 5
+    fi
+
     # Ставит install.sh: он один знает, что куда класть и что оставить
     # (конфигурация, списки); копия этой логики здесь разошлась бы с ним.
     say "установка"
-    ( cd "$(dirname "$_src")" && sh install.sh )
+    if ! ( cd "$(dirname "$_src")" && sh install.sh ); then
+        # Под set -e установщик мог успеть разложить часть файлов.
+        warn "установка оборвалась -- возврат прежней версии"
+        upd_restore || exit 4
+        exit 3
+    fi
+    eng_idle && return 0
+    say "проверка туннеля на новой версии (до 2,5 минуты)"
+    if eng_wait; then
+        say "готово: туннель на новой версии работает"
+        return 0
+    fi
+    warn "на новой версии туннель не поднялся -- возврат прежней"
+    upd_restore || exit 4
+    exit 3
+}
+
+# Прежняя версия целиком -- в архив на флеш: откат одного скрипта оставлял
+# новые init, панель и словарь при старом byway. Только существующие пути.
+upd_snapshot() {
+    _us=""
+    for _uf in /usr/local/bin/byway /etc/init.d/byway /usr/local/bin/byway-uninstall \
+               /www/luci-static/resources/view/byway /www/luci-static/resources/byway \
+               /usr/share/luci/menu.d/luci-app-byway.json \
+               /usr/share/rpcd/acl.d/luci-app-byway.json /etc/byway/lang; do
+        [ -e "$_uf" ] && _us="$_us ${_uf#/}"
+    done
+    rm -f "$PREVBIN" 2>/dev/null || true
+    # shellcheck disable=SC2086
+    tar czf "$PREVSET.new" -C / $_us 2>/dev/null && [ -s "$PREVSET.new" ] &&
+        mv "$PREVSET.new" "$PREVSET" && chmod 600 "$PREVSET" && return 0
+    rm -f "$PREVSET.new" 2>/dev/null || true
+    return 1
+}
+
+# Вернуть архив прежней версии и перезапустить службу. Автозапуск -- заново
+# по init прежней версии (номер START у версий разный).
+upd_restore() {
+    [ -s "$PREVSET" ] || { warn "копии прежней версии нет"; return 1; }
+    # Через каталог в памяти и mv на место: запись поверх файла, который
+    # сейчас исполняется (byway update --rollback), портила бы его чтение.
+    _ur=/tmp/byway-rollback.$$
+    rm -rf "$_ur" 2>/dev/null || true
+    mkdir -p "$_ur"
+    tar xzf "$PREVSET" -C "$_ur" 2>/dev/null || { rm -rf "$_ur"; warnf "откат не удался -- копия в %s" "$PREVSET"; return 1; }
+    _urf=0
+    for _uf in $(cd "$_ur" && find . -type f); do
+        _ud=${_uf#.}
+        mkdir -p "$(dirname "$_ud")" 2>/dev/null || true
+        cp -p "$_ur$_ud" "$_ud.new" 2>/dev/null && mv "$_ud.new" "$_ud" 2>/dev/null || _urf=1
+    done
+    rm -rf "$_ur" 2>/dev/null || true
+    [ "$_urf" = 0 ] || { warnf "откат лёг не целиком -- копия в %s" "$PREVSET"; return 1; }
+    md5sum /usr/local/bin/byway 2>/dev/null | cut -d' ' -f1 > "$BINSUM" 2>/dev/null || true
+    /etc/init.d/byway disable >/dev/null 2>&1 || true
+    /etc/init.d/byway enable >/dev/null 2>&1 || true
+    /etc/init.d/rpcd reload >/dev/null 2>&1 || true
+    /etc/init.d/byway restart >/dev/null 2>&1 || true
+    say "прежняя версия возвращена"
+    return 0
 }

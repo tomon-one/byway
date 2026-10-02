@@ -46,6 +46,7 @@ cmd_watch() {
     watch_upcheck
     watch_autoupdate
     watch_access
+    watch_hosts
 
     _now="nft=${_tab:-0} rule=${_rul:-0} route=${_rt:-0} dns=$_dm fakeip=$_fk"
     _cur="pid=${_pid:-none} $_now"
@@ -135,38 +136,14 @@ watch_heal() {
     # Движка нет при включённой службе -- упал, а не выключен; при закрытой
     # модели отказа ради этого случая она и заведена.
     if [ -z "$_pid" ] && [ "$(u enabled)" = "1" ] && [ ! -f "$PLUMB_DOWN" ]; then
-        block_on
-        # Обвязка стоит, а движка нет: dnsmasq шлёт весь резолв дома на мёртвый
-        # вход (единственный апстрим, noresolv=1). Ветка починки ниже требует
-        # живого процесса, block_on при open выходит сразу. Действуем на
-        # ВТОРОМ подряд наблюдении (5 мин): procd поднимает движок сам за
-        # секунды, на каждый рестарт обвязку не снимаем.
-        _miss=$(cat "$NOPID" 2>/dev/null || echo 0)
-        _miss=$((_miss + 1))
-        printf '%s' "$_miss" > "$NOPID" 2>/dev/null || true
-        case " $_dm " in
-          *" $(dns_addr) "*)
-            if [ "${_miss:-0}" -ge 2 ]; then
-                # Текст зависит от модели: при закрытой обвязку снимаем, а
-                # запрет оставляем -- интернета нет.
-                if [ "$(u on_failure)" != "open" ]; then
-                    logt "движок не поднимается пять минут -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: доступа наружу нет"
-                else
-                    logt "движок не поднимается пять минут -- перехват снят, дом остаётся с интернетом и без туннеля"
-                fi
-                # --service: метку «сняли руками» не ставим, иначе сторож не
-                # поднял бы обвязку, когда движок вернётся. --keep-block:
-                # снимает сторож, не человек; безусловное снятие запрета
-                # открывало при закрытой модели окно прямого трафика.
-                cmd_plumb off --service --keep-block >/dev/null 2>&1 || true
-                _healed="(nodns)"
-                # Пересобираем состояние: в журнал -- то, что стало.
-                _tab=$(nft list tables 2>/dev/null | grep -cE "^table inet $TABLE\$" || true)
-                _rul=$(ip rule show 2>/dev/null | grep -cE "$(rule_re)" || true)
-                _rt=$(ip route show table "$RT_TABLE" 2>/dev/null | grep -c "^local default" || true)
-                _dm=$(uci -q get "$DNSSEC.server" 2>/dev/null || echo none)
-            fi ;;
-        esac
+        engine_gone
+        if [ "$_healed" = "(nodns)" ]; then
+            # Пересобираем состояние: в журнал -- то, что стало.
+            _tab=$(nft list tables 2>/dev/null | grep -cE "^table inet $TABLE\$" || true)
+            _rul=$(ip rule show 2>/dev/null | grep -cE "$(rule_re)" || true)
+            _rt=$(ip route show table "$RT_TABLE" 2>/dev/null | grep -c "^local default" || true)
+            _dm=$(uci -q get "$DNSSEC.server" 2>/dev/null || echo none)
+        fi
     else
         rm -f "$NOPID" 2>/dev/null || true
     fi
@@ -176,15 +153,7 @@ watch_heal() {
     # запрет. `u guard` не спрашиваем (как у block_on): это возврат из
     # запрета, не починка, и выключенный сторож не должен оставлять запрет.
     if [ -n "$_pid" ] && [ -f "$BLOCK_MARK" ]; then
-        if [ "$(u enabled)" != "1" ]; then
-            block_off
-        elif cmd_plumb on >/dev/null 2>&1; then
-            logt "движок вернулся -- перехват поднят, запрет «не пускать мимо VPN» снят"
-            _healed="(healed)"
-        else
-            logt "движок вернулся, но перехват не поднялся -- запрет «не пускать мимо VPN» остаётся"
-            _healed="(failed)"
-        fi
+        engine_back
     fi
     if [ -n "$_pid" ] && [ "$(u enabled)" = "1" ] &&
        [ "$(u guard)" != "0" ] && [ ! -f "$PLUMB_DOWN" ]; then
@@ -349,66 +318,30 @@ watch_au_install() {
            [ -z "$(find "$AUTRY" -mmin -1440 2>/dev/null)" ]; then
             : > "$AUTRY" 2>/dev/null || true
             logf 'автообновление: установка %s (было %s)' "$_au" "$BYWAY_NUM"
-            # Копия для отката проверяется, без неё не ставим: /overlay 43.7 МБ
-            # уже доходил до нуля свободных байт.
-            _aubk=1
-            cp /usr/local/bin/byway "$PREVBIN" 2>/dev/null && [ -s "$PREVBIN" ] || _aubk=0
-            chmod 755 "$PREVBIN" 2>/dev/null || true
-            _auprev=$(md5sum "$PREVBIN" 2>/dev/null | cut -d' ' -f1)
-            if [ "$_aubk" = 0 ]; then
-                logf 'автообновление: копия для отката не сделалась -- установка ОТМЕНЕНА (место на /overlay?)'
-            else
-            # В подоболочке: cmd_update при отказе зовёт die (exit), без скобок
-            # он унёс бы весь прогон сторожа.
+            # Копию всей версии, проверку туннеля и откат делает cmd_update
+            # сам; здесь -- итог по коду. В подоболочке: die (exit) не должен
+            # унести весь прогон сторожа.
             _aurc=0
-            _autun0=0; tunnel_ok && _autun0=1
-            ( cmd_update ) >/dev/null 2>&1 || _aurc=1
-            # Судим делом и на ветке отказа: установщик под set -e успевает
-            # подложить новый бинарник до падения на следующем шаге. «Не
-            # скачалось» -- только если сумма файла не тронута.
-            if [ "$_aurc" = 1 ] &&
-               [ "$(md5sum /usr/local/bin/byway 2>/dev/null | cut -d' ' -f1)" = "$_auprev" ]; then
-                logf 'автообновление: %s не скачалось, работает прежняя' "$_au"
-            else
-                # Судим делом, не кодом установщика: нужно «туннель поднялся».
-                # 15 оборотов по 10 с, не 6: обвязку после рестарта поднимает
-                # фоновый цикл службы (бюджет «до 65 секунд» -- пол, в обороте
-                # есть блокирующий nslookup); на 60-й секунде исправную версию
-                # откатывали.
-                _auok=0
-                for _aut in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-                    sleep 10
-                    if alive_ok && { [ "$_autun0" = 0 ] || tunnel_ok; }; then _auok=1; break; fi
-                done
-                if [ "$_auok" = 1 ]; then
-                    _f 'обновлено до %s, %s\n' "$_au" "$(date '+%Y-%m-%d %H:%M')" > "$AULOG"
-                    logf 'автообновление: %s поднялось' "$_au"
-                    rm -f "$NEWVER" 2>/dev/null || true
-                else
-                    # Ради этого копия: чинить некому, чинит роутер сам.
-                    # AUFAIL -- чтобы следующая ночь не ставила тот же номер.
-                    printf '%s\n' "$_au" > "$AUFAIL" 2>/dev/null || true
-                    # Итог восстановления читается: проглоченный отказ cp
-                    # объявил бы откат состоявшимся и переписал сумму под
-                    # непрошедшую версию, стерев признак поломки.
-                    _aurb=1
-                    cp "$PREVBIN" /usr/local/bin/byway 2>/dev/null || _aurb=0
-                    chmod 755 /usr/local/bin/byway 2>/dev/null || true
-                    if [ "$_aurb" = 0 ]; then
-                        logf 'автообновление: ОТКАТ НЕ УДАЛСЯ -- на диске %s, копия в %s. Восстановить руками: cp %s /usr/local/bin/byway' "$_au" "$PREVBIN" "$PREVBIN"
-                        _f 'ОТКАТ НЕ УДАЛСЯ: на диске %s, копия в %s\n' "$_au" "$PREVBIN" > "$AULOG"
-                    else
-                    # Сумма -- по восстановленному файлу: установщик уже
-                    # переписал .binmd5 суммой новой версии, без этого проверка
-                    # видела бы «правлен руками» каждую ночь.
-                    md5sum /usr/local/bin/byway 2>/dev/null | cut -d' ' -f1 > "$BINSUM" 2>/dev/null || true
-                    /etc/init.d/byway restart >/dev/null 2>&1 || true
-                    _f 'ОТКАТ с %s на %s, %s\n' "$_au" "$BYWAY_NUM" "$(date '+%Y-%m-%d %H:%M')" > "$AULOG"
-                    logf 'автообновление: %s не поднялось -- откат на %s' "$_au" "$BYWAY_NUM"
-                    fi
-                fi
-            fi
-            fi
+            ( cmd_update ) >/dev/null 2>&1 || _aurc=$?
+            case "$_aurc" in
+              0)
+                _f 'обновлено до %s, %s\n' "$_au" "$(date '+%Y-%m-%d %H:%M')" > "$AULOG"
+                logf 'автообновление: %s поднялось' "$_au"
+                rm -f "$NEWVER" 2>/dev/null || true ;;
+              3)
+                # AUFAIL -- чтобы следующая ночь не ставила тот же номер.
+                printf '%s\n' "$_au" > "$AUFAIL" 2>/dev/null || true
+                _f 'ОТКАТ с %s на %s, %s\n' "$_au" "$BYWAY_NUM" "$(date '+%Y-%m-%d %H:%M')" > "$AULOG"
+                logf 'автообновление: %s не поднялось -- откат на %s' "$_au" "$BYWAY_NUM" ;;
+              4)
+                printf '%s\n' "$_au" > "$AUFAIL" 2>/dev/null || true
+                _f 'ОТКАТ НЕ УДАЛСЯ: на диске %s, копия в %s\n' "$_au" "$PREVSET" > "$AULOG"
+                logf 'автообновление: ОТКАТ НЕ УДАЛСЯ -- копия в %s, вернуть: byway update --rollback' "$PREVSET" ;;
+              5)
+                logf 'автообновление: копия для отката не сделалась -- установка ОТМЕНЕНА (место на /overlay?)' ;;
+              *)
+                logf 'автообновление: %s не скачалось, работает прежняя' "$_au" ;;
+            esac
         fi
     return 0
 }
@@ -422,6 +355,92 @@ watch_access() {
        [ "$(wc -c < "$ACCESS" 2>/dev/null || echo 0)" -gt 4194304 ]; then
         : > "$ACCESS"
         logt "журнал обращений превысил 4 МБ и обрезан -- похоже, не запускается учёт трафика (byway stat в cron)"
+    fi
+    return 0
+}
+
+# DNS через туннель: адрес сервера вписан в конфиг при сборке. Раз в час
+# сверяем с внешним резолвером; сменился -- пересборка и reload (иначе туннель
+# стучится в старый адрес до ручного byway gen).
+watch_hosts() {
+    [ "$(u dns_route)" = "tunnel" ] || return 0
+    [ -n "$(find /tmp/byway-hostcheck -mmin -60 2>/dev/null)" ] && return 0
+    : > /tmp/byway-hostcheck
+    _wch=""
+    for _wp in $(grep -o '"hosts": {[^}]*}' "$OUT" 2>/dev/null | grep -o '"[^"]*": "[0-9.]*"' | tr -d '" ' ); do
+        _wn=${_wp%%:*}; _wo=${_wp#*:}
+        _wa=$(server_addr "$_wn")
+        [ -n "$_wa" ] && [ "$_wa" != "$_wo" ] && _wch="$_wch $_wn:$_wo->$_wa"
+    done
+    [ -n "$_wch" ] || return 0
+    logf 'адрес сервера сменился (%s) -- пересборка конфига' "${_wch# }"
+    "$0" gen >/dev/null 2>&1 && /etc/init.d/byway reload >/dev/null 2>&1 || true
+    return 0
+}
+
+# Движка нет при включённой службе -- упал, а не выключен. Запрет -- сразу;
+# перехват DNS снимается на втором промахе подряд (иначе dnsmasq шлёт весь
+# резолв дома в мёртвый вход, единственный апстрим, noresolv=1). procd
+# поднимает упавший движок за секунды -- на каждый перезапуск не снимаем.
+# Зовут сторож и pulse; _dm -- текущие резолверы dnsmasq.
+engine_gone() {
+    block_on
+    _miss=$(cat "$NOPID" 2>/dev/null || echo 0)
+    _miss=$((_miss + 1))
+    printf '%s' "$_miss" > "$NOPID" 2>/dev/null || true
+    case " $_dm " in
+      *" $(dns_addr) "*)
+        if [ "${_miss:-0}" -ge 2 ]; then
+            # Текст зависит от модели: при закрытой обвязку снимаем, а
+            # запрет оставляем -- интернета нет.
+            if [ "$(u on_failure)" != "open" ]; then
+                logt "движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: доступа наружу нет"
+            else
+                logt "движок не поднимается -- перехват снят, дом остаётся с интернетом и без туннеля"
+            fi
+            # --service: метку «сняли руками» не ставим, иначе сторож не
+            # поднял бы обвязку, когда движок вернётся. --keep-block:
+            # снимает сторож, не человек; безусловное снятие запрета
+            # открывало при закрытой модели окно прямого трафика.
+            cmd_plumb off --service --keep-block >/dev/null 2>&1 || true
+            _healed="(nodns)"
+        fi ;;
+    esac
+    return 0
+}
+
+# Движок вернулся при стоящем запрете: respawn procd не зовёт service_started,
+# обвязка цела -- без этого список вечно отвечал бы 0.0.0.0. Удачный plumb on
+# снимает запрет. `u guard` не спрашиваем: это возврат, не починка.
+engine_back() {
+    if [ "$(u enabled)" != "1" ]; then
+        block_off
+    elif cmd_plumb on >/dev/null 2>&1; then
+        logt "движок вернулся -- перехват поднят, запрет «не пускать мимо VPN» снят"
+        _healed="(healed)"
+    else
+        logt "движок вернулся, но перехват не поднялся -- запрет «не пускать мимо VPN» остаётся"
+        _healed="(failed)"
+    fi
+    return 0
+}
+
+# Раз в минуту из cron: только «движок упал» и «движок вернулся». Окно без DNS
+# при неподнимающемся движке -- 1–2 минуты вместо 5–10 у сторожа. В минуты,
+# кратные пяти, ходит сторож: двойной счёт промахов снял бы DNS за полминуты.
+cmd_pulse() {
+    _pm=$(date +%M); _pm=${_pm#0}
+    [ $(( ${_pm:-0} % 5 )) = 0 ] && return 0
+    [ "$(u enabled)" = "1" ] || return 0
+    [ -f "$PLUMB_DOWN" ] && return 0
+    _pid=$(xray_pid)
+    _healed=""
+    if [ -z "$_pid" ]; then
+        _dm=$(uci -q get "$DNSSEC.server" 2>/dev/null || echo none)
+        engine_gone
+    else
+        rm -f "$NOPID" 2>/dev/null || true
+        [ -f "$BLOCK_MARK" ] && engine_back
     fi
     return 0
 }

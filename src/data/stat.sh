@@ -29,6 +29,19 @@ cmd_stat() {
 }
 
 # Карта адрес -> домен через FakeDNS, порциями.
+# Домены для карты адрес -> домен: общий список и списки включённых
+# направлений (их соединения идут в учёт наравне с основными).
+stat_domains() {
+    {
+        cat "$(merged_domains)" 2>/dev/null || true
+        for _rn in $(route_names); do
+            [ "$(uci -q get "byway.$_rn.enabled")" = "0" ] && continue
+            route_list "$ROUTES_DIR/$_rn.lst" dom
+        done
+    } > /tmp/byway-stat-doms
+    plain_domains /tmp/byway-stat-doms
+}
+
 stat_map() {
     # Таблица привязана к PID: после рестарта прежние адреса недействительны.
     # Порциями (_MSTEP доменов за прогон, позиция в MAPPOS): полный обход --
@@ -39,11 +52,11 @@ stat_map() {
     if [ "$_oldpid" != "$_p" ]; then : > "$MAP"; : > "$MAPPOS"; _newmap=1; fi
     _mpos=$(cat "$MAPPOS" 2>/dev/null || echo 0)
     case "$_mpos" in ''|*[!0-9]*) _mpos=0 ;; esac
-    _mall=$(plain_domains "$(merged_domains)" | grep -c . || true); _mall=${_mall:-0}
+    stat_domains > /tmp/byway-stat-doms.plain
+    _mall=$(grep -c . /tmp/byway-stat-doms.plain || true); _mall=${_mall:-0}
     if [ "$_newmap" = 1 ] || [ "$_mpos" -lt "$_mall" ]; then
         _fre=$(fakeip_re)
-        plain_domains "$(merged_domains)" |
-        sed -n "$((_mpos + 1)),$((_mpos + _MSTEP))p" |
+        sed -n "$((_mpos + 1)),$((_mpos + _MSTEP))p" /tmp/byway-stat-doms.plain |
         while IFS= read -r _d; do
             _a=$(nslookup "$_d" "$_l" 2>/dev/null |
                  sed -n 's/^Address: *//p' | grep -E "^$_fre" | head -1)
@@ -76,7 +89,7 @@ stat_collect() {
     # другой пояс). Ветка logread -- для конфига версии до 2026-09-05, где
     # обращения шли в syslog: без неё учёт обнулился бы до пересборки.
     if [ -s "$ACCESS" ]; then
-        grep 'tproxy-in -> proxy' "$ACCESS" > "$_tmp" 2>/dev/null || true
+        grep -E 'tproxy-in -> (proxy|route-)' "$ACCESS" > "$_tmp" 2>/dev/null || true
         # Обрезаем сразу, оставляя хвост 50 строк: из него cmd_status берёт имя
         # работающего ключа. Двойного счёта нет: метка по последней учтённой.
         # cat, а не mv: движок держит файл открытым, подмена уведёт запись в
@@ -86,7 +99,7 @@ stat_collect() {
     else
         logread -e xray 2>/dev/null |
           sed -n 's/.*xray[^:]*\[[0-9]*\]: //p' |
-          grep 'tproxy-in -> proxy' > "$_tmp" || true
+          grep -E 'tproxy-in -> (proxy|route-)' > "$_tmp" || true
     fi
     if [ -n "$_since" ]; then
         # substr: метка -- ровно 19 знаков, строка с той же секундой строго

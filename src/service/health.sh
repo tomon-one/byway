@@ -57,43 +57,43 @@ cmd_health() {
 
     # 2. Доступность VPN: время TCP-connect до адреса ноды (ICMP может быть
     #    закрыт). parse_node при плохой ссылке зовёт die -> exit, поэтому в
-    #    подоболочке. При автовыборе ссылка -- из node_urls: node_url этот
-    #    режим не заполняет.
-    _hk=""
-    [ "$(u conn_mode)" = "urltest" ] &&
-        _hk=$(uci -q get byway.main.node_urls 2>/dev/null | awk '{print $1}')
-    if ! ( parse_node ${_hk:+"$_hk"} >/dev/null 2>&1 ); then
-        printf "$(_t 'vpn\tfail\tссылка не разобрана\n')"
-        printf "$(_t 'tunnel\tfail\tпроверять нечем\n')"
-        printf "$(_t 'dns\tfail\tпроверять нечем\n')"
-        return 0
-    fi
-    parse_node ${_hk:+"$_hk"} >/dev/null 2>&1 || true
-    # Свой конфиг: адреса ноды у byway нет, мерить нечего.
-    if [ "$N_PROTO" = "raw" ]; then
-        printf "$(_t 'vpn\twarn\tсвой конфиг: адрес сервера неизвестен\n')"
-        _ms=-1
-    fi
-    # Две попытки: одиночный замер изредка не укладывается в таймаут.
-    [ "${_ms:-0}" = "-1" ] || _ms=0
-    for _try in 1 2; do
-        [ "$_ms" = "-1" ] && break
-        # --max-time обязателен: рукопожатие проходит, HTTP-ответа нет, и curl
-        # висел бесконечно. Панель обрывает запрос на ~20 с, шаги 2-4 должны
-        # в них уложиться.
-        _t=$(curl -s -o /dev/null --connect-timeout 3 --max-time 4 -w '%{time_connect}' \
-             "http://$N_HOST:$N_PORT" 2>/dev/null || true)
-        _ms=$(awk -v v="${_t:-0}" 'BEGIN{printf "%d", v*1000}')
-        [ "${_ms:-0}" -gt 0 ] && break
-        [ "$_try" = 1 ] && sleep 1
-    done
-    if [ "${_ms:-0}" = "-1" ]; then
-        :   # своё сообщение уже напечатано выше
-    elif [ "${_ms:-0}" -gt 0 ]; then
-        if [ "$_ms" -lt 400 ]; then printf "$(_t 'vpn\tok\t%s мс\n')" "$_ms"
-        else printf "$(_t 'vpn\twarn\t%s мс, медленно\n')" "$_ms"; fi
+    #    подоболочке. Автовыбор -- все ключи разом (health_urltest).
+    if [ "$(u conn_mode)" = "urltest" ]; then
+        health_urltest
     else
-        _hfail vpn "$(_t 'не отвечает')"
+        if ! ( parse_node >/dev/null 2>&1 ); then
+            printf "$(_t 'vpn\tfail\tссылка не разобрана\n')"
+            printf "$(_t 'tunnel\tfail\tпроверять нечем\n')"
+            printf "$(_t 'dns\tfail\tпроверять нечем\n')"
+            return 0
+        fi
+        parse_node >/dev/null 2>&1 || true
+        # Свой конфиг: адреса ноды у byway нет, мерить нечего.
+        if [ "$N_PROTO" = "raw" ]; then
+            printf "$(_t 'vpn\twarn\tсвой конфиг: адрес сервера неизвестен\n')"
+            _ms=-1
+        fi
+        # Две попытки: одиночный замер изредка не укладывается в таймаут.
+        [ "${_ms:-0}" = "-1" ] || _ms=0
+        for _try in 1 2; do
+            [ "$_ms" = "-1" ] && break
+            # --max-time обязателен: рукопожатие проходит, HTTP-ответа нет, и curl
+            # висел бесконечно. Панель обрывает запрос на ~20 с, шаги 2-4 должны
+            # в них уложиться.
+            _t=$(curl -s -o /dev/null --connect-timeout 3 --max-time 4 -w '%{time_connect}' \
+                 "http://$N_HOST:$N_PORT" 2>/dev/null || true)
+            _ms=$(awk -v v="${_t:-0}" 'BEGIN{printf "%d", v*1000}')
+            [ "${_ms:-0}" -gt 0 ] && break
+            [ "$_try" = 1 ] && sleep 1
+        done
+        if [ "${_ms:-0}" = "-1" ]; then
+            :   # своё сообщение уже напечатано выше
+        elif [ "${_ms:-0}" -gt 0 ]; then
+            if [ "$_ms" -lt 400 ]; then printf "$(_t 'vpn\tok\t%s мс\n')" "$_ms"
+            else printf "$(_t 'vpn\twarn\t%s мс, медленно\n')" "$_ms"; fi
+        else
+            _hfail vpn "$(_t 'не отвечает')"
+        fi
     fi
 
     # 3. Трафик насквозь: через локальный прокси на PROBE_DOMAIN, который
@@ -145,4 +145,36 @@ _proc_age() {
     _ps=$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}')
     if [ -z "$_pu" ] || [ -z "$_ps" ]; then echo 999999; return 0; fi
     echo $(( _pu - _ps / 100 ))
+}
+
+# vpn при автовыборе: все ключи разом, в фоне (по очереди десяток не уложился
+# бы в 20 с панели); ответ -- сколько отвечают и лучшая задержка.
+health_urltest() {
+    _hd=/tmp/byway-health.$$
+    mkdir -p "$_hd"
+    _hn=0
+    for _hk in $(uci -q get byway.main.node_urls 2>/dev/null); do
+        _hn=$((_hn + 1))
+        ( parse_node "$_hk" >/dev/null 2>&1 || exit 0
+          curl -s -o /dev/null --connect-timeout 3 --max-time 4 -w '%{time_connect}' \
+               "http://$N_HOST:$N_PORT" > "$_hd/$_hn" 2>/dev/null ) &
+    done
+    wait
+    _hok=0; _hbest=0
+    for _hf in "$_hd"/*; do
+        [ -f "$_hf" ] || continue
+        _hm=$(awk '{ printf "%d", $1 * 1000 }' "$_hf" 2>/dev/null)
+        [ "${_hm:-0}" -gt 0 ] || continue
+        _hok=$((_hok + 1))
+        { [ "$_hbest" = 0 ] || [ "$_hm" -lt "$_hbest" ]; } && _hbest=$_hm
+    done
+    rm -rf "$_hd" 2>/dev/null || true
+    if [ "$_hok" = 0 ]; then
+        _hfail vpn "$(_t 'не отвечает ни один ключ')"
+    elif [ "$_hok" = "$_hn" ]; then
+        printf "$(_t 'vpn\tok\tотвечают %s из %s ключей, лучший — %s мс\n')" "$_hok" "$_hn" "$_hbest"
+    else
+        printf "$(_t 'vpn\twarn\tотвечают %s из %s ключей, лучший — %s мс\n')" "$_hok" "$_hn" "$_hbest"
+    fi
+    return 0
 }

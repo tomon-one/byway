@@ -568,6 +568,11 @@ if (scheme == 'vmess') {
     // N.PATH, где пустой заменён на «/».
     if (N.TYPE == 'grpc') N.SVC = jf('path');
     N.PROTO = 'vmess';
+    // Прочие поля JSON (allowInsecure и т. п.) не переносятся -- называем.
+    for (let k in keys(o))
+        if (!(k in [ 'v', 'ps', 'add', 'port', 'id', 'aid', 'scy', 'net', 'type', 'host',
+                     'path', 'tls', 'sni', 'alpn', 'fp' ]))
+            warnf("параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он", k);
     node_json_ok();
     flush(); stop();
 }
@@ -582,9 +587,16 @@ if (scheme == 'ss') {
     // Делим по последней «@»: в открытом пароле она законна.
     let ui = substr(rest, 0, rindex(rest, '@'));
     let hp = lastafter(rest, '@');
-    // Плагин (obfs-local, v2ray-plugin) Xray-core не запускает.
+    // Плагин (obfs-local, v2ray-plugin) Xray-core не запускает; прочие
+    // параметры не переносятся -- называем.
     if (index(hp, 'plugin=') >= 0)
         warn("plugin у shadowsocks не переносится: Xray-core плагины не запускает, сервер с плагином не ответит");
+    if (index(hp, '?') >= 0)
+        for (let l in split(after(hp, '?'), '&')) {
+            let pn = before(l, '=');
+            if (pn != '' && pn != 'plugin')
+                warnf("параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он", pn);
+        }
     hp = before(before(hp, '?'), '/');
     let plain = index(ui, ':') >= 0 ? pctd(ui) : b64d(ui);
     if (substr(hp, 0, 1) == '[') { flush(); dief("адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя", hp); }
@@ -1204,6 +1216,11 @@ build_proxies() {
         if [ "$N_PROTO" = "raw" ]; then
             VPN_HOSTS=""
             warn "свой конфиг: адрес сервера лежит внутри чужого JSON, byway его не знает и из перехвата не исключит — проверить, что адрес сервера не попал в списки, иначе туннель замкнётся сам на себя"
+            # Метку для «VPN для программ на роутере» в чужой JSON не вписываем
+            # (комментарии в нём ucode не разберёт) -- говорим, что дописать.
+            if [ "$(u router_via_vpn)" = "1" ] && ! printf '%s' "$N_RAW" | grep -q '"mark"'; then
+                warnf "свой конфиг: включено «VPN для программ на роутере», а метки в нём нет — если адрес сервера попадёт в списки, соединение движка к нему уйдёт в перехват по кругу; дописать в streamSettings поле sockopt.mark = %s" "$(self_mark_dec)"
+            fi
         else
             VPN_HOSTS=$N_HOST
         fi
@@ -1740,9 +1757,7 @@ gen_dns_route() {
             # dief ронял gen, start_service поднимал прежний конфиг, а plumb on
             # клал правила по новым настройкам -- половины расходились молча
             # при зелёных проверках.
-            _ip=$(a_of "$_h")
-            # Мимо dnsmasq вовсе: наружу роутер ходит, сломан только вход.
-            [ -n "$_ip" ] || _ip=$(a_of "$_h" 8.8.8.8)
+            _ip=$(server_addr "$_h")
             # Последняя опора -- адрес из прежнего конфига: устаревший лучше
             # несобравшегося.
             [ -n "$_ip" ] || _ip=$(sed -n 's/.*"'"$_h"'"[[:space:]]*:[[:space:]]*"\([0-9.]*\)".*/\1/p' \
@@ -1947,6 +1962,18 @@ MID2
 END
     } > "$TMP"
     return 0
+}
+
+# Настоящий адрес сервера для DNS через туннель. Местный резолвер в этом
+# режиме отдаёт адрес из прежнего конфига (hosts), смена адреса не увиделась
+# бы: сперва пин /etc/hosts, потом внешние резолверы, потом местный.
+server_addr() {   # $1 -- имя
+    _sa=$(awk -v n="$1" '$1 !~ /^#/ { for (i = 2; i <= NF; i++) if ($i == n) { print $1; exit } }' \
+          /etc/hosts 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1)
+    [ -n "$_sa" ] || _sa=$(a_of "$1" 8.8.8.8)
+    [ -n "$_sa" ] || _sa=$(a_of "$1" 1.1.1.1)
+    [ -n "$_sa" ] || _sa=$(a_of "$1")
+    printf '%s' "$_sa"
 }
 
 # Проверки ключа без боевого конфига: probe (соединение) и check (разбор).
@@ -2615,8 +2642,8 @@ cmd_sub() {
       *) die "это не адрес подписки: ожидается https://" ;;
     esac
 
-    # Подкоманда доступна держателю роли панели (ACL: exec byway с любыми
-    # аргументами), а curl идёт от root: петля и приватные диапазоны отсекаются
+    # Подкоманда доступна держателю роли панели (ACL: `byway sub *`), а curl
+    # идёт от root: петля и приватные диапазоны отсекаются
     # до запроса. Имя разрешается здесь и проверяется результат (имя на
     # 127.0.0.1 прошло бы по букве). Редирект во внутренний диапазон не закрыт:
     # число редиректов ограничено, граница -- exec в acl.json.
@@ -2642,6 +2669,20 @@ cmd_sub() {
         _raw=$(curl -fsSL --max-time 25 --max-redirs 3 -A "Mozilla/5.0" "$_u" 2>/dev/null || true)
     fi
     [ -n "$_raw" ] || die "подписка не скачалась: стоит проверить адрес и связь"
+    # Подписка почти всегда в base64 (и base64url): раскодирует ucode. Не
+    # раскодировалась в ключи -- отдаём как есть; панель раскодирует сама,
+    # только если «://» в ответе нет.
+    case "$_raw" in
+      *://*) ;;
+      *) _dec=$(printf '%s' "$_raw" | ucode -S -e '
+              let fs = require("fs");
+              let s = replace(fs.stdin.read("all") ?? "", /[\r\n\t ]/g, "");
+              s = replace(replace(s, "_", "/"), "-", "+");
+              if (length(s) % 4 == 2) s += "==";
+              else if (length(s) % 4 == 3) s += "=";
+              print(b64dec(s) ?? "");' 2>/dev/null || true)
+         case "$_dec" in *://*) _raw=$_dec ;; esac ;;
+    esac
     printf '%s\n' "$_raw"
 }
 
@@ -3729,6 +3770,7 @@ cmd_watch() {
     watch_upcheck
     watch_autoupdate
     watch_access
+    watch_hosts
 
     _now="nft=${_tab:-0} rule=${_rul:-0} route=${_rt:-0} dns=$_dm fakeip=$_fk"
     _cur="pid=${_pid:-none} $_now"
@@ -3818,38 +3860,14 @@ watch_heal() {
     # Движка нет при включённой службе -- упал, а не выключен; при закрытой
     # модели отказа ради этого случая она и заведена.
     if [ -z "$_pid" ] && [ "$(u enabled)" = "1" ] && [ ! -f "$PLUMB_DOWN" ]; then
-        block_on
-        # Обвязка стоит, а движка нет: dnsmasq шлёт весь резолв дома на мёртвый
-        # вход (единственный апстрим, noresolv=1). Ветка починки ниже требует
-        # живого процесса, block_on при open выходит сразу. Действуем на
-        # ВТОРОМ подряд наблюдении (5 мин): procd поднимает движок сам за
-        # секунды, на каждый рестарт обвязку не снимаем.
-        _miss=$(cat "$NOPID" 2>/dev/null || echo 0)
-        _miss=$((_miss + 1))
-        printf '%s' "$_miss" > "$NOPID" 2>/dev/null || true
-        case " $_dm " in
-          *" $(dns_addr) "*)
-            if [ "${_miss:-0}" -ge 2 ]; then
-                # Текст зависит от модели: при закрытой обвязку снимаем, а
-                # запрет оставляем -- интернета нет.
-                if [ "$(u on_failure)" != "open" ]; then
-                    logt "движок не поднимается пять минут -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: доступа наружу нет"
-                else
-                    logt "движок не поднимается пять минут -- перехват снят, дом остаётся с интернетом и без туннеля"
-                fi
-                # --service: метку «сняли руками» не ставим, иначе сторож не
-                # поднял бы обвязку, когда движок вернётся. --keep-block:
-                # снимает сторож, не человек; безусловное снятие запрета
-                # открывало при закрытой модели окно прямого трафика.
-                cmd_plumb off --service --keep-block >/dev/null 2>&1 || true
-                _healed="(nodns)"
-                # Пересобираем состояние: в журнал -- то, что стало.
-                _tab=$(nft list tables 2>/dev/null | grep -cE "^table inet $TABLE\$" || true)
-                _rul=$(ip rule show 2>/dev/null | grep -cE "$(rule_re)" || true)
-                _rt=$(ip route show table "$RT_TABLE" 2>/dev/null | grep -c "^local default" || true)
-                _dm=$(uci -q get "$DNSSEC.server" 2>/dev/null || echo none)
-            fi ;;
-        esac
+        engine_gone
+        if [ "$_healed" = "(nodns)" ]; then
+            # Пересобираем состояние: в журнал -- то, что стало.
+            _tab=$(nft list tables 2>/dev/null | grep -cE "^table inet $TABLE\$" || true)
+            _rul=$(ip rule show 2>/dev/null | grep -cE "$(rule_re)" || true)
+            _rt=$(ip route show table "$RT_TABLE" 2>/dev/null | grep -c "^local default" || true)
+            _dm=$(uci -q get "$DNSSEC.server" 2>/dev/null || echo none)
+        fi
     else
         rm -f "$NOPID" 2>/dev/null || true
     fi
@@ -3859,15 +3877,7 @@ watch_heal() {
     # запрет. `u guard` не спрашиваем (как у block_on): это возврат из
     # запрета, не починка, и выключенный сторож не должен оставлять запрет.
     if [ -n "$_pid" ] && [ -f "$BLOCK_MARK" ]; then
-        if [ "$(u enabled)" != "1" ]; then
-            block_off
-        elif cmd_plumb on >/dev/null 2>&1; then
-            logt "движок вернулся -- перехват поднят, запрет «не пускать мимо VPN» снят"
-            _healed="(healed)"
-        else
-            logt "движок вернулся, но перехват не поднялся -- запрет «не пускать мимо VPN» остаётся"
-            _healed="(failed)"
-        fi
+        engine_back
     fi
     if [ -n "$_pid" ] && [ "$(u enabled)" = "1" ] &&
        [ "$(u guard)" != "0" ] && [ ! -f "$PLUMB_DOWN" ]; then
@@ -4032,66 +4042,30 @@ watch_au_install() {
            [ -z "$(find "$AUTRY" -mmin -1440 2>/dev/null)" ]; then
             : > "$AUTRY" 2>/dev/null || true
             logf 'автообновление: установка %s (было %s)' "$_au" "$BYWAY_NUM"
-            # Копия для отката проверяется, без неё не ставим: /overlay 43.7 МБ
-            # уже доходил до нуля свободных байт.
-            _aubk=1
-            cp /usr/local/bin/byway "$PREVBIN" 2>/dev/null && [ -s "$PREVBIN" ] || _aubk=0
-            chmod 755 "$PREVBIN" 2>/dev/null || true
-            _auprev=$(md5sum "$PREVBIN" 2>/dev/null | cut -d' ' -f1)
-            if [ "$_aubk" = 0 ]; then
-                logf 'автообновление: копия для отката не сделалась -- установка ОТМЕНЕНА (место на /overlay?)'
-            else
-            # В подоболочке: cmd_update при отказе зовёт die (exit), без скобок
-            # он унёс бы весь прогон сторожа.
+            # Копию всей версии, проверку туннеля и откат делает cmd_update
+            # сам; здесь -- итог по коду. В подоболочке: die (exit) не должен
+            # унести весь прогон сторожа.
             _aurc=0
-            _autun0=0; tunnel_ok && _autun0=1
-            ( cmd_update ) >/dev/null 2>&1 || _aurc=1
-            # Судим делом и на ветке отказа: установщик под set -e успевает
-            # подложить новый бинарник до падения на следующем шаге. «Не
-            # скачалось» -- только если сумма файла не тронута.
-            if [ "$_aurc" = 1 ] &&
-               [ "$(md5sum /usr/local/bin/byway 2>/dev/null | cut -d' ' -f1)" = "$_auprev" ]; then
-                logf 'автообновление: %s не скачалось, работает прежняя' "$_au"
-            else
-                # Судим делом, не кодом установщика: нужно «туннель поднялся».
-                # 15 оборотов по 10 с, не 6: обвязку после рестарта поднимает
-                # фоновый цикл службы (бюджет «до 65 секунд» -- пол, в обороте
-                # есть блокирующий nslookup); на 60-й секунде исправную версию
-                # откатывали.
-                _auok=0
-                for _aut in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-                    sleep 10
-                    if alive_ok && { [ "$_autun0" = 0 ] || tunnel_ok; }; then _auok=1; break; fi
-                done
-                if [ "$_auok" = 1 ]; then
-                    _f 'обновлено до %s, %s\n' "$_au" "$(date '+%Y-%m-%d %H:%M')" > "$AULOG"
-                    logf 'автообновление: %s поднялось' "$_au"
-                    rm -f "$NEWVER" 2>/dev/null || true
-                else
-                    # Ради этого копия: чинить некому, чинит роутер сам.
-                    # AUFAIL -- чтобы следующая ночь не ставила тот же номер.
-                    printf '%s\n' "$_au" > "$AUFAIL" 2>/dev/null || true
-                    # Итог восстановления читается: проглоченный отказ cp
-                    # объявил бы откат состоявшимся и переписал сумму под
-                    # непрошедшую версию, стерев признак поломки.
-                    _aurb=1
-                    cp "$PREVBIN" /usr/local/bin/byway 2>/dev/null || _aurb=0
-                    chmod 755 /usr/local/bin/byway 2>/dev/null || true
-                    if [ "$_aurb" = 0 ]; then
-                        logf 'автообновление: ОТКАТ НЕ УДАЛСЯ -- на диске %s, копия в %s. Восстановить руками: cp %s /usr/local/bin/byway' "$_au" "$PREVBIN" "$PREVBIN"
-                        _f 'ОТКАТ НЕ УДАЛСЯ: на диске %s, копия в %s\n' "$_au" "$PREVBIN" > "$AULOG"
-                    else
-                    # Сумма -- по восстановленному файлу: установщик уже
-                    # переписал .binmd5 суммой новой версии, без этого проверка
-                    # видела бы «правлен руками» каждую ночь.
-                    md5sum /usr/local/bin/byway 2>/dev/null | cut -d' ' -f1 > "$BINSUM" 2>/dev/null || true
-                    /etc/init.d/byway restart >/dev/null 2>&1 || true
-                    _f 'ОТКАТ с %s на %s, %s\n' "$_au" "$BYWAY_NUM" "$(date '+%Y-%m-%d %H:%M')" > "$AULOG"
-                    logf 'автообновление: %s не поднялось -- откат на %s' "$_au" "$BYWAY_NUM"
-                    fi
-                fi
-            fi
-            fi
+            ( cmd_update ) >/dev/null 2>&1 || _aurc=$?
+            case "$_aurc" in
+              0)
+                _f 'обновлено до %s, %s\n' "$_au" "$(date '+%Y-%m-%d %H:%M')" > "$AULOG"
+                logf 'автообновление: %s поднялось' "$_au"
+                rm -f "$NEWVER" 2>/dev/null || true ;;
+              3)
+                # AUFAIL -- чтобы следующая ночь не ставила тот же номер.
+                printf '%s\n' "$_au" > "$AUFAIL" 2>/dev/null || true
+                _f 'ОТКАТ с %s на %s, %s\n' "$_au" "$BYWAY_NUM" "$(date '+%Y-%m-%d %H:%M')" > "$AULOG"
+                logf 'автообновление: %s не поднялось -- откат на %s' "$_au" "$BYWAY_NUM" ;;
+              4)
+                printf '%s\n' "$_au" > "$AUFAIL" 2>/dev/null || true
+                _f 'ОТКАТ НЕ УДАЛСЯ: на диске %s, копия в %s\n' "$_au" "$PREVSET" > "$AULOG"
+                logf 'автообновление: ОТКАТ НЕ УДАЛСЯ -- копия в %s, вернуть: byway update --rollback' "$PREVSET" ;;
+              5)
+                logf 'автообновление: копия для отката не сделалась -- установка ОТМЕНЕНА (место на /overlay?)' ;;
+              *)
+                logf 'автообновление: %s не скачалось, работает прежняя' "$_au" ;;
+            esac
         fi
     return 0
 }
@@ -4105,6 +4079,92 @@ watch_access() {
        [ "$(wc -c < "$ACCESS" 2>/dev/null || echo 0)" -gt 4194304 ]; then
         : > "$ACCESS"
         logt "журнал обращений превысил 4 МБ и обрезан -- похоже, не запускается учёт трафика (byway stat в cron)"
+    fi
+    return 0
+}
+
+# DNS через туннель: адрес сервера вписан в конфиг при сборке. Раз в час
+# сверяем с внешним резолвером; сменился -- пересборка и reload (иначе туннель
+# стучится в старый адрес до ручного byway gen).
+watch_hosts() {
+    [ "$(u dns_route)" = "tunnel" ] || return 0
+    [ -n "$(find /tmp/byway-hostcheck -mmin -60 2>/dev/null)" ] && return 0
+    : > /tmp/byway-hostcheck
+    _wch=""
+    for _wp in $(grep -o '"hosts": {[^}]*}' "$OUT" 2>/dev/null | grep -o '"[^"]*": "[0-9.]*"' | tr -d '" ' ); do
+        _wn=${_wp%%:*}; _wo=${_wp#*:}
+        _wa=$(server_addr "$_wn")
+        [ -n "$_wa" ] && [ "$_wa" != "$_wo" ] && _wch="$_wch $_wn:$_wo->$_wa"
+    done
+    [ -n "$_wch" ] || return 0
+    logf 'адрес сервера сменился (%s) -- пересборка конфига' "${_wch# }"
+    "$0" gen >/dev/null 2>&1 && /etc/init.d/byway reload >/dev/null 2>&1 || true
+    return 0
+}
+
+# Движка нет при включённой службе -- упал, а не выключен. Запрет -- сразу;
+# перехват DNS снимается на втором промахе подряд (иначе dnsmasq шлёт весь
+# резолв дома в мёртвый вход, единственный апстрим, noresolv=1). procd
+# поднимает упавший движок за секунды -- на каждый перезапуск не снимаем.
+# Зовут сторож и pulse; _dm -- текущие резолверы dnsmasq.
+engine_gone() {
+    block_on
+    _miss=$(cat "$NOPID" 2>/dev/null || echo 0)
+    _miss=$((_miss + 1))
+    printf '%s' "$_miss" > "$NOPID" 2>/dev/null || true
+    case " $_dm " in
+      *" $(dns_addr) "*)
+        if [ "${_miss:-0}" -ge 2 ]; then
+            # Текст зависит от модели: при закрытой обвязку снимаем, а
+            # запрет оставляем -- интернета нет.
+            if [ "$(u on_failure)" != "open" ]; then
+                logt "движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: доступа наружу нет"
+            else
+                logt "движок не поднимается -- перехват снят, дом остаётся с интернетом и без туннеля"
+            fi
+            # --service: метку «сняли руками» не ставим, иначе сторож не
+            # поднял бы обвязку, когда движок вернётся. --keep-block:
+            # снимает сторож, не человек; безусловное снятие запрета
+            # открывало при закрытой модели окно прямого трафика.
+            cmd_plumb off --service --keep-block >/dev/null 2>&1 || true
+            _healed="(nodns)"
+        fi ;;
+    esac
+    return 0
+}
+
+# Движок вернулся при стоящем запрете: respawn procd не зовёт service_started,
+# обвязка цела -- без этого список вечно отвечал бы 0.0.0.0. Удачный plumb on
+# снимает запрет. `u guard` не спрашиваем: это возврат, не починка.
+engine_back() {
+    if [ "$(u enabled)" != "1" ]; then
+        block_off
+    elif cmd_plumb on >/dev/null 2>&1; then
+        logt "движок вернулся -- перехват поднят, запрет «не пускать мимо VPN» снят"
+        _healed="(healed)"
+    else
+        logt "движок вернулся, но перехват не поднялся -- запрет «не пускать мимо VPN» остаётся"
+        _healed="(failed)"
+    fi
+    return 0
+}
+
+# Раз в минуту из cron: только «движок упал» и «движок вернулся». Окно без DNS
+# при неподнимающемся движке -- 1–2 минуты вместо 5–10 у сторожа. В минуты,
+# кратные пяти, ходит сторож: двойной счёт промахов снял бы DNS за полминуты.
+cmd_pulse() {
+    _pm=$(date +%M); _pm=${_pm#0}
+    [ $(( ${_pm:-0} % 5 )) = 0 ] && return 0
+    [ "$(u enabled)" = "1" ] || return 0
+    [ -f "$PLUMB_DOWN" ] && return 0
+    _pid=$(xray_pid)
+    _healed=""
+    if [ -z "$_pid" ]; then
+        _dm=$(uci -q get "$DNSSEC.server" 2>/dev/null || echo none)
+        engine_gone
+    else
+        rm -f "$NOPID" 2>/dev/null || true
+        [ -f "$BLOCK_MARK" ] && engine_back
     fi
     return 0
 }
@@ -4367,43 +4427,43 @@ cmd_health() {
 
     # 2. Доступность VPN: время TCP-connect до адреса ноды (ICMP может быть
     #    закрыт). parse_node при плохой ссылке зовёт die -> exit, поэтому в
-    #    подоболочке. При автовыборе ссылка -- из node_urls: node_url этот
-    #    режим не заполняет.
-    _hk=""
-    [ "$(u conn_mode)" = "urltest" ] &&
-        _hk=$(uci -q get byway.main.node_urls 2>/dev/null | awk '{print $1}')
-    if ! ( parse_node ${_hk:+"$_hk"} >/dev/null 2>&1 ); then
-        printf "$(_t 'vpn\tfail\tссылка не разобрана\n')"
-        printf "$(_t 'tunnel\tfail\tпроверять нечем\n')"
-        printf "$(_t 'dns\tfail\tпроверять нечем\n')"
-        return 0
-    fi
-    parse_node ${_hk:+"$_hk"} >/dev/null 2>&1 || true
-    # Свой конфиг: адреса ноды у byway нет, мерить нечего.
-    if [ "$N_PROTO" = "raw" ]; then
-        printf "$(_t 'vpn\twarn\tсвой конфиг: адрес сервера неизвестен\n')"
-        _ms=-1
-    fi
-    # Две попытки: одиночный замер изредка не укладывается в таймаут.
-    [ "${_ms:-0}" = "-1" ] || _ms=0
-    for _try in 1 2; do
-        [ "$_ms" = "-1" ] && break
-        # --max-time обязателен: рукопожатие проходит, HTTP-ответа нет, и curl
-        # висел бесконечно. Панель обрывает запрос на ~20 с, шаги 2-4 должны
-        # в них уложиться.
-        _t=$(curl -s -o /dev/null --connect-timeout 3 --max-time 4 -w '%{time_connect}' \
-             "http://$N_HOST:$N_PORT" 2>/dev/null || true)
-        _ms=$(awk -v v="${_t:-0}" 'BEGIN{printf "%d", v*1000}')
-        [ "${_ms:-0}" -gt 0 ] && break
-        [ "$_try" = 1 ] && sleep 1
-    done
-    if [ "${_ms:-0}" = "-1" ]; then
-        :   # своё сообщение уже напечатано выше
-    elif [ "${_ms:-0}" -gt 0 ]; then
-        if [ "$_ms" -lt 400 ]; then printf "$(_t 'vpn\tok\t%s мс\n')" "$_ms"
-        else printf "$(_t 'vpn\twarn\t%s мс, медленно\n')" "$_ms"; fi
+    #    подоболочке. Автовыбор -- все ключи разом (health_urltest).
+    if [ "$(u conn_mode)" = "urltest" ]; then
+        health_urltest
     else
-        _hfail vpn "$(_t 'не отвечает')"
+        if ! ( parse_node >/dev/null 2>&1 ); then
+            printf "$(_t 'vpn\tfail\tссылка не разобрана\n')"
+            printf "$(_t 'tunnel\tfail\tпроверять нечем\n')"
+            printf "$(_t 'dns\tfail\tпроверять нечем\n')"
+            return 0
+        fi
+        parse_node >/dev/null 2>&1 || true
+        # Свой конфиг: адреса ноды у byway нет, мерить нечего.
+        if [ "$N_PROTO" = "raw" ]; then
+            printf "$(_t 'vpn\twarn\tсвой конфиг: адрес сервера неизвестен\n')"
+            _ms=-1
+        fi
+        # Две попытки: одиночный замер изредка не укладывается в таймаут.
+        [ "${_ms:-0}" = "-1" ] || _ms=0
+        for _try in 1 2; do
+            [ "$_ms" = "-1" ] && break
+            # --max-time обязателен: рукопожатие проходит, HTTP-ответа нет, и curl
+            # висел бесконечно. Панель обрывает запрос на ~20 с, шаги 2-4 должны
+            # в них уложиться.
+            _t=$(curl -s -o /dev/null --connect-timeout 3 --max-time 4 -w '%{time_connect}' \
+                 "http://$N_HOST:$N_PORT" 2>/dev/null || true)
+            _ms=$(awk -v v="${_t:-0}" 'BEGIN{printf "%d", v*1000}')
+            [ "${_ms:-0}" -gt 0 ] && break
+            [ "$_try" = 1 ] && sleep 1
+        done
+        if [ "${_ms:-0}" = "-1" ]; then
+            :   # своё сообщение уже напечатано выше
+        elif [ "${_ms:-0}" -gt 0 ]; then
+            if [ "$_ms" -lt 400 ]; then printf "$(_t 'vpn\tok\t%s мс\n')" "$_ms"
+            else printf "$(_t 'vpn\twarn\t%s мс, медленно\n')" "$_ms"; fi
+        else
+            _hfail vpn "$(_t 'не отвечает')"
+        fi
     fi
 
     # 3. Трафик насквозь: через локальный прокси на PROBE_DOMAIN, который
@@ -4455,6 +4515,38 @@ _proc_age() {
     _ps=$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}')
     if [ -z "$_pu" ] || [ -z "$_ps" ]; then echo 999999; return 0; fi
     echo $(( _pu - _ps / 100 ))
+}
+
+# vpn при автовыборе: все ключи разом, в фоне (по очереди десяток не уложился
+# бы в 20 с панели); ответ -- сколько отвечают и лучшая задержка.
+health_urltest() {
+    _hd=/tmp/byway-health.$$
+    mkdir -p "$_hd"
+    _hn=0
+    for _hk in $(uci -q get byway.main.node_urls 2>/dev/null); do
+        _hn=$((_hn + 1))
+        ( parse_node "$_hk" >/dev/null 2>&1 || exit 0
+          curl -s -o /dev/null --connect-timeout 3 --max-time 4 -w '%{time_connect}' \
+               "http://$N_HOST:$N_PORT" > "$_hd/$_hn" 2>/dev/null ) &
+    done
+    wait
+    _hok=0; _hbest=0
+    for _hf in "$_hd"/*; do
+        [ -f "$_hf" ] || continue
+        _hm=$(awk '{ printf "%d", $1 * 1000 }' "$_hf" 2>/dev/null)
+        [ "${_hm:-0}" -gt 0 ] || continue
+        _hok=$((_hok + 1))
+        { [ "$_hbest" = 0 ] || [ "$_hm" -lt "$_hbest" ]; } && _hbest=$_hm
+    done
+    rm -rf "$_hd" 2>/dev/null || true
+    if [ "$_hok" = 0 ]; then
+        _hfail vpn "$(_t 'не отвечает ни один ключ')"
+    elif [ "$_hok" = "$_hn" ]; then
+        printf "$(_t 'vpn\tok\tотвечают %s из %s ключей, лучший — %s мс\n')" "$_hok" "$_hn" "$_hbest"
+    else
+        printf "$(_t 'vpn\twarn\tотвечают %s из %s ключей, лучший — %s мс\n')" "$_hok" "$_hn" "$_hbest"
+    fi
+    return 0
 }
 
 # byway doctor: проверка окружения по разделам doctor_*.
@@ -4557,6 +4649,9 @@ doctor_needs() {
         _d_bad "$(_f 'в cron не хватает задач byway (watch: %s, stat: %s)' "$_cw" "$_cs")" \
                "переустановить byway либо завести вручную: */5 * * * * /usr/local/bin/byway watch и 7 * * * * /usr/local/bin/byway stat"
     fi
+    crontab -l 2>/dev/null | grep -q "byway pulse" ||
+        _d_warn "нет задачи cron byway pulse" \
+                "без неё при отказе движка дом остаётся без DNS до 10 минут вместо 1–2: byway update либо завести вручную: * * * * * /usr/local/bin/byway pulse"
     for _m in nft_tproxy nft_socket; do
         # lsmod не показывает модули, встроенные в ядро: смотреть ещё
         # /sys/module/<имя>.
@@ -4910,6 +5005,12 @@ doctor_rivals() {
             fi
         fi
     done
+    # pbr (маршрутизация по правилам) уживается рядом, если метки и таблицы не
+    # пересекаются: выключать его не советуем, называем, что сверить.
+    if [ -x /etc/init.d/pbr ] && /etc/init.d/pbr enabled 2>/dev/null; then
+        _pm=$(u mark); _pm=${_pm:-0x100000}
+        _d_warn "рядом включён pbr" "$(_f 'он тоже метит трафик и правит ip rule: его метки и таблицы не должны совпадать с меткой byway %s и таблицей %s' "$_pm" "$RT_TABLE")"
+    fi
     return 0
 }
 
@@ -5104,7 +5205,8 @@ RELNOTE=/tmp/byway-relnote    # первая строка описания вы�
 
 AULOG=/tmp/byway-autoupdate   # чем кончилось ночное обновление
 
-PREVBIN=/etc/byway/byway.prev # копия прежней версии, для отката
+PREVBIN=/etc/byway/byway.prev # прежняя копия одного скрипта (до 0.3.0), удаляется
+PREVSET=/etc/byway/prev.tgz   # прежняя версия целиком (скрипт, init, панель) для отката
 
 AUTRY=/etc/byway/.au-try      # когда пробовали обновиться; флеш
 
@@ -5156,7 +5258,14 @@ latest_version() {
         "$(printf '%s' "$_body" | sed -n 's/.*"tag_name"[^"]*"v*\([0-9][^"]*\)".*/\1/p' | head -1)"
 }
 
+# Код выхода для ночного обновления: 0 -- поставлено и туннель работает,
+# 3 -- не поднялось и откачено, 4 -- откат не удался, 5 -- копия для отката
+# не сделалась (ничего не тронуто), прочее -- не скачалось.
 cmd_update() {
+    if [ "${1:-}" = --rollback ]; then
+        upd_restore || die "откатывать не на что: копия делается при byway update"
+        return 0
+    fi
     _lv=$(latest_version)
     _code=${_lv%% *}; _new=${_lv#* }
     if [ -z "$_new" ] || [ "$_new" = "$_code" ]; then
@@ -5200,10 +5309,77 @@ cmd_update() {
     _src=$(find "$_d" -maxdepth 2 -name install.sh 2>/dev/null | head -1)
     [ -n "$_src" ] || die "в пакете нет install.sh -- ничего не тронуто"
 
+    # Связь до установки: откатывать за мёртвый сервер нельзя (eng_wait).
+    _etun0=0
+    eng_idle || { tunnel_ok && _etun0=1; } || true
+    if ! upd_snapshot; then
+        warn "копия прежней версии для отката не сделалась (место на флеше?) -- ничего не тронуто"
+        exit 5
+    fi
+
     # Ставит install.sh: он один знает, что куда класть и что оставить
     # (конфигурация, списки); копия этой логики здесь разошлась бы с ним.
     say "установка"
-    ( cd "$(dirname "$_src")" && sh install.sh )
+    if ! ( cd "$(dirname "$_src")" && sh install.sh ); then
+        # Под set -e установщик мог успеть разложить часть файлов.
+        warn "установка оборвалась -- возврат прежней версии"
+        upd_restore || exit 4
+        exit 3
+    fi
+    eng_idle && return 0
+    say "проверка туннеля на новой версии (до 2,5 минуты)"
+    if eng_wait; then
+        say "готово: туннель на новой версии работает"
+        return 0
+    fi
+    warn "на новой версии туннель не поднялся -- возврат прежней"
+    upd_restore || exit 4
+    exit 3
+}
+
+# Прежняя версия целиком -- в архив на флеш: откат одного скрипта оставлял
+# новые init, панель и словарь при старом byway. Только существующие пути.
+upd_snapshot() {
+    _us=""
+    for _uf in /usr/local/bin/byway /etc/init.d/byway /usr/local/bin/byway-uninstall \
+               /www/luci-static/resources/view/byway /www/luci-static/resources/byway \
+               /usr/share/luci/menu.d/luci-app-byway.json \
+               /usr/share/rpcd/acl.d/luci-app-byway.json /etc/byway/lang; do
+        [ -e "$_uf" ] && _us="$_us ${_uf#/}"
+    done
+    rm -f "$PREVBIN" 2>/dev/null || true
+    # shellcheck disable=SC2086
+    tar czf "$PREVSET.new" -C / $_us 2>/dev/null && [ -s "$PREVSET.new" ] &&
+        mv "$PREVSET.new" "$PREVSET" && chmod 600 "$PREVSET" && return 0
+    rm -f "$PREVSET.new" 2>/dev/null || true
+    return 1
+}
+
+# Вернуть архив прежней версии и перезапустить службу. Автозапуск -- заново
+# по init прежней версии (номер START у версий разный).
+upd_restore() {
+    [ -s "$PREVSET" ] || { warn "копии прежней версии нет"; return 1; }
+    # Через каталог в памяти и mv на место: запись поверх файла, который
+    # сейчас исполняется (byway update --rollback), портила бы его чтение.
+    _ur=/tmp/byway-rollback.$$
+    rm -rf "$_ur" 2>/dev/null || true
+    mkdir -p "$_ur"
+    tar xzf "$PREVSET" -C "$_ur" 2>/dev/null || { rm -rf "$_ur"; warnf "откат не удался -- копия в %s" "$PREVSET"; return 1; }
+    _urf=0
+    for _uf in $(cd "$_ur" && find . -type f); do
+        _ud=${_uf#.}
+        mkdir -p "$(dirname "$_ud")" 2>/dev/null || true
+        cp -p "$_ur$_ud" "$_ud.new" 2>/dev/null && mv "$_ud.new" "$_ud" 2>/dev/null || _urf=1
+    done
+    rm -rf "$_ur" 2>/dev/null || true
+    [ "$_urf" = 0 ] || { warnf "откат лёг не целиком -- копия в %s" "$PREVSET"; return 1; }
+    md5sum /usr/local/bin/byway 2>/dev/null | cut -d' ' -f1 > "$BINSUM" 2>/dev/null || true
+    /etc/init.d/byway disable >/dev/null 2>&1 || true
+    /etc/init.d/byway enable >/dev/null 2>&1 || true
+    /etc/init.d/rpcd reload >/dev/null 2>&1 || true
+    /etc/init.d/byway restart >/dev/null 2>&1 || true
+    say "прежняя версия возвращена"
+    return 0
 }
 
 # Ядро Xray: byway engine ВЕРСИЯ|tested|newest|stable|restore|ФАЙЛ --
@@ -5449,6 +5625,13 @@ cmd_engine() {
     rm -rf "$_ed" 2>/dev/null || true
     mkdir -p "$_ed"
     trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT INT TERM
+
+    # Нужная версия уже лежит рядом -- переключение без загрузки.
+    if [ -n "$_eov" ] && [ "$_enew" != "$_eold" ] && xray_ok "$_enew" &&
+       "$_enew" version >/dev/null 2>&1; then
+        eng_switch
+        return 0
+    fi
 
     # Архив в память: ~14 МБ. Меньше 40 МБ доступно -- живой движок рядом с
     # ним рискует OOM, а он и есть туннель.
@@ -5739,6 +5922,39 @@ eng_dial_bug() {
     [ "$_db" = 1 ]
 }
 
+# Переключение на ядро, которое уже лежит рядом: проверка конфига, перезапуск,
+# проверка туннеля; не поднялось -- обратно на прежнее. Оба файла остаются.
+eng_switch() {
+    sayf "Xray %s уже лежит рядом — переключение без загрузки" "$_env"
+    _etun0=0
+    eng_idle || { tunnel_ok && _etun0=1; } || true
+    if eng_idle; then
+        eng_bin_set "$_enew"
+        sayf "служба не работает (выключена или нет ключа) — ядро заменено без проверки туннеля: Xray %s" "$_env"
+        return 0
+    fi
+    if ! eng_gen "$_enew"; then
+        tail -6 "$_ed/gen.log" | sed 's/^/    /'
+        eng_gen "$_eold" || true
+        die "этот движок не принял конфиг — остался прежний"
+    fi
+    eng_bin_set "$_enew"
+    warn "перезапуск службы: туннель пропадёт на несколько секунд"
+    /etc/init.d/byway restart >/dev/null 2>&1 || true
+    say "проверка туннеля на новом движке (до 2,5 минуты)"
+    if eng_wait; then
+        logf 'движок переключён: %s -> %s' "$_eov" "$_env"
+        sayf "готово: Xray %s; прежнее ядро осталось рядом: %s" "$_env" "$_eold"
+        return 0
+    fi
+    warn "туннель на этом движке не поднялся — возврат прежнего"
+    eng_bin_set "$_eold"
+    eng_gen "$_eold" || true
+    /etc/init.d/byway restart >/dev/null 2>&1 || true
+    logf 'движок: %s не поднялся, возвращён %s' "$_env" "$_eov"
+    dief "возвращён %s" "$_eov"
+}
+
 # Словари перевода для консоли и панели (byway lang).
 
 # Словари лежат только выбранного языка (~73 КБ консоли и ~38 КБ панели на
@@ -5907,7 +6123,7 @@ path_ok() {
         # Свой каталог открыт для выгрузок, но не для СВОИХ рабочих файлов:
         # запись поверх config.json, byway.prev (откат автообновления) или
         # списков читается потом как своё и выглядит как порча данных.
-        /etc/byway/config.json|/etc/byway/byway.prev|/etc/byway/.binmd5|\
+        /etc/byway/config.json|/etc/byway/byway.prev|/etc/byway/prev.tgz|/etc/byway/.binmd5|\
         /etc/byway/dns-saved|/etc/byway/domains.lst|/etc/byway/subnets.lst|\
         /etc/byway/usage.tsv|/etc/byway/health.log|/etc/byway/presets/*|\
         /etc/byway/routes/*|/etc/byway/lang/*) return 1 ;;
@@ -6177,6 +6393,19 @@ cmd_stat() {
 }
 
 # Карта адрес -> домен через FakeDNS, порциями.
+# Домены для карты адрес -> домен: общий список и списки включённых
+# направлений (их соединения идут в учёт наравне с основными).
+stat_domains() {
+    {
+        cat "$(merged_domains)" 2>/dev/null || true
+        for _rn in $(route_names); do
+            [ "$(uci -q get "byway.$_rn.enabled")" = "0" ] && continue
+            route_list "$ROUTES_DIR/$_rn.lst" dom
+        done
+    } > /tmp/byway-stat-doms
+    plain_domains /tmp/byway-stat-doms
+}
+
 stat_map() {
     # Таблица привязана к PID: после рестарта прежние адреса недействительны.
     # Порциями (_MSTEP доменов за прогон, позиция в MAPPOS): полный обход --
@@ -6187,11 +6416,11 @@ stat_map() {
     if [ "$_oldpid" != "$_p" ]; then : > "$MAP"; : > "$MAPPOS"; _newmap=1; fi
     _mpos=$(cat "$MAPPOS" 2>/dev/null || echo 0)
     case "$_mpos" in ''|*[!0-9]*) _mpos=0 ;; esac
-    _mall=$(plain_domains "$(merged_domains)" | grep -c . || true); _mall=${_mall:-0}
+    stat_domains > /tmp/byway-stat-doms.plain
+    _mall=$(grep -c . /tmp/byway-stat-doms.plain || true); _mall=${_mall:-0}
     if [ "$_newmap" = 1 ] || [ "$_mpos" -lt "$_mall" ]; then
         _fre=$(fakeip_re)
-        plain_domains "$(merged_domains)" |
-        sed -n "$((_mpos + 1)),$((_mpos + _MSTEP))p" |
+        sed -n "$((_mpos + 1)),$((_mpos + _MSTEP))p" /tmp/byway-stat-doms.plain |
         while IFS= read -r _d; do
             _a=$(nslookup "$_d" "$_l" 2>/dev/null |
                  sed -n 's/^Address: *//p' | grep -E "^$_fre" | head -1)
@@ -6224,7 +6453,7 @@ stat_collect() {
     # другой пояс). Ветка logread -- для конфига версии до 2026-09-05, где
     # обращения шли в syslog: без неё учёт обнулился бы до пересборки.
     if [ -s "$ACCESS" ]; then
-        grep 'tproxy-in -> proxy' "$ACCESS" > "$_tmp" 2>/dev/null || true
+        grep -E 'tproxy-in -> (proxy|route-)' "$ACCESS" > "$_tmp" 2>/dev/null || true
         # Обрезаем сразу, оставляя хвост 50 строк: из него cmd_status берёт имя
         # работающего ключа. Двойного счёта нет: метка по последней учтённой.
         # cat, а не mv: движок держит файл открытым, подмена уведёт запись в
@@ -6234,7 +6463,7 @@ stat_collect() {
     else
         logread -e xray 2>/dev/null |
           sed -n 's/.*xray[^:]*\[[0-9]*\]: //p' |
-          grep 'tproxy-in -> proxy' > "$_tmp" || true
+          grep -E 'tproxy-in -> (proxy|route-)' > "$_tmp" || true
     fi
     if [ -n "$_since" ]; then
         # substr: метка -- ровно 19 знаков, строка с той же секундой строго
@@ -6666,6 +6895,7 @@ case "${1:-}" in
   import) shift; cmd_import "$@" ;;
   version|--version|-v) echo "byway $BYWAY_VERSION" ;;
   watch)  cmd_watch ;;
+  pulse)  cmd_pulse ;;
   job)    shift; cmd_job "$@" ;;
   stat)   cmd_stat ;;
   top)    shift; cmd_top "$@" ;;
@@ -6692,7 +6922,7 @@ case "${1:-}" in
     _help 'sub АДРЕС' 'скачать подписку'
     _help 'presets' 'обновить готовые списки'
     _help 'top [N]' 'чем реально пользуются'
-    _help 'update [--check|--force]' 'проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же'
+    _help 'update [--check|--force|--rollback]' 'проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же, --rollback — вернуть прежнюю'
     _help 'engine [ВЕРСИЯ|tested|newest|stable|restore|/tmp/ФАЙЛ]' 'есть ли обновление ядра Xray-core, и его замена; без аргумента — ещё и подробности'
     _help 'lang [ru|en]' 'язык вывода и панели; английский словарь докачивается при переключении'
     _help 'report [файл]' 'собрать отчёт для обращения, без ключа от VPN'

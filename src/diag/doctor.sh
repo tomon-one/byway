@@ -98,6 +98,9 @@ doctor_needs() {
         _d_bad "$(_f 'в cron не хватает задач byway (watch: %s, stat: %s)' "$_cw" "$_cs")" \
                "переустановить byway либо завести вручную: */5 * * * * /usr/local/bin/byway watch и 7 * * * * /usr/local/bin/byway stat"
     fi
+    crontab -l 2>/dev/null | grep -q "byway pulse" ||
+        _d_warn "нет задачи cron byway pulse" \
+                "без неё при отказе движка дом остаётся без DNS до 10 минут вместо 1–2: byway update либо завести вручную: * * * * * /usr/local/bin/byway pulse"
     for _m in nft_tproxy nft_socket; do
         # lsmod не показывает модули, встроенные в ядро: смотреть ещё
         # /sys/module/<имя>.
@@ -451,6 +454,12 @@ doctor_rivals() {
             fi
         fi
     done
+    # pbr (маршрутизация по правилам) уживается рядом, если метки и таблицы не
+    # пересекаются: выключать его не советуем, называем, что сверить.
+    if [ -x /etc/init.d/pbr ] && /etc/init.d/pbr enabled 2>/dev/null; then
+        _pm=$(u mark); _pm=${_pm:-0x100000}
+        _d_warn "рядом включён pbr" "$(_f 'он тоже метит трафик и правит ip rule: его метки и таблицы не должны совпадать с меткой byway %s и таблицей %s' "$_pm" "$RT_TABLE")"
+    fi
     return 0
 }
 
