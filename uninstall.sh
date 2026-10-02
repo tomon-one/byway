@@ -248,6 +248,8 @@ if [ -x /etc/init.d/byway ]; then
     do_ /etc/init.d/byway stop
     do_ /etc/init.d/byway disable
     do_ rm -f /etc/init.d/byway /etc/rc.d/S90byway /etc/rc.d/S21byway /etc/rc.d/K10byway
+    # Журнал обращений в памяти: до перезагрузки занимал бы её зря.
+    do_ rm -rf /var/run/byway
     say "остановлена и снята с автозапуска"
 fi
 # Пользователь, от которого работал движок: строки дописал user_add в конец,

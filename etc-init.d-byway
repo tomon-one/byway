@@ -156,7 +156,7 @@ xray_main_pid() {
 # CAP_NET_RAW, раньше SO_MARK требовал CAP_NET_ADMIN. От root -- без ujail
 # (пакет procd-ujail) либо с byway.main.xray_root=1. Код 0 -- от byway.
 CAPS=/var/run/byway-caps.json
-ACCESS=/tmp/byway-access.log
+ACCESS=/var/run/byway/access.log
 xray_user_prep() {
 	[ "$(uci -q get byway.main.xray_root)" = "1" ] && return 1
 	[ -x /sbin/ujail ] || return 1
@@ -309,6 +309,11 @@ start_service() {
 		: > "$FAILMARK"
 		return 1
 	}
+
+	# Каталог журнала обращений -- root 755: движок от byway пишет в свой
+	# файл, но удалить или подменить его ссылкой не может (см. xray_user_prep).
+	# До gen: тот усекает журнал при выключенном сборе.
+	mkdir -p /var/run/byway && chown root:root /var/run/byway && chmod 755 /var/run/byway
 
 	# Пересобираем ВСЕГДА, а не только когда конфига нет.
 	#

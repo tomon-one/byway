@@ -77,12 +77,12 @@ cmd_clear() {
         # Стираем и сырьё (хвост журнала обращений с адресами), и карту с
         # позицией обхода и отсечкой времени: иначе карта считается уже
         # построенной, новая не строится и всё идёт в строку «(по IP)».
-        : > "$LISTS/usage.tsv"; : > "$MAP"; : > "$ACCESS"
+        : > "$LISTS/usage.tsv"; : > "$MAP"; [ ! -f "$ACCESS" ] || : > "$ACCESS"
         rm -f "$MAPPOS" "$MARK" 2>/dev/null || true
         say "статистика использования очищена" ;;
       all)
         : > "$LISTS/health.log"; : > /tmp/byway-watch.last
-        : > "$LISTS/usage.tsv"; : > "$MAP"; : > "$ACCESS"
+        : > "$LISTS/usage.tsv"; : > "$MAP"; [ ! -f "$ACCESS" ] || : > "$ACCESS"
         rm -f "$MAPPOS" "$MARK" 2>/dev/null || true
         say "журнал и статистика очищены" ;;
       *) die "byway clear log | stat | all" ;;
