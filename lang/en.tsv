@@ -107,7 +107,6 @@ vmess-ссылка не раскодировалась	the vmess link did not de
 параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он	byway does not carry link parameter "%s" into the config — worth checking whether it matters
 протокол %s не собран	protocol %s is not built in
 mkcp идёт поверх UDP, а в РФ UDP душат первым делом	mkcp runs over UDP, and in Russia UDP is the first thing throttled
-header и seed у mkcp свежие Xray-core удалили (замена: finalmask/udp header-*, mkcp-original, mkcp-aes128gcm) -- оставлены как в ссылке; если движок их отвергнет, конфиг не заменится	recent Xray versions removed mkcp's header and seed (replacement: finalmask/udp header-*, mkcp-original, mkcp-aes128gcm) -- left as given in the link; if the engine rejects them, the config is not replaced
 HTTP/2 из Xray-core удалён, замена: xhttp в режиме stream-one	HTTP/2 has been removed from Xray-core, replacement: xhttp in stream-one mode
 QUIC из Xray-core удалён, замена: xhttp stream-one поверх H3; в РФ QUIC блокируют первым делом	QUIC has been removed from Xray-core, replacement: xhttp stream-one over H3; QUIC is the first thing blocked in Russia
 allowInsecure=1: проверка сертификата сервера отключена, соединение можно подменить	allowInsecure=1: the server certificate is not verified, the connection can be spoofed
@@ -698,3 +697,4 @@ Xray %s уже лежит рядом — переключение без заг�
 откат лёг не целиком -- копия в %s	rollback was only partly applied -- the copy is in %s
 прежняя версия возвращена	the previous version is restored
 автообновление: ОТКАТ НЕ УДАЛСЯ -- копия в %s, вернуть: byway update --rollback	auto-update: ROLLBACK FAILED -- the copy is in %s, restore with: byway update --rollback
+header и seed у mkcp удалены в Xray-core с 26.1.31 и в конфиг не пишутся: сервер с маскировкой mKCP не ответит; замена на сервере и в ключе — finalmask (mkcp-original, mkcp-aes128gcm)	header and seed of mkcp were removed in Xray-core 26.1.31 and are not written to the config: a server with mKCP obfuscation will not answer; the replacement on the server and in the key is finalmask (mkcp-original, mkcp-aes128gcm)

@@ -77,20 +77,23 @@ stream_transport() {
            fi ;;
 
       kcp)
-           # У mKCP удалены не транспорт, а поля header и seed (`run -test` на
-           # 26.7.28: «mkcp header & seed has been removed»).
            warn "mkcp идёт поверх UDP, а в РФ UDP душат первым делом"
-           # Поля пишем, только если они есть в ссылке: на 26.3.27 они
-           # работают, а подставленный `none` валил любую kcp-ноду на свежем
-           # движке.
+           # header и seed у mKCP: до 26.1.23 работают; 26.1.31–26.6.27
+           # отвергают («removed feature», конфиг не собирается); 26.9.x
+           # принимают и молча не применяют -- без маскировки сервер не
+           # ответит. С 26.1.31 не пишем и говорим (замена -- finalmask).
            _k=""
            if [ -n "$N_HDR" ]; then _k="\"header\": { \"type\": \"$N_HDR\" }"; fi
            if [ -n "$N_SEED" ]; then
                [ -n "$_k" ] && _k="$_k, "
                _k="$_k\"seed\": \"$N_SEED\""
            fi
+           xray_ver_num >/dev/null
+           if [ -n "$_k" ] && [ "${XRAYVER:-0}" -ge 260131 ]; then
+               warn "header и seed у mkcp удалены в Xray-core с 26.1.31 и в конфиг не пишутся: сервер с маскировкой mKCP не ответит; замена на сервере и в ключе — finalmask (mkcp-original, mkcp-aes128gcm)"
+               _k=""
+           fi
            if [ -n "$_k" ]; then
-               warn "header и seed у mkcp свежие Xray-core удалили (замена: finalmask/udp header-*, mkcp-original, mkcp-aes128gcm) -- оставлены как в ссылке; если движок их отвергнет, конфиг не заменится"
                STREAM="\"network\": \"kcp\", \"kcpSettings\": { $_k }"
            else
                STREAM="\"network\": \"kcp\""
