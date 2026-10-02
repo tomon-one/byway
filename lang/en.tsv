@@ -181,9 +181,6 @@ byway sub <адрес подписки>	byway sub <subscription address>
 меню работает только с терминала: byway menu	the menu only works from a terminal: byway menu
 не OpenWrt	not OpenWrt
 byway рассчитан на OpenWrt, на другом может не работать	byway is made for OpenWrt, elsewhere it may not work
-есть base64 (нужен для ключей vmess и ss)	base64 is present (needed for vmess and ss keys)
-нет base64	no base64
-ключи vmess и ss разобрать не выйдет: %s	vmess and ss keys cannot be parsed: %s
 вписать на вкладке «Основное» или: uci set byway.main.node_url=vless://…	write it on the "Overview" tab, or: uci set byway.main.node_url=vless://…
 ключ не заполнен	the key is still a placeholder
 вписать настоящий ключ вместо заглушки	write a real key in place of the placeholder
@@ -671,3 +668,6 @@ xmux не ограничивает соединения: ядро собрано
 в %s нет ядра xray — нужен .gz с бинарником или .zip выпуска	%s holds no xray core — a .gz with the binary or a release .zip is needed
 своя сборка: %s, sha256 ядра %s	custom build: %s, core sha256 %s
 при сбое сервера xhttp открывает сотни соединений: память роутера, риск блокировки адреса. Ядро с -tags http2legacy: docs/engine.md, «Ядро на Go 1.27»	when the server fails, xhttp opens hundreds of connections: router memory, risk of the address being blocked. A core built with -tags http2legacy: docs/engine.en.md, "Engine built with Go 1.27"
+ключ не разобрался: сбой разборщика (ucode)	the key could not be parsed: the parser (ucode) failed
+есть ucode (разбор ключей)	ucode is present (key parsing)
+нет ucode — ключи не разбираются	no ucode — keys cannot be parsed

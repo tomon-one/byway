@@ -138,12 +138,11 @@ doctor_needs() {
         command -v "$_c" >/dev/null 2>&1 && _d_ok "$(_f 'есть %s' "$_c")" ||
             _d_bad "$(_f 'нет %s' "$_c")" "$PKG_FIX $_c"
     done
-    # base64 нужен только для vmess и ss, не ошибка. Проверка запуском:
-    # /bin/base64 бывает ссылкой на busybox без апплета.
-    if have_base64; then
-        _d_ok "есть base64 (нужен для ключей vmess и ss)"
+    # ucode разбирает ключи; он есть в любой OpenWrt с firewall4.
+    if command -v ucode >/dev/null 2>&1; then
+        _d_ok "есть ucode (разбор ключей)"
     else
-        _d_warn "нет base64" "$(_f 'ключи vmess и ss разобрать не выйдет: %s' "$PKG_FIX coreutils-base64")"
+        _d_bad "нет ucode — ключи не разбираются" "$PKG_FIX ucode"
     fi
     return 0
 }
