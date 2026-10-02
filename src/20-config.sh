@@ -353,9 +353,9 @@ stream_transport() {
                    dief "obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а стоит %s — обновить: byway engine tested" \
                         "$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f2)"
                fi
-               _fm=", \"finalmask\": { \"udp\": [ { \"type\": \"salamander\", \"settings\": { \"password\": \"$N_OBFSPW\" } } ] }"
+               _fm=", \"finalmask\": { \"udp\": [ { \"type\": \"salamander\", \"settings\": { \"password\": $J_OBFSPW } } ] }"
            fi
-           STREAM="\"network\": \"hysteria\", \"hysteriaSettings\": { \"version\": 2, \"auth\": \"$N_PASS\" }$_fm" ;;
+           STREAM="\"network\": \"hysteria\", \"hysteriaSettings\": { \"version\": 2, \"auth\": $J_PASS }$_fm" ;;
 
       # У wireguard транспорта нет (UDP свой); в streamSettings остаётся метка
       # self_sockopt.

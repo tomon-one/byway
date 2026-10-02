@@ -434,11 +434,19 @@ let N = {
 };
 // sni и host ss не задаёт: в sh остаются прежние, их и проверяем.
 let PREV_SNI = getenv('BW_SNI') ?? '', PREV_WSHOST = getenv('BW_WSHOST') ?? '';
+// Строка JSON: пароль и логин уходят в конфиг строкой JSON, кавычка и
+// обратная косая в них законны и экранируются (J_*), а не запрещаются.
+function jstr(s) {
+    return '"' + replace(s, /[\\"\x01-\x1f]/g,
+        (c) => (c == '\\' || c == '"') ? '\\' + c : sprintf('\\u%04x', ord(c))) + '"';
+}
 function flush() {
     for (let k in N) put('N_' + k, N[k]);
+    for (let k in [ 'PASS', 'USER', 'OBFSPW' ]) put('J_' + k, jstr(N[k] ?? ''));
 }
 
-// Поля, уходящие в конфиг строками.
+// Поля, уходящие в конфиг строками. Пароли и логин экранирует jstr --
+// кавычка в них не отказ; управляющий знак -- отказ везде.
 function node_json_ok() {
     for (let p in [ ['адрес', N.HOST], ['id', N.UUID], ['пароль', N.PASS],
                     ['user', N.USER], ['method', N.METHOD], ['type', N.TYPE],
@@ -457,6 +465,7 @@ function node_json_ok() {
             flush();
             dief("в поле «%s» ссылки управляющий знак (перевод строки, табуляция): такая ссылка подменяет поля конфига", p[0]);
         }
+        if (p[0] in [ 'пароль', 'user', 'obfs-password' ]) continue;
         if (index(p[1], '"') >= 0 || index(p[1], '\\') >= 0) {
             flush();
             dief("в поле «%s» ссылки кавычка или обратная косая: значения уходят в конфиг как есть, и такая ссылка подменяет его поля", p[0]);
@@ -759,13 +768,13 @@ build_outbound() {
       vmess)
         OUTBOUND="\"protocol\": \"vmess\", \"settings\": { \"vnext\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"users\": [ { \"id\": \"$N_UUID\", \"alterId\": ${N_AID:-0}, \"security\": \"${N_METHOD:-auto}\" } ] } ] }" ;;
       trojan)
-        OUTBOUND="\"protocol\": \"trojan\", \"settings\": { \"servers\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"password\": \"$N_PASS\" } ] }" ;;
+        OUTBOUND="\"protocol\": \"trojan\", \"settings\": { \"servers\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"password\": $J_PASS } ] }" ;;
       shadowsocks)
-        OUTBOUND="\"protocol\": \"shadowsocks\", \"settings\": { \"servers\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"method\": \"$N_METHOD\", \"password\": \"$N_PASS\" } ] }" ;;
+        OUTBOUND="\"protocol\": \"shadowsocks\", \"settings\": { \"servers\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"method\": \"$N_METHOD\", \"password\": $J_PASS } ] }" ;;
       socks)
         _su=""
         if [ -n "$N_USER" ]; then
-          _su=", \"users\": [ { \"user\": \"$N_USER\", \"pass\": \"$N_PASS\" } ]"
+          _su=", \"users\": [ { \"user\": $J_USER, \"pass\": $J_PASS } ]"
         fi
         OUTBOUND="\"protocol\": \"socks\", \"settings\": { \"servers\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT$_su } ] }" ;;
       *) dief "протокол %s не собран" "$N_PROTO" ;;
@@ -1127,9 +1136,9 @@ stream_transport() {
                    dief "obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а стоит %s — обновить: byway engine tested" \
                         "$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f2)"
                fi
-               _fm=", \"finalmask\": { \"udp\": [ { \"type\": \"salamander\", \"settings\": { \"password\": \"$N_OBFSPW\" } } ] }"
+               _fm=", \"finalmask\": { \"udp\": [ { \"type\": \"salamander\", \"settings\": { \"password\": $J_OBFSPW } } ] }"
            fi
-           STREAM="\"network\": \"hysteria\", \"hysteriaSettings\": { \"version\": 2, \"auth\": \"$N_PASS\" }$_fm" ;;
+           STREAM="\"network\": \"hysteria\", \"hysteriaSettings\": { \"version\": 2, \"auth\": $J_PASS }$_fm" ;;
 
       # У wireguard транспорта нет (UDP свой); в streamSettings остаётся метка
       # self_sockopt.
