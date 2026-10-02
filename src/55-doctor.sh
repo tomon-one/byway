@@ -127,6 +127,10 @@ doctor_needs() {
     if [ -x "$XRAY" ]; then
         _xv=$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f1-2)
         _d_ok "$(_f 'движок: %s (%s)' "$_xv" "$XRAY")"
+        if [ -f "$OUT" ] && grep -q '"network": "xhttp"' "$OUT" && eng_dial_bug "$XRAY"; then
+            _d_warn "$(_t 'xmux не ограничивает соединения: ядро собрано на Go 1.27')" \
+                    "при сбое сервера xhttp открывает сотни соединений: память роутера, риск блокировки адреса. Ядро с -tags http2legacy: docs/engine.md, «Ядро на Go 1.27»"
+        fi
     else
         _d_bad "$(_f 'не найден Xray-core (%s)' "$XRAY")" "$(_f '%s xray-core либо задать byway.main.xray_bin' "$PKG_FIX")"
     fi

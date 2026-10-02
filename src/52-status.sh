@@ -131,6 +131,9 @@ status_block() {
 # Версия и путь ядра, pid, память под пределом, число своих направлений.
 status_engine() {
     printf "$(_t "движок      %s\n")" "$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f1-2) — $XRAY"
+    if [ -f "$OUT" ] && grep -q '"network": "xhttp"' "$OUT" && eng_dial_bug "$XRAY"; then
+        printf "$(_t 'xmux        не ограничивает соединения: ядро собрано на Go 1.27, см. byway doctor\n')"
+    fi
     # Боевой процесс -- по пути к конфигу, не по имени бинарника: имя меняется,
     # когда рядом лежит версия вне фида (xray-26.7.11).
     _p=$(xray_pid)

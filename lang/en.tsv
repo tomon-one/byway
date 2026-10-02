@@ -534,7 +534,7 @@ byway возьмёт другое значение сам; задать своё
   файл: %s	  file: %s
   самая свежая у XTLS: %s, стабильная: %s	  newest at XTLS: %s, stable: %s
   на флеше свободно %s МБ, памяти доступно %s МБ	  free flash %s MB, available memory %s MB
-  варианты: byway engine ВЕРСИЯ | tested | newest | stable | restore	  options: byway engine VERSION | tested | newest | stable | restore
+  варианты: byway engine ВЕРСИЯ | tested | newest | stable | restore | /tmp/ФАЙЛ.gz	  options: byway engine VERSION | tested | newest | stable | restore | /tmp/FILE.gz
 GitHub не ответил — номер свежей версии неизвестен, ничего не тронуто	GitHub did not answer — the newest version number is unknown, nothing touched
 непонятная версия «%s» — нужен номер вида 26.9.9 либо tested, newest, stable, restore	unclear version "%s" — a number like 26.9.9 or tested, newest, stable, restore is needed
 стоит уже %s — менять нечего	%s is already installed — nothing to replace
@@ -575,7 +575,7 @@ GitHub не ответил — номер свежей версии неизве
 движок: %s не встал, возвращён %s	engine: %s did not install, %s restored
 движок: НИ НОВОЕ, НИ ПРЕЖНЕЕ ядро не легло на флеш -- туннеля нет	engine: NEITHER the new NOR the previous engine fit on flash -- no tunnel
 есть ли обновление ядра Xray-core, и его замена; без аргумента — ещё и подробности	whether an Xray-core update exists, and the replacement; without an argument — details too
-engine [ВЕРСИЯ|tested|newest|stable|restore]	engine [VERSION|tested|newest|stable|restore]
+engine [ВЕРСИЯ|tested|newest|stable|restore|/tmp/ФАЙЛ]	engine [VERSION|tested|newest|stable|restore|/tmp/FILE]
 конфига движка	the engine config
 правил nft	the nft rules
 проверки окружения	the environment check
@@ -663,3 +663,11 @@ flow=%s у trojan Xray-core не поддерживает — пропущен	X
 byway job update|engine [ВЕРСИЯ]|log	byway job update|engine [VERSION]|log
 byway watch: ядра нет -- byway engine restore в фоне	byway watch: no core -- byway engine restore in the background
   GitHub не ответил ни через туннель, ни напрямую, ни по адресам из DoH — проверить связь роутера и повторить	  GitHub did not answer through the tunnel, directly or at addresses from DoH — check the router's connection and retry
+xmux        не ограничивает соединения: ядро собрано на Go 1.27, см. byway doctor\n	xmux        does not limit connections: the core is built with Go 1.27, see byway doctor\n
+xmux не ограничивает соединения: ядро собрано на Go 1.27	xmux does not limit connections: the core is built with Go 1.27
+своя сборка	custom build
+своя сборка ядра — только из /tmp: на флеше рядом с ядром ей нет места	a custom core build is taken only from /tmp: there is no room for it on flash next to the core
+нет файла %s	no such file: %s
+в %s нет ядра xray — нужен .gz с бинарником или .zip выпуска	%s holds no xray core — a .gz with the binary or a release .zip is needed
+своя сборка: %s, sha256 ядра %s	custom build: %s, core sha256 %s
+при сбое сервера xhttp открывает сотни соединений: память роутера, риск блокировки адреса. Ядро с -tags http2legacy: docs/engine.md, «Ядро на Go 1.27»	when the server fails, xhttp opens hundreds of connections: router memory, risk of the address being blocked. A core built with -tags http2legacy: docs/engine.en.md, "Engine built with Go 1.27"

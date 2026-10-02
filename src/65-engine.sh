@@ -83,13 +83,27 @@ eng_fetch() {   # 1 версия, 2 файл
 }
 
 # Размер ядра внутри архива, байты. Пусто -- в архиве нет файла xray.
-eng_size() { unzip -l "$1" xray 2>/dev/null | awk '$NF=="xray"{print $1; exit}'; }
+eng_size() {
+    case "$1" in
+      *.gz) eng_cat "$1" | wc -c ;;
+      *)    unzip -l "$1" xray 2>/dev/null | awk '$NF=="xray"{print $1; exit}' ;;
+    esac
+}
+
+# Бинарник xray из пакета на stdout: .gz -- своя сборка (byway engine ФАЙЛ),
+# иначе архив выпуска XTLS.
+eng_cat() {
+    case "$1" in
+      *.gz) gunzip -c "$1" 2>/dev/null ;;
+      *)    unzip -p "$1" xray 2>/dev/null ;;
+    esac
+}
 
 # Ядро из архива $1 в путь $2: через временное имя, чтобы оборванная
 # распаковка не оставила под рабочим именем половину файла.
 eng_put() {   # 1 архив, 2 путь
     rm -f "$2.new" 2>/dev/null || true
-    if unzip -p "$1" xray > "$2.new" 2>/dev/null && [ -s "$2.new" ] &&
+    if eng_cat "$1" > "$2.new" && [ -s "$2.new" ] &&
        chmod 755 "$2.new" && mv "$2.new" "$2"; then
         return 0
     fi
@@ -139,6 +153,7 @@ eng_wait() {
 }
 
 cmd_engine() {
+    case "${1:-}" in /*) eng_local "$1"; return 0 ;; esac
     command -v unzip >/dev/null 2>&1 ||
         dief "нет unzip — поставить: %s unzip" "$PKG_FIX"
     command -v sha256sum >/dev/null 2>&1 ||
@@ -190,7 +205,7 @@ cmd_engine() {
         _efk=$(eng_free_kb || echo 0); _emk=$(eng_mem_kb || echo 0)
         sayf "  на флеше свободно %s МБ, памяти доступно %s МБ" \
             "$(( ${_efk:-0} / 1024 ))" "$(( ${_emk:-0} / 1024 ))"
-        say "  варианты: byway engine ВЕРСИЯ | tested | newest | stable | restore"
+        say "  варианты: byway engine ВЕРСИЯ | tested | newest | stable | restore | /tmp/ФАЙЛ.gz"
         return 0 ;;
       tested) _env=$XRAY_TESTED ;;
       # Ядра нет (sysupgrade его не сохраняет): версия из имени файла в
@@ -200,6 +215,7 @@ cmd_engine() {
         [ -z "$_eov" ] || { sayf "ядро на месте: Xray %s" "$_eov"; return 0; }
         _erb=$(uci -q get byway.main.xray_bin 2>/dev/null || true)
         _env=${_erb##*/xray-}
+        _env=${_env%%-*}
         case "$_erb" in /usr/local/bin/xray-*) ;; *) _env="" ;; esac
         case "$_env" in ''|*[!0-9.]*) _env=$XRAY_TESTED ;; esac ;;
       newest) _env=$(eng_top any || true)
@@ -211,7 +227,12 @@ cmd_engine() {
     case "$_env" in
       *[!0-9.]*|.*|*.) dief "непонятная версия «%s» — нужен номер вида 26.9.9 либо tested, newest, stable, restore" "$_earg" ;;
     esac
-    [ "$_env" != "$_eov" ] || { sayf "стоит уже %s — менять нечего" "$_env"; return 0; }
+    # Своя сборка той же версии (xray-local-*, xray-26.9.30-h2l) -- не «стоит
+    # уже»: официальная возвращается той же командой.
+    case "$_eold" in
+      /usr/local/bin/xray-*-*) ;;
+      *) [ "$_env" != "$_eov" ] || { sayf "стоит уже %s — менять нечего" "$_env"; return 0; } ;;
+    esac
 
     _enew=/usr/local/bin/xray-$_env
     _elk=/var/run/byway-engine.lock
@@ -243,7 +264,8 @@ cmd_engine() {
          dief "архив %s не скачался — ничего не тронуто" "$_env" ;;
       *) dief "архив %s не сошёлся с суммой SHA2-256 из .dgst выпуска — отброшен, ничего не тронуто" "$_env" ;;
     esac
-    _esz=$(eng_size "$_ed/new.zip")
+    _epkg=$_ed/new.zip
+    _esz=$(eng_size "$_epkg")
     [ -n "$_esz" ] || die "в архиве нет файла xray — ничего не тронуто"
     say "архив сверен с суммой из выпуска"
 
@@ -273,7 +295,7 @@ eng_fresh() {
         dief "на флеше свободно %s МБ, ядру нужно %s — ничего не тронуто" \
              "$(( ${_efree:-0} / 1024 ))" 25
     sayf "ядра нет — ставится Xray %s" "$_env"
-    eng_put "$_ed/new.zip" "$_enew" || die "ядро не распаковалось на флеш — ничего не тронуто"
+    eng_put "$_epkg" "$_enew" || die "ядро не распаковалось на флеш — ничего не тронуто"
     if ! "$_enew" version >/dev/null 2>&1; then
         rm -f "$_enew" 2>/dev/null || true
         die "ядро не запускается на этом железе — удалено"
@@ -290,8 +312,8 @@ eng_fresh() {
 # Путь «рядом». Прежнее ядро не трогается до успеха: откат -- вернуть путь.
 eng_side() {
     say "места хватает — новое ядро кладётся рядом с прежним"
-    eng_put "$_ed/new.zip" "$_enew" || die "ядро не распаковалось на флеш — ничего не тронуто"
-    rm -f "$_ed/new.zip" 2>/dev/null || true
+    eng_put "$_epkg" "$_enew" || die "ядро не распаковалось на флеш — ничего не тронуто"
+    rm -f "$_epkg" 2>/dev/null || true
     if ! "$_enew" version >/dev/null 2>&1; then
         rm -f "$_enew" 2>/dev/null || true
         die "новое ядро не запускается на этом железе — удалено, работает прежнее"
@@ -361,12 +383,12 @@ eng_ram() {
         eng_ram_back
     fi
     _etmp=$_ed/xray
-    if ! unzip -p "$_ed/new.zip" xray > "$_etmp" 2>/dev/null || ! chmod 755 "$_etmp" ||
+    if ! eng_cat "$_epkg" > "$_etmp" || ! chmod 755 "$_etmp" ||
        ! "$_etmp" version >/dev/null 2>&1; then
         warn "новое ядро не распаковалось или не запускается"
         eng_ram_back
     fi
-    rm -f "$_ed/new.zip" 2>/dev/null || true
+    rm -f "$_epkg" 2>/dev/null || true
     # Без ключа конфига нет, сверять нечего (eng_idle, как в eng_side).
     if ! eng_idle && ! eng_gen "$_etmp"; then
         tail -6 "$_ed/gen.log" | sed 's/^/    /'
@@ -436,4 +458,61 @@ eng_idle() {
       outbound)         [ -z "$(u outbound_json)" ] ;;
       *)                [ -z "$(u node_url)" ] ;;
     esac
+}
+
+# Своя сборка ядра из /tmp (.gz с бинарником xray или .zip выпуска): та же
+# замена с откатом, но без сверки с .dgst -- sha256 печатается, сверяет
+# человек со своей сборкой. Файл после установки удаляется (память).
+eng_local() {
+    case "$1" in
+      /tmp/*) ;;
+      *) die "своя сборка ядра — только из /tmp: на флеше рядом с ядром ей нет места" ;;
+    esac
+    [ -f "$1" ] || dief "нет файла %s" "$1"
+    # unzip и имя сборки -- для отката через память: прежнее ядро берётся
+    # архивом выпуска с GitHub.
+    command -v unzip >/dev/null 2>&1 ||
+        dief "нет unzip — поставить: %s unzip" "$PKG_FIX"
+    ENG_ASSET=$(eng_asset 2>/dev/null) || ENG_ASSET=""
+    _eold=$XRAY
+    _eov=""
+    [ -n "$_eold" ] && [ -x "$_eold" ] &&
+        _eov=$("$_eold" version 2>/dev/null | head -1 | awk '{print $2}' | tr -cd '0-9.')
+    _epkg=$1
+    _esz=$(eng_size "$_epkg")
+    [ "${_esz:-0}" -gt 1048576 ] ||
+        dief "в %s нет ядра xray — нужен .gz с бинарником или .zip выпуска" "$1"
+    sayf "своя сборка: %s, sha256 ядра %s" "$1" "$(eng_cat "$_epkg" | sha256sum | cut -d' ' -f1)"
+    _env=$(_t 'своя сборка')
+    _enew=/usr/local/bin/xray-local-$(date +%Y%m%d%H%M)
+    _elk=/var/run/byway-engine.lock
+    take_lock "$_elk" "$(_t 'замена движка')" || die "замена движка уже идёт"
+    _ed=/tmp/byway-engine.$$
+    rm -rf "$_ed" 2>/dev/null || true
+    mkdir -p "$_ed"
+    trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT INT TERM
+    _emk=$(eng_mem_kb || echo 0)
+    [ "${_emk:-0}" -ge 40960 ] ||
+        dief "памяти доступно %s МБ, для замены нужно не меньше 40 — ничего не тронуто" "$(( ${_emk:-0} / 1024 ))"
+    _efree=$(eng_free_kb || echo 0)
+    if [ -z "$_eov" ]; then
+        eng_fresh
+        return 0
+    fi
+    _etun0=0
+    eng_idle || { tunnel_ok && _etun0=1; } || true
+    if [ "$(( ${_efree:-0} * 1024 ))" -ge "$(( _esz + 5242880 ))" ]; then
+        eng_side
+    else
+        eng_ram
+    fi
+}
+
+# Ядро на Go 1.27 без -tags http2legacy: XHTTP открывает соединение на каждый
+# ждущий запрос, xmux.maxConnections их не держит; при висящем рукопожатии --
+# сотни соединений и OOM (Xray#6797, сборки XTLS с 26.9.8). Тег сборки виден
+# в buildinfo бинарника. $1 -- путь к ядру.
+eng_dial_bug() {
+    "$1" version 2>/dev/null | head -1 | grep -q '(go1\.27[.) ]' || return 1
+    ! grep -q 'http2legacy' "$1" 2>/dev/null
 }

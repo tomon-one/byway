@@ -268,6 +268,72 @@ is closed, with `open` it goes to the internet directly.
 
 ---
 
+## Engine built with Go 1.27
+
+Xray-core releases 26.9.8 through 26.9.30 are built with Go 1.27. Its HTTP/2
+client stopped coalescing dials, so XHTTP opens a TCP connection for every
+waiting request, and `xmux.maxConnections` does not limit them. While the
+server answers, this means a few extra connections. When the handshake with
+the server hangs (the server is down, the address is being blocked), it
+becomes hundreds of connections: the router runs out of memory, and a burst
+of connections to one address is a reason to block it. Details:
+[XTLS/Xray-core#6797](https://github.com/XTLS/Xray-core/issues/6797); the Go
+fix: [golang/go#81646](https://github.com/golang/go/issues/81646).
+
+Only xhttp keys are affected. With such an engine `byway doctor` warns
+"xmux does not limit connections", and `byway status` prints an `xmux` line.
+The sign is `go1.27` in `xray version` and a build without the
+`http2legacy` tag.
+
+The `-tags http2legacy` tag brings back the previous HTTP/2 client. It is set
+at build time, so the ready-made engine from GitHub cannot be fixed with it:
+the same version has to be built by hand. You need a computer with Linux,
+macOS or WSL, `git` and Go 1.27 (an older Go works too: `GOTOOLCHAIN`
+downloads the right version itself).
+
+```sh
+git clone --depth 1 --branch v26.9.30 https://github.com/XTLS/Xray-core.git
+cd Xray-core
+export GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 GOOS=linux GOARCH=arm64
+go build -o xray -trimpath -buildvcs=false -gcflags="all=-l=4" \
+  -ldflags="-X github.com/xtls/xray-core/core.build=$(git rev-parse --short HEAD)+http2legacy -s -w -buildid=" \
+  -tags http2legacy ./main
+gzip -9 xray
+scp -O xray.gz root@192.168.1.1:/tmp/
+```
+
+`GOARCH` follows the router's `uname -m`: `aarch64` → `arm64`, `armv7l` →
+`arm` with `GOARM=7`, `x86_64` → `amd64`, `mips` → `mips`, `mipsel` →
+`mipsle`; for MIPS without an FPU add `GOMIPS=softfloat`. The Go version is
+the one `xray version` shows for the release engine. The flags are the same as
+in the XTLS release build (`.github/workflows/release.yml`): without
+`-tags http2legacy` this command produces a file byte-identical to the release
+engine, so the build is easy to verify.
+
+On the router:
+
+```sh
+byway engine /tmp/xray.gz
+```
+
+byway prints the engine's sha256 (compare it with `sha256sum xray` on the
+computer before `gzip`) and swaps the engine the same way as a GitHub
+download: side by side or through memory, with a tunnel check and rollback.
+The file in `/tmp` is deleted after installation. The custom build is saved as
+`/usr/local/bin/xray-local-DATE`.
+
+What to know about a custom build:
+
+- `byway engine VERSION` and `tested` install the XTLS release engine, that is,
+  the bug comes back; the same command returns you to the official engine of
+  the same version.
+- After a firmware upgrade byway restores the tested version from GitHub; the
+  custom build has to be installed again.
+- Once Xray ships a build with a fixed Go, the custom build is no longer
+  needed.
+
+---
+
 ## What depends on the engine version
 
 An old engine drops an unknown field silently, and `xray run -test` accepts

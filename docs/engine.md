@@ -249,6 +249,67 @@ byway gen && /etc/init.d/byway restart
 
 ---
 
+## Ядро на Go 1.27
+
+Выпуски Xray-core с 26.9.8 по 26.9.30 собраны на Go 1.27. В нём клиент HTTP/2
+перестал объединять наборы номера, и XHTTP открывает своё TCP-соединение на
+каждый ждущий запрос: `xmux.maxConnections` их не ограничивает. Пока сервер
+отвечает, это несколько лишних соединений. Когда рукопожатие с сервером
+висит (сервер лёг, адрес глушат), соединений становятся сотни: роутер
+упирается в память, а залп соединений к одному адресу — повод его
+заблокировать. Разбор —
+[XTLS/Xray-core#6797](https://github.com/XTLS/Xray-core/issues/6797),
+исправление в Go — [golang/go#81646](https://github.com/golang/go/issues/81646).
+
+Касается только ключей на xhttp. Если стоит такое ядро, `byway doctor`
+предупреждает «xmux не ограничивает соединения», а `byway status` пишет
+строку `xmux`. Признак — `go1.27` в `xray version` и сборка без тега
+`http2legacy`.
+
+Тег `-tags http2legacy` возвращает прежний клиент HTTP/2. Задаётся он при
+сборке, поэтому готовое ядро с GitHub им не исправить: ту же версию нужно
+собрать самому. Нужен компьютер с Linux, macOS или WSL, `git` и Go 1.27
+(подойдёт и Go постарше: `GOTOOLCHAIN` скачает нужную версию сам).
+
+```sh
+git clone --depth 1 --branch v26.9.30 https://github.com/XTLS/Xray-core.git
+cd Xray-core
+export GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 GOOS=linux GOARCH=arm64
+go build -o xray -trimpath -buildvcs=false -gcflags="all=-l=4" \
+  -ldflags="-X github.com/xtls/xray-core/core.build=$(git rev-parse --short HEAD)+http2legacy -s -w -buildid=" \
+  -tags http2legacy ./main
+gzip -9 xray
+scp -O xray.gz root@192.168.1.1:/tmp/
+```
+
+`GOARCH` — по `uname -m` роутера: `aarch64` → `arm64`, `armv7l` → `arm`
+и `GOARM=7`, `x86_64` → `amd64`, `mips` → `mips`, `mipsel` → `mipsle`; для
+MIPS без FPU добавить `GOMIPS=softfloat`. Номер Go — тот, что пишет
+`xray version` у ядра из выпуска. Флаги те же, что в сборке выпусков XTLS
+(`.github/workflows/release.yml`): без `-tags http2legacy` эта команда даёт
+файл, побайтно равный ядру из выпуска, так что сборку легко сверить.
+
+На роутере:
+
+```sh
+byway engine /tmp/xray.gz
+```
+
+byway печатает sha256 ядра (сверьте с `sha256sum xray` на компьютере до
+`gzip`) и меняет ядро так же, как при загрузке с GitHub: рядом или через
+память, с проверкой туннеля и откатом. Файл из `/tmp` после установки
+удаляется. Своя сборка ложится как `/usr/local/bin/xray-local-ДАТА`.
+
+Что надо знать про свою сборку:
+
+- `byway engine ВЕРСИЯ` и `tested` ставят ядро из выпуска XTLS, то есть снова
+  с ошибкой; вернуться на официальное той же версии можно той же командой.
+- После обновления прошивки byway восстанавливает проверенную версию с
+  GitHub, свою сборку придётся поставить заново.
+- Когда выйдет Xray на исправленном Go, своя сборка не нужна.
+
+---
+
 ## Что зависит от версии ядра
 
 Старое ядро незнакомое поле отбрасывает молча, и `xray run -test` такой конфиг
