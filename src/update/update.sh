@@ -66,13 +66,25 @@ latest_version() {
 
 # Код выхода для ночного обновления: 0 -- поставлено и туннель работает,
 # 3 -- не поднялось и откачено, 4 -- откат не удался, 5 -- копия для отката
-# не сделалась (ничего не тронуто), прочее -- не скачалось.
+# не сделалась, 6 -- подпись не сошлась (оба -- ничего не тронуто), прочее --
+# не скачалось.
 cmd_update() {
-    if [ "${1:-}" = --rollback ]; then
-        upd_restore || die "откатывать не на что: копия делается при byway update"
-        return 0
-    fi
-    _lv=$(latest_version)
+    _uf=""; _nov=0; _uto=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+          --rollback)
+            upd_restore || die "откатывать не на что: копия делается при byway update"
+            return 0 ;;
+          --check|--force) _uf=$1 ;;
+          --no-verify) _nov=1 ;;
+          # Ночное: ставится выдержавший три дня номер, а не свежий на 04:00.
+          --to) shift; _uto=${1:-}
+                case "$_uto" in ''|*[!0-9.]*) dief "непонятная версия «%s»" "$_uto" ;; esac ;;
+          *) dief "непонятный ключ: %s — byway update [--check|--force|--rollback|--no-verify]" "$1" ;;
+        esac
+        shift
+    done
+    if [ -n "$_uto" ]; then _lv="200 $_uto"; else _lv=$(latest_version); fi
     _code=${_lv%% *}; _new=${_lv#* }
     if [ -z "$_new" ] || [ "$_new" = "$_code" ]; then
         case "$_code" in
@@ -86,7 +98,7 @@ cmd_update() {
     if ! ver_gt "$_new" "$BYWAY_NUM"; then
         # Тег могут пересобрать на новом коммите под тем же номером:
         # «новее нет» верно про номер, но не про файлы. Отсюда --force.
-        case "${1:-}" in
+        case "$_uf" in
           --force)
             sayf "версия та же (%s), но ставится заново -- так велит --force" "$BYWAY_NUM" ;;
           *)
@@ -97,7 +109,7 @@ cmd_update() {
     else
         sayf "есть новая версия: %s (у вас %s)" "$_new" "$BYWAY_NUM"
     fi
-    case "${1:-}" in --check) return 0 ;; esac
+    [ "$_uf" = --check ] && return 0
 
     # Распаковка в память. Каталог свой у каждого запуска ($$): на общем
     # имени в /tmp кто угодно подложил бы исходник, который установщик от
@@ -114,6 +126,14 @@ cmd_update() {
     tar xzf "$_d/p.tar.gz" -C "$_d" 2>/dev/null || die "не распаковалось -- ничего не тронуто"
     _src=$(find "$_d" -maxdepth 2 -name install.sh 2>/dev/null | head -1)
     [ -n "$_src" ] || die "в пакете нет install.sh -- ничего не тронуто"
+    if [ "$_nov" = 1 ]; then
+        warn "--no-verify: подпись выпуска не проверяется"
+    elif upd_verify "$_new" "$(dirname "$_src")" "$_d"; then
+        say "подпись выпуска сошлась с ключом byway"
+    else
+        warn "выпуск не поставлен -- ничего не тронуто; поставить без проверки подписи: byway update --no-verify"
+        exit 6
+    fi
 
     # Связь до установки: откатывать за мёртвый сервер нельзя (eng_wait).
     _etun0=0
@@ -185,5 +205,28 @@ upd_restore() {
     /etc/init.d/rpcd reload >/dev/null 2>&1 || true
     /etc/init.d/byway restart >/dev/null 2>&1 || true
     say "прежняя версия возвращена"
+    return 0
+}
+
+# Подпись выпуска (с 0.3.0): SHA256SUMS -- суммы всех файлов архива тега --
+# и его подпись лежат вложениями выпуска на GitHub, ключ -- BYWAY_PUBKEY.
+# Архив с чужого зеркала или подменённый по дороге не пройдёт: каждый файл
+# обязан быть в списке и с той суммой, лишних нет.
+upd_verify() {   # 1 -- номер, 2 -- корень распакованного архива, 3 -- рабочий каталог
+    command -v usign >/dev/null 2>&1 || { warn "нет usign — подпись выпуска проверить нечем"; return 1; }
+    _rel="https://github.com/$BYWAY_REPO/releases/download/v$1"
+    if ! net_get --max-time 30 -o "$3/SHA256SUMS" "$_rel/SHA256SUMS" ||
+       ! net_get --max-time 30 -o "$3/SHA256SUMS.sig" "$_rel/SHA256SUMS.sig"; then
+        warnf "у выпуска %s нет подписи (SHA256SUMS.sig) либо она не скачалась" "$1"
+        return 1
+    fi
+    printf 'untrusted comment: byway release key public key\n%s\n' "$BYWAY_PUBKEY" > "$3/key.pub"
+    usign -V -q -m "$3/SHA256SUMS" -x "$3/SHA256SUMS.sig" -p "$3/key.pub" ||
+        { warn "подпись выпуска не сошлась с ключом byway"; return 1; }
+    ( cd "$2" && sha256sum -c "$3/SHA256SUMS" >/dev/null 2>&1 ) ||
+        { warn "файлы архива не совпали с подписанным списком"; return 1; }
+    _ul=$(cd "$2" && find . -type f | sed 's|^\./||' | sort)
+    _us=$(awk '{ sub(/^\*/, "", $2); print $2 }' "$3/SHA256SUMS" | sort)
+    [ "$_ul" = "$_us" ] || { warn "в архиве есть файлы вне подписанного списка"; return 1; }
     return 0
 }

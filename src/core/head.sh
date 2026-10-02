@@ -25,9 +25,26 @@ BYWAY_NAME="Causeway"
 BYWAY_VERSION="$BYWAY_NUM ($BYWAY_NAME)"
 # Откуда берутся обновления; чужая сборка меняет одно место.
 BYWAY_REPO="tomon-one/byway"
+# Открытый ключ подписи выпусков (usign/signify, byway-release.pub): им
+# byway update и установщик проверяют SHA256SUMS выпуска. Тот же -- в
+# install.sh (BYWAY_PUBKEY), править парой.
+BYWAY_PUBKEY="RWQ9r7vQihS1LvQHytsWrPqBkUalRDrj6JBUInbi7KXlUUPHBMzFmvJl"
 # Версия Xray-core, на которой byway прогнан целиком: её ставит `byway engine
 # tested`. Та же в install.sh (XRAY_TESTED) -- править парой.
 XRAY_TESTED=26.9.30
+# Суммы SHA2-256 архивов этой версии по сборкам: .dgst лежит рядом с архивом
+# на GitHub, а эти -- в подписанном выпуске byway. Вписывает
+# scripts/pc/xray-sums.py; тот же блок -- в install.sh.
+XRAY_TESTED_SUMS="linux-32=277ffde84d86cb593ae9c3d144b11a5e4c80ba579fdfe6fe09830e04c85d04aa
+linux-64=f851110beaff16e78d643f0ccfd9524b4a44dfd59bae3e34bb52bba378f7690e
+linux-arm32-v6=15828543cffe24e628c43b25d4a31627ad29ef916f8b77fab69feb8b3a7ac4b6
+linux-arm32-v7a=0b9719471c7c69752857714e9711d4da57cf38a6beb75dcddfb21425f7919908
+linux-arm64-v8a=9886f077f9fd8e6713b84c377c1c7db4e53b9bfa8c276a5bd12561139522b473
+linux-mips32=8e753eaad5147115a327c7084a2f26aee42149c0f16a962a04ea103a055db555
+linux-mips32le=c41a4d7b7fafbf3ea345eef0b51c3dd68f4894e15069c19f3432670b13cbc160
+linux-mips64=444f3f78274030c431ea40599f8ed38da3a180e57afd5ff2b7fd79b904e018db
+linux-mips64le=387cd3e5b825b56b63551ead5c3786e1108321cf1aa4ec0907ec56ec44b48726
+linux-riscv64=8c489f330f5155d335a31577780e94d98459425844f200d65a664edfe871a924"
 
 CONF=/etc/config/byway
 LISTS=/etc/byway

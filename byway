@@ -26,9 +26,26 @@ BYWAY_NAME="Causeway"
 BYWAY_VERSION="$BYWAY_NUM ($BYWAY_NAME)"
 # Откуда берутся обновления; чужая сборка меняет одно место.
 BYWAY_REPO="tomon-one/byway"
+# Открытый ключ подписи выпусков (usign/signify, byway-release.pub): им
+# byway update и установщик проверяют SHA256SUMS выпуска. Тот же -- в
+# install.sh (BYWAY_PUBKEY), править парой.
+BYWAY_PUBKEY="RWQ9r7vQihS1LvQHytsWrPqBkUalRDrj6JBUInbi7KXlUUPHBMzFmvJl"
 # Версия Xray-core, на которой byway прогнан целиком: её ставит `byway engine
 # tested`. Та же в install.sh (XRAY_TESTED) -- править парой.
 XRAY_TESTED=26.9.30
+# Суммы SHA2-256 архивов этой версии по сборкам: .dgst лежит рядом с архивом
+# на GitHub, а эти -- в подписанном выпуске byway. Вписывает
+# scripts/pc/xray-sums.py; тот же блок -- в install.sh.
+XRAY_TESTED_SUMS="linux-32=277ffde84d86cb593ae9c3d144b11a5e4c80ba579fdfe6fe09830e04c85d04aa
+linux-64=f851110beaff16e78d643f0ccfd9524b4a44dfd59bae3e34bb52bba378f7690e
+linux-arm32-v6=15828543cffe24e628c43b25d4a31627ad29ef916f8b77fab69feb8b3a7ac4b6
+linux-arm32-v7a=0b9719471c7c69752857714e9711d4da57cf38a6beb75dcddfb21425f7919908
+linux-arm64-v8a=9886f077f9fd8e6713b84c377c1c7db4e53b9bfa8c276a5bd12561139522b473
+linux-mips32=8e753eaad5147115a327c7084a2f26aee42149c0f16a962a04ea103a055db555
+linux-mips32le=c41a4d7b7fafbf3ea345eef0b51c3dd68f4894e15069c19f3432670b13cbc160
+linux-mips64=444f3f78274030c431ea40599f8ed38da3a180e57afd5ff2b7fd79b904e018db
+linux-mips64le=387cd3e5b825b56b63551ead5c3786e1108321cf1aa4ec0907ec56ec44b48726
+linux-riscv64=8c489f330f5155d335a31577780e94d98459425844f200d65a664edfe871a924"
 
 CONF=/etc/config/byway
 LISTS=/etc/byway
@@ -4049,7 +4066,7 @@ watch_au_install() {
             # сам; здесь -- итог по коду. В подоболочке: die (exit) не должен
             # унести весь прогон сторожа.
             _aurc=0
-            ( cmd_update ) >/dev/null 2>&1 || _aurc=$?
+            ( cmd_update --to "$_au" ) >/dev/null 2>&1 || _aurc=$?
             case "$_aurc" in
               0)
                 _f 'обновлено до %s, %s\n' "$_au" "$(date '+%Y-%m-%d %H:%M')" > "$AULOG"
@@ -4066,6 +4083,8 @@ watch_au_install() {
                 logf 'автообновление: ОТКАТ НЕ УДАЛСЯ -- копия в %s, вернуть: byway update --rollback' "$PREVSET" ;;
               5)
                 logf 'автообновление: копия для отката не сделалась -- установка ОТМЕНЕНА (место на /overlay?)' ;;
+              6)
+                logf 'автообновление: подпись выпуска %s не сошлась -- не ставится' "$_au" ;;
               *)
                 logf 'автообновление: %s не скачалось, работает прежняя' "$_au" ;;
             esac
@@ -5263,13 +5282,25 @@ latest_version() {
 
 # Код выхода для ночного обновления: 0 -- поставлено и туннель работает,
 # 3 -- не поднялось и откачено, 4 -- откат не удался, 5 -- копия для отката
-# не сделалась (ничего не тронуто), прочее -- не скачалось.
+# не сделалась, 6 -- подпись не сошлась (оба -- ничего не тронуто), прочее --
+# не скачалось.
 cmd_update() {
-    if [ "${1:-}" = --rollback ]; then
-        upd_restore || die "откатывать не на что: копия делается при byway update"
-        return 0
-    fi
-    _lv=$(latest_version)
+    _uf=""; _nov=0; _uto=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+          --rollback)
+            upd_restore || die "откатывать не на что: копия делается при byway update"
+            return 0 ;;
+          --check|--force) _uf=$1 ;;
+          --no-verify) _nov=1 ;;
+          # Ночное: ставится выдержавший три дня номер, а не свежий на 04:00.
+          --to) shift; _uto=${1:-}
+                case "$_uto" in ''|*[!0-9.]*) dief "непонятная версия «%s»" "$_uto" ;; esac ;;
+          *) dief "непонятный ключ: %s — byway update [--check|--force|--rollback|--no-verify]" "$1" ;;
+        esac
+        shift
+    done
+    if [ -n "$_uto" ]; then _lv="200 $_uto"; else _lv=$(latest_version); fi
     _code=${_lv%% *}; _new=${_lv#* }
     if [ -z "$_new" ] || [ "$_new" = "$_code" ]; then
         case "$_code" in
@@ -5283,7 +5314,7 @@ cmd_update() {
     if ! ver_gt "$_new" "$BYWAY_NUM"; then
         # Тег могут пересобрать на новом коммите под тем же номером:
         # «новее нет» верно про номер, но не про файлы. Отсюда --force.
-        case "${1:-}" in
+        case "$_uf" in
           --force)
             sayf "версия та же (%s), но ставится заново -- так велит --force" "$BYWAY_NUM" ;;
           *)
@@ -5294,7 +5325,7 @@ cmd_update() {
     else
         sayf "есть новая версия: %s (у вас %s)" "$_new" "$BYWAY_NUM"
     fi
-    case "${1:-}" in --check) return 0 ;; esac
+    [ "$_uf" = --check ] && return 0
 
     # Распаковка в память. Каталог свой у каждого запуска ($$): на общем
     # имени в /tmp кто угодно подложил бы исходник, который установщик от
@@ -5311,6 +5342,14 @@ cmd_update() {
     tar xzf "$_d/p.tar.gz" -C "$_d" 2>/dev/null || die "не распаковалось -- ничего не тронуто"
     _src=$(find "$_d" -maxdepth 2 -name install.sh 2>/dev/null | head -1)
     [ -n "$_src" ] || die "в пакете нет install.sh -- ничего не тронуто"
+    if [ "$_nov" = 1 ]; then
+        warn "--no-verify: подпись выпуска не проверяется"
+    elif upd_verify "$_new" "$(dirname "$_src")" "$_d"; then
+        say "подпись выпуска сошлась с ключом byway"
+    else
+        warn "выпуск не поставлен -- ничего не тронуто; поставить без проверки подписи: byway update --no-verify"
+        exit 6
+    fi
 
     # Связь до установки: откатывать за мёртвый сервер нельзя (eng_wait).
     _etun0=0
@@ -5382,6 +5421,29 @@ upd_restore() {
     /etc/init.d/rpcd reload >/dev/null 2>&1 || true
     /etc/init.d/byway restart >/dev/null 2>&1 || true
     say "прежняя версия возвращена"
+    return 0
+}
+
+# Подпись выпуска (с 0.3.0): SHA256SUMS -- суммы всех файлов архива тега --
+# и его подпись лежат вложениями выпуска на GitHub, ключ -- BYWAY_PUBKEY.
+# Архив с чужого зеркала или подменённый по дороге не пройдёт: каждый файл
+# обязан быть в списке и с той суммой, лишних нет.
+upd_verify() {   # 1 -- номер, 2 -- корень распакованного архива, 3 -- рабочий каталог
+    command -v usign >/dev/null 2>&1 || { warn "нет usign — подпись выпуска проверить нечем"; return 1; }
+    _rel="https://github.com/$BYWAY_REPO/releases/download/v$1"
+    if ! net_get --max-time 30 -o "$3/SHA256SUMS" "$_rel/SHA256SUMS" ||
+       ! net_get --max-time 30 -o "$3/SHA256SUMS.sig" "$_rel/SHA256SUMS.sig"; then
+        warnf "у выпуска %s нет подписи (SHA256SUMS.sig) либо она не скачалась" "$1"
+        return 1
+    fi
+    printf 'untrusted comment: byway release key public key\n%s\n' "$BYWAY_PUBKEY" > "$3/key.pub"
+    usign -V -q -m "$3/SHA256SUMS" -x "$3/SHA256SUMS.sig" -p "$3/key.pub" ||
+        { warn "подпись выпуска не сошлась с ключом byway"; return 1; }
+    ( cd "$2" && sha256sum -c "$3/SHA256SUMS" >/dev/null 2>&1 ) ||
+        { warn "файлы архива не совпали с подписанным списком"; return 1; }
+    _ul=$(cd "$2" && find . -type f | sed 's|^\./||' | sort)
+    _us=$(awk '{ sub(/^\*/, "", $2); print $2 }' "$3/SHA256SUMS" | sort)
+    [ "$_ul" = "$_us" ] || { warn "в архиве есть файлы вне подписанного списка"; return 1; }
     return 0
 }
 
@@ -5465,6 +5527,15 @@ eng_fetch() {   # 1 версия, 2 файл
     if [ -z "$_efw" ] || [ "$_efw" != "$_efg" ]; then
         rm -f "$2" 2>/dev/null || true
         return 2
+    fi
+    # Проверенная версия -- ещё и с суммой, вшитой в подписанный byway:
+    # подменивший архив подменил бы и .dgst рядом с ним.
+    if [ "$1" = "$XRAY_TESTED" ]; then
+        _efb=$(printf '%s\n' "$XRAY_TESTED_SUMS" | sed -n "s/^$ENG_ASSET=//p")
+        if [ -n "$_efb" ] && [ "$_efb" != "$_efg" ]; then
+            rm -f "$2" 2>/dev/null || true
+            return 3
+        fi
     fi
     return 0
 }
@@ -5656,6 +5727,7 @@ cmd_engine() {
       0) ;;
       1) eng_nonet
          dief "архив %s не скачался — ничего не тронуто" "$_env" ;;
+      3) dief "архив %s не сошёлся с суммой, вшитой в byway для проверенной версии — отброшен, ничего не тронуто" "$_env" ;;
       *) dief "архив %s не сошёлся с суммой SHA2-256 из .dgst выпуска — отброшен, ничего не тронуто" "$_env" ;;
     esac
     _epkg=$_ed/new.zip

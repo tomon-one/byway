@@ -142,6 +142,15 @@ t() {
       "в cron добавлено НЕ ВСЁ — проверить: crontab -l") printf %s "not everything made it into cron — check: crontab -l" ;;
       "  нет задачи byway watch: не будет ни проверки версии, ни обновления списков") printf %s "  the byway watch job is missing: no version check and no list updates" ;;
       "  нет задачи byway stat: учёт использования собираться не будет") printf %s "  the byway stat job is missing: usage accounting will not be collected" ;;
+      "BYWAY_NO_VERIFY=1: подпись выпуска не проверяется") printf %s "BYWAY_NO_VERIFY=1: the release signature is not checked" ;;
+      "архив byway не прошёл проверку подписи выпуска — установка отменена; без проверки: BYWAY_NO_VERIFY=1 sh install.sh") printf %s "the byway archive failed the release signature check — installation cancelled; without the check: BYWAY_NO_VERIFY=1 sh install.sh" ;;
+      "в архиве есть файлы вне подписанного списка") printf %s "the archive has files outside the signed list" ;;
+      "нет usign — подпись выпуска проверить нечем") printf %s "no usign — nothing to check the release signature with" ;;
+      "подпись выпуска не сошлась с ключом byway") printf %s "the release signature does not match the byway key" ;;
+      "подпись выпуска сошлась с ключом byway") printf %s "the release signature matches the byway key" ;;
+      "у выпуска нет подписи (SHA256SUMS.sig) либо она не скачалась") printf %s "the release has no signature (SHA256SUMS.sig) or it did not download" ;;
+      "файлы архива не совпали с подписанным списком") printf %s "the archive files do not match the signed list" ;;
+      "архив не сошёлся с суммой, вшитой в byway для проверенной версии — отброшен") printf %s "the archive does not match the checksum built into byway for the tested version — discarded" ;;
       "  нет задачи byway pulse: при отказе движка дом дольше останется без DNS") printf %s "  the byway pulse job is missing: if the engine fails, the home stays without DNS longer" ;;
       "нужна OpenWrt 22.03 или новее: byway работает только с firewall4, а его здесь нет") printf %s "OpenWrt 22.03 or newer is required: byway only works with firewall4, which is missing here" ;;
       "  на 21.02 и старше другой файрвол (iptables): туннель не получат гостевые сети — наполовину рабочий byway не ставится") printf %s "  21.02 and older use a different firewall (iptables): guest networks would not get the tunnel — byway does not install half-working" ;;
@@ -178,6 +187,8 @@ FATAL=0   # непоправимое: система не того поколе�
 # тега, иначе панель окажется новее программы или наоборот.
 REPO=tomon-one/byway
 VER=0.2.4
+# Открытый ключ подписи выпусков -- тот же, что BYWAY_PUBKEY в byway.
+BYWAY_PUBKEY="RWQ9r7vQihS1LvQHytsWrPqBkUalRDrj6JBUInbi7KXlUUPHBMzFmvJl"
 # Версия движка, на которой byway проверялся целиком -- на живом роутере, с
 # поднятым туннелем и реальным трафиком. Правится вместе с выпуском: протухшая
 # «проверенная» хуже её отсутствия.
@@ -189,6 +200,17 @@ VER=0.2.4
 # Xray -- это РАЗНЫЕ вещи, и человек должен выбирать зная это.
 # Та же версия -- в byway (XRAY_TESTED, для `byway engine tested`): править парой.
 XRAY_TESTED=26.9.30
+# Суммы архивов этой версии -- те же, что в byway (scripts/pc/xray-sums.py).
+XRAY_TESTED_SUMS="linux-32=277ffde84d86cb593ae9c3d144b11a5e4c80ba579fdfe6fe09830e04c85d04aa
+linux-64=f851110beaff16e78d643f0ccfd9524b4a44dfd59bae3e34bb52bba378f7690e
+linux-arm32-v6=15828543cffe24e628c43b25d4a31627ad29ef916f8b77fab69feb8b3a7ac4b6
+linux-arm32-v7a=0b9719471c7c69752857714e9711d4da57cf38a6beb75dcddfb21425f7919908
+linux-arm64-v8a=9886f077f9fd8e6713b84c377c1c7db4e53b9bfa8c276a5bd12561139522b473
+linux-mips32=8e753eaad5147115a327c7084a2f26aee42149c0f16a962a04ea103a055db555
+linux-mips32le=c41a4d7b7fafbf3ea345eef0b51c3dd68f4894e15069c19f3432670b13cbc160
+linux-mips64=444f3f78274030c431ea40599f8ed38da3a180e57afd5ff2b7fd79b904e018db
+linux-mips64le=387cd3e5b825b56b63551ead5c3786e1108321cf1aa4ec0907ec56ec44b48726
+linux-riscv64=8c489f330f5155d335a31577780e94d98459425844f200d65a664edfe871a924"
 
 # Стояла ли программа ДО этого запуска. Спрашиваем сейчас, потому что после
 # копирования различить установку и обновление уже нечем, а сказать человеку
@@ -524,9 +546,11 @@ fetch_src() {
     # ветку -- ровно то, чего README обещает не делать («ссылка ведёт на тег,
     # а не на ветку»).
     _urls=$(gh "https://github.com/$REPO/archive/refs/tags/v$VER.tar.gz")
+    _tagged=1
     if [ "$(http_code "$_urls")" = 404 ]; then
         warnf "выпуска v%s ещё нет — взята разрабатываемая версия (main)" "$VER"
         _urls=$(gh "https://github.com/$REPO/archive/refs/heads/main.tar.gz")
+        _tagged=0
     fi
     for _u in $_urls; do
         dl --max-time 120 -o "$_sd/src.tgz" "$_u" || continue
@@ -538,9 +562,35 @@ fetch_src() {
         [ -n "$_cf" ] || continue
         SRC=$(dirname "$_cf")
         have_src || continue
+        # Архив тега -- только с подписью выпуска: зеркало gh-proxy чужое.
+        if [ "$_tagged" = 1 ] && [ "${BYWAY_NO_VERIFY:-0}" != 1 ] &&
+           ! verify_src "$SRC" "$_sd"; then
+            dief "архив byway не прошёл проверку подписи выпуска — установка отменена; без проверки: BYWAY_NO_VERIFY=1 sh install.sh"
+        fi
+        [ "${BYWAY_NO_VERIFY:-0}" = 1 ] && warn "BYWAY_NO_VERIFY=1: подпись выпуска не проверяется"
         return 0
     done
     return 1
+}
+
+# Подпись выпуска (с 0.3.0): SHA256SUMS и его подпись -- вложения выпуска,
+# ключ -- BYWAY_PUBKEY выше. Каждый файл архива -- в списке и с той суммой.
+verify_src() {   # 1 -- корень распакованного архива, 2 -- рабочий каталог
+    command -v usign >/dev/null 2>&1 || { warn "нет usign — подпись выпуска проверить нечем"; return 1; }
+    _rel="https://github.com/$REPO/releases/download/v$VER"
+    dl --max-time 30 -o "$2/SHA256SUMS" "$(gh "$_rel/SHA256SUMS")" &&
+        dl --max-time 30 -o "$2/SHA256SUMS.sig" "$(gh "$_rel/SHA256SUMS.sig")" ||
+        { warn "у выпуска нет подписи (SHA256SUMS.sig) либо она не скачалась"; return 1; }
+    printf 'untrusted comment: byway release key public key\n%s\n' "$BYWAY_PUBKEY" > "$2/key.pub"
+    usign -V -q -m "$2/SHA256SUMS" -x "$2/SHA256SUMS.sig" -p "$2/key.pub" ||
+        { warn "подпись выпуска не сошлась с ключом byway"; return 1; }
+    ( cd "$1" && sha256sum -c "$2/SHA256SUMS" >/dev/null 2>&1 ) ||
+        { warn "файлы архива не совпали с подписанным списком"; return 1; }
+    [ "$(cd "$1" && find . -type f | sed 's|^\./||' | sort)" = \
+      "$(awk '{ sub(/^\*/, "", $2); print $2 }' "$2/SHA256SUMS" | sort)" ] ||
+        { warn "в архиве есть файлы вне подписанного списка"; return 1; }
+    say "подпись выпуска сошлась с ключом byway"
+    return 0
 }
 
 if ! have_src; then
@@ -788,6 +838,14 @@ xray_from_github() {
             warn "архив не сошёлся с контрольной суммой SHA2-256 из выпуска — отброшен"; rm -f "$_z"; return 1
         fi
         say "архив сверен с контрольной суммой из выпуска"
+        # Проверенная версия -- ещё и с суммой, вшитой в byway: .dgst лежит
+        # рядом с архивом и подменяется вместе с ним.
+        if [ "$_ver" = "$XRAY_TESTED" ]; then
+            _zb=$(printf '%s\n' "$XRAY_TESTED_SUMS" | sed -n "s/^$_as=//p")
+            if [ -n "$_zb" ] && [ "$_zb" != "$_zg" ]; then
+                warn "архив не сошёлся с суммой, вшитой в byway для проверенной версии — отброшен"; rm -f "$_z"; return 1
+            fi
+        fi
     else
         warn "нет sha256sum — архив движка нечем сверить, ставится ядро из пакетов OpenWrt"
         rm -f "$_z"; return 1

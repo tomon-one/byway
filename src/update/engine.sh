@@ -79,6 +79,15 @@ eng_fetch() {   # 1 версия, 2 файл
         rm -f "$2" 2>/dev/null || true
         return 2
     fi
+    # Проверенная версия -- ещё и с суммой, вшитой в подписанный byway:
+    # подменивший архив подменил бы и .dgst рядом с ним.
+    if [ "$1" = "$XRAY_TESTED" ]; then
+        _efb=$(printf '%s\n' "$XRAY_TESTED_SUMS" | sed -n "s/^$ENG_ASSET=//p")
+        if [ -n "$_efb" ] && [ "$_efb" != "$_efg" ]; then
+            rm -f "$2" 2>/dev/null || true
+            return 3
+        fi
+    fi
     return 0
 }
 
@@ -269,6 +278,7 @@ cmd_engine() {
       0) ;;
       1) eng_nonet
          dief "архив %s не скачался — ничего не тронуто" "$_env" ;;
+      3) dief "архив %s не сошёлся с суммой, вшитой в byway для проверенной версии — отброшен, ничего не тронуто" "$_env" ;;
       *) dief "архив %s не сошёлся с суммой SHA2-256 из .dgst выпуска — отброшен, ничего не тронуто" "$_env" ;;
     esac
     _epkg=$_ed/new.zip

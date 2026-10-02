@@ -698,3 +698,15 @@ Xray %s уже лежит рядом — переключение без заг�
 прежняя версия возвращена	the previous version is restored
 автообновление: ОТКАТ НЕ УДАЛСЯ -- копия в %s, вернуть: byway update --rollback	auto-update: ROLLBACK FAILED -- the copy is in %s, restore with: byway update --rollback
 header и seed у mkcp удалены в Xray-core с 26.1.31 и в конфиг не пишутся: сервер с маскировкой mKCP не ответит; замена на сервере и в ключе — finalmask (mkcp-original, mkcp-aes128gcm)	header and seed of mkcp were removed in Xray-core 26.1.31 and are not written to the config: a server with mKCP obfuscation will not answer; the replacement on the server and in the key is finalmask (mkcp-original, mkcp-aes128gcm)
+непонятная версия «%s»	unclear version "%s"
+непонятный ключ: %s — byway update [--check|--force|--rollback|--no-verify]	unknown option: %s — byway update [--check|--force|--rollback|--no-verify]
+--no-verify: подпись выпуска не проверяется	--no-verify: the release signature is not checked
+подпись выпуска сошлась с ключом byway	the release signature matches the byway key
+выпуск не поставлен -- ничего не тронуто; поставить без проверки подписи: byway update --no-verify	the release was not installed -- nothing touched; to install without the signature check: byway update --no-verify
+нет usign — подпись выпуска проверить нечем	no usign — nothing to check the release signature with
+у выпуска %s нет подписи (SHA256SUMS.sig) либо она не скачалась	release %s has no signature (SHA256SUMS.sig) or it did not download
+подпись выпуска не сошлась с ключом byway	the release signature does not match the byway key
+файлы архива не совпали с подписанным списком	the archive files do not match the signed list
+в архиве есть файлы вне подписанного списка	the archive has files outside the signed list
+автообновление: подпись выпуска %s не сошлась -- не ставится	auto-update: the signature of release %s does not match -- not installed
+архив %s не сошёлся с суммой, вшитой в byway для проверенной версии — отброшен, ничего не тронуто	archive %s does not match the checksum built into byway for the tested version — discarded, nothing touched
