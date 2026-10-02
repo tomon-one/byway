@@ -21,6 +21,7 @@
 Что нужно знать о коде:
 
 - **POSIX sh под busybox ash**, без bash-измов: `[[ ]]`, массивы, `echo -e` не годятся. Проверка синтаксиса — `sh -n`.
+- **Код — в `src/`**, по модулю на область: разбор ключей, конфиг Xray, списки, перехват, сторож, ядро. Файл `byway` собирается из них командой `sh src/build.sh` — правьте модуль, а не `byway`, и коммитьте оба.
 - **Всё, что видит человек, переводится.** Русская строка в коде — ключ,
   английский перевод лежит отдельно:
   - `byway` — в `lang/en.tsv`: русская строка целиком, табуляция, перевод;
@@ -66,6 +67,9 @@ What to know about the code:
 
 - **POSIX sh under busybox ash**, no bashisms: `[[ ]]`, arrays, `echo -e` will
   not do. Check syntax with `sh -n`.
+- **The code lives in `src/`**, one module per area: key parsing, Xray config,
+  lists, interception, watchdog, engine. `byway` is built from them with
+  `sh src/build.sh` — edit the module, not `byway`, and commit both.
 - **Everything a person sees is translated.** The Russian string in the code is
   the key, the English translation lives separately:
   - `byway` — in `lang/en.tsv`: the whole Russian string, a tab, the
