@@ -8,15 +8,29 @@
 # имя. logqueries у dnsmasq отвергнут: раздувает буфер журнала (256 КБ) и
 # чаще пишет во флеш. Подсети идут по настоящим адресам -- строка «(по IP)».
 
+# Рабочие файлы учёта -- в каталоге root (/var/run/byway, 755), а не в общем
+# /tmp: движок от пользователя byway мог подложить туда карту «адрес -> домен»
+# или метку, и root записал бы её в usage.tsv.
+STATDIR=/var/run/byway
 STAT=$LISTS/usage.tsv        # домен, обращений, последний раз
 
-MAP=/tmp/byway-fakemap       # адрес -> домен, живёт в памяти как и сам Xray
+MAP=$STATDIR/fakemap       # адрес -> домен, живёт в памяти как и сам Xray
 
-MARK=/tmp/byway-statmark     # PID и метка времени последней обработанной строки
+MARK=$STATDIR/statmark     # PID и метка времени последней обработанной строки
 
-MAPPOS=/tmp/byway-fakemap.pos # докуда дошли, строя карту порциями
+MAPPOS=$STATDIR/fakemap.pos # докуда дошли, строя карту порциями
+
+# Журнал обращений, из которого считается учёт, движок пишет только при
+# show_usage=1 (или уровне info/debug).
+stat_off() {
+    [ "$(u show_usage)" = "1" ] && return 1
+    case "$(u log_level)" in info|debug) return 1 ;; esac
+    return 0
+}
 
 cmd_stat() {
+    mkdir -p "$STATDIR" 2>/dev/null || true
+    stat_off && warn "сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)"
     _p=$(xray_pid)
     [ -n "$_p" ] || { warn "xray не запущен, считать нечего"; return 0; }
     _l=$(dns_addr)
@@ -38,8 +52,8 @@ stat_domains() {
             [ "$(uci -q get "byway.$_rn.enabled")" = "0" ] && continue
             route_list "$ROUTES_DIR/$_rn.lst" dom
         done
-    } > /tmp/byway-stat-doms
-    plain_domains /tmp/byway-stat-doms
+    } > $STATDIR/stat-doms
+    plain_domains $STATDIR/stat-doms
 }
 
 stat_map() {
@@ -52,11 +66,11 @@ stat_map() {
     if [ "$_oldpid" != "$_p" ]; then : > "$MAP"; : > "$MAPPOS"; _newmap=1; fi
     _mpos=$(cat "$MAPPOS" 2>/dev/null || echo 0)
     case "$_mpos" in ''|*[!0-9]*) _mpos=0 ;; esac
-    stat_domains > /tmp/byway-stat-doms.plain
-    _mall=$(grep -c . /tmp/byway-stat-doms.plain || true); _mall=${_mall:-0}
+    stat_domains > $STATDIR/stat-doms.plain
+    _mall=$(grep -c . $STATDIR/stat-doms.plain || true); _mall=${_mall:-0}
     if [ "$_newmap" = 1 ] || [ "$_mpos" -lt "$_mall" ]; then
         _fre=$(fakeip_re)
-        sed -n "$((_mpos + 1)),$((_mpos + _MSTEP))p" /tmp/byway-stat-doms.plain |
+        sed -n "$((_mpos + 1)),$((_mpos + _MSTEP))p" $STATDIR/stat-doms.plain |
         while IFS= read -r _d; do
             _a=$(nslookup "$_d" "$_l" 2>/dev/null |
                  sed -n 's/^Address: *//p' | grep -E "^$_fre" | head -1)
@@ -83,7 +97,7 @@ stat_map() {
 # Отбор строк журнала обращений после последней учтённой.
 stat_collect() {
     _since=$(sed -n 2p "$MARK" 2>/dev/null || true)
-    _tmp=/tmp/byway-stat.tmp
+    _tmp=$STATDIR/stat.tmp
 
     # Метка -- время Xray из начала строки (монотонно в журнале, у syslog
     # другой пояс). Ветка logread -- для конфига версии до 2026-09-05, где
@@ -137,13 +151,13 @@ stat_count() {
             }
           }
           END { for (d in cnt) printf "%s\t%d\t%s\n", d, cnt[d], seen[d] }
-        ' "$_tmp" | sort > /tmp/byway-stat.new
+        ' "$_tmp" | sort > $STATDIR/stat.new
         # Во флеш -- только если итог изменился.
-        if ! cmp -s /tmp/byway-stat.new "$STAT"; then
-            mv /tmp/byway-stat.new "$STAT"
+        if ! cmp -s $STATDIR/stat.new "$STAT"; then
+            mv $STATDIR/stat.new "$STAT"
             chmod 600 "$STAT" 2>/dev/null || true
         else
-            rm -f /tmp/byway-stat.new
+            rm -f $STATDIR/stat.new
         fi
         [ -n "$_last" ] && printf '%s\n%s\n' "$_p" "$_last" > "$MARK"
         sayf "учтено соединений: %s, всего доменов в учёте: %s" "$_n" "$(grep -c . "$STAT")"
@@ -155,7 +169,10 @@ stat_count() {
 
 # Показать накопленное. Без аргумента — двадцать самых частых.
 cmd_top() {
-    [ -s "$STAT" ] || die "учёт пуст. Собирается задачей cron; вручную: byway stat"
+    if [ ! -s "$STAT" ]; then
+        stat_off && die "сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)"
+        die "учёт пуст. Собирается задачей cron; вручную: byway stat"
+    fi
     _n=${1:-20}
     # Ширина колонки -- в символах: printf в busybox считает байты, и
     # кириллица сдвигала колонку. Всё печатает один awk (`_len` на строку --

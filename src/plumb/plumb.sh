@@ -35,8 +35,8 @@ cmd_plumb() {
         rm -f "$PLUMB_DOWN" 2>/dev/null || true
         plumb_wait
         if [ $_i -ge 15 ]; then
-            # Возвращаем dnsmasq провайдеру: иначе он остался бы с
-            # закоммиченной правкой.
+            # Возвращаем dnsmasq провайдеру: иначе дельта UCI осталась бы на
+            # нашем адресе.
             dns_down
             # Закрыть до сообщения: между ними страница ушла бы мимо туннеля.
             block_on
@@ -100,7 +100,13 @@ cmd_plumb() {
             rm -rf "$_plock" 2>/dev/null || true
             return 1
         fi
+        # Стоит запрет «не пускать» (файл в каталоге dnsmasq) -- его снимет
+        # block_off следующей строкой вместе с рестартом dnsmasq.
+        _bcd=$(dnsmasq_confdir)
+        DNS_DEFER_RESTART=0
+        if [ -n "$_bcd" ] && [ -f "$_bcd/byway-block.conf" ]; then DNS_DEFER_RESTART=1; fi
         dns_up
+        DNS_DEFER_RESTART=0
         block_off
         rm -rf "$_plock" 2>/dev/null || true
         sayf "перехват включён: таблица inet %s, правило fwmark, dnsmasq -> %s" "$TABLE" "$(dns_addr)"

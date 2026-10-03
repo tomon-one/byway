@@ -14,8 +14,8 @@
 # при любом вызове, а не только из этого файла.
 #
 # Отсюда полезное следствие: если Xray не поднялся, обвязки просто не будет.
-# Дом останется без туннеля, но с интернетом -- ЕСЛИ on_failure=open, а это
-# умолчание. При closed доступ закрывается: в режиме списков -- к списку, в
+# Дом останется без туннеля, но с интернетом -- ЕСЛИ on_failure=open. Умолчание
+# closed: доступ закрывается: в режиме списков -- к списку, в
 # режиме «всё через VPN» -- весь выход наружу. podkop в этой ситуации уносил
 # резолв с собой.
 #
@@ -33,6 +33,9 @@ START=21
 STOP=10
 
 BYWAY=/usr/local/bin/byway
+# Сообщение службы на языке byway (словарь lang/en.tsv); формат и доводы как у
+# printf. Нет программы или словаря -- русский текст как есть.
+_tr() { "$BYWAY" xlat "$@" 2>/dev/null || { _trf=$1; shift; printf "$_trf" "$@"; }; }
 CONF=/etc/byway/config.json
 # Слепок того, что РЕАЛЬНО применено: md5 конфига, с которым запущен движок, и
 # md5 желаемого набора правил nft. Живёт в памяти, то есть до перезагрузки --
@@ -82,7 +85,7 @@ xray_ok() {
 
 XRAY=$(uci -q get byway.main.xray_bin || true)
 if [ -n "$XRAY" ] && ! xray_ok "$XRAY"; then
-    logger -t byway "путь к движку отклонён: $XRAY"
+    logger -t byway "$(_tr 'путь к движку отклонён: %s' "$XRAY")"
     XRAY=""
 fi
 # Тот же порядок, что у самого byway: сперва PATH, потом /usr/bin/xray.
@@ -111,12 +114,12 @@ xray_memlimit() {
         0|off|no) return 0 ;;
         '') ;;
         *[!0-9]*[!A-Za-z]*|[!0-9]*)
-            logger -t byway "предел памяти «$_ml» не разобран -- взят авто" ;;
+            logger -t byway "$(_tr 'предел памяти «%s» не разобран -- взят авто' "$_ml")" ;;
         *[0-9]B|*[0-9]KiB|*[0-9]MiB|*[0-9]GiB|*[0-9]TiB)
             printf '%s' "$_ml"; return 0 ;;
         *[0-9]MB|*[0-9]M|*[0-9]Mi) printf '%sMiB' "${_ml%%[!0-9]*}"; return 0 ;;
         *[0-9]GB|*[0-9]G|*[0-9]Gi) printf '%sGiB' "${_ml%%[!0-9]*}"; return 0 ;;
-        *[!0-9]*) logger -t byway "предел памяти «$_ml» не разобран -- взят авто" ;;
+        *[!0-9]*) logger -t byway "$(_tr 'предел памяти «%s» не разобран -- взят авто' "$_ml")" ;;
         *) printf '%sMiB' "$_ml"; return 0 ;;
     esac
     _kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || true)
@@ -223,10 +226,10 @@ restart() {
 # не доехала, хотя служба зовёт off на порядок чаще.
 plumb_off_try() {   # аргументы -- дополнительные флаги для plumb off
 	"$BYWAY" plumb off --service "$@" && return 0
-	echo "правила перехвата не снялись с первой попытки — следующая через паузу"
+	echo "$(_tr 'правила перехвата не снялись с первой попытки — следующая через паузу')"
 	sleep 5
 	"$BYWAY" plumb off --service "$@" && return 0
-	echo "ОБВЯЗКА НЕ СНЯТА, резолвер не возвращён. Снять руками: byway plumb off"
+	echo "$(_tr 'Перехват не снят, резолвер не возвращён. Снять руками: byway plumb off')"
 	return 1
 }
 
@@ -250,7 +253,7 @@ start_service() {
 	# Молчаливый return оставлял dnsmasq смотреть на порт, который никто не
 	# слушает: выключение через `option enabled 0` роняло DNS всему дому.
 	[ "$(uci -q get byway.main.enabled)" = "1" ] || {
-		echo "byway выключен в /etc/config/byway (option enabled)"
+		echo "$(_tr 'byway выключен в /etc/config/byway (option enabled)')"
 		# --service, а не голый off: эта форма не ставит метку «сняли
 		# руками», иначе сторож окажется заперт до перезагрузки.
 		#
@@ -273,7 +276,7 @@ start_service() {
 	[ "$(uci -q get byway.main.on_failure)" != "open" ] && "$BYWAY" plumb close
 
 	[ -x "$XRAY" ] || {
-		echo "нет $XRAY — движок не найден"
+		echo "$(_tr 'нет %s — движок не найден' "$XRAY")"
 		# Совет «поставить xray-core» на роутере, где движок уже лежит
 		# рядом под своей версией, вёл ко второй копии ядра на разделе
 		# 43.7 МБ, куда две не влезают. Сперва смотрим, нет ли готового.
@@ -282,8 +285,8 @@ start_service() {
 		_alt=""
 		for _x in /usr/local/bin/xray-*; do [ -x "$_x" ] && _alt=$_x; done
 		if [ -n "$_alt" ]; then
-			echo "  рядом лежит $_alt"
-			echo "  указать его: uci set byway.main.xray_bin=$_alt && uci commit byway"
+			echo "$(_tr '  рядом лежит %s' "$_alt")"
+			echo "$(_tr '  указать его: uci set byway.main.xray_bin=%s && uci commit byway' "$_alt")"
 		else
 			# Менеджер ВЫЧИСЛЯЕМ, а не зашиваем: apk есть только с
 			# OpenWrt 25.12, на 22.03/23.05/24.10 -- opkg, и глагол у него
@@ -302,7 +305,7 @@ start_service() {
 			# перезапускает службу сама; не вышло -- сторож повторит.
 			if [ ! -f /tmp/byway-engine-restore ]; then
 				: > /tmp/byway-engine-restore
-				echo "  движок ставится в фоне: byway engine restore (журнал: logread -e byway)"
+				echo "$(_tr '  движок ставится в фоне: byway engine restore (журнал: logread -e byway)')"
 				# 1000>&- -- см. у цикла подъёма ниже.
 				# Сперва маршрут по умолчанию (до двух минут): при загрузке WAN
 				# поднимается позже службы, и единственная попытка уходила в
@@ -313,8 +316,8 @@ start_service() {
 				  done
 				  sleep 10; "$BYWAY" engine restore 2>&1 | sed "s/$(printf '\033')\[[0-9;]*m//g" | logger -t byway ) </dev/null >/dev/null 2>&1 1000>&- &
 			fi
-			echo "  поставить руками: byway engine restore, либо $_pkgfix xray-core"
-			echo "  либо указать свой путь: uci set byway.main.xray_bin=/путь/к/xray"
+			echo "$(_tr '  поставить руками: byway engine restore, либо %s xray-core' "$_pkgfix")"
+			echo "$(_tr '  либо указать свой путь: uci set byway.main.xray_bin=/путь/к/xray')"
 		fi
 		# Безусловно, по той же причине, что и веткой выше.
 		plumb_off_fail
@@ -342,7 +345,7 @@ start_service() {
 	# оставляем дом без DNS. Ровно этим ценна проверка ядром.
 	if ! "$BYWAY" gen; then
 		if [ -f "$CONF" ] && "$XRAY" run -test -c "$CONF" >/dev/null 2>&1; then
-			echo "конфиг не пересобрался — поднимаюсь на прежнем рабочем"
+			echo "$(_tr 'конфиг не пересобрался — служба поднимается на прежнем рабочем конфиге')"
 		else
 			# Безусловно, по той же причине, что и на ветках выше: после
 			# restart таблицы уже нет, а резолвер ещё смотрит на нас.
@@ -438,10 +441,14 @@ service_started() {
 				exit 0
 			fi
 			[ "$_try" = 3 ] && break
-			logger -t byway "правила перехвата не легли с попытки $_try, следующая через паузу"
+			logger -t byway "$(_tr 'правила перехвата не легли с попытки %s, следующая через паузу' "$_try")"
 			sleep 10
 		done
-		logger -t byway "правила перехвата не легли за три попытки -- туннеля нет, интернет работает напрямую"
+		if [ "$(uci -q get byway.main.on_failure)" = open ]; then
+			logger -t byway "$(_tr 'правила перехвата не легли за три попытки -- туннеля нет, интернет работает напрямую')"
+		else
+			logger -t byway "$(_tr 'правила перехвата не легли за три попытки -- туннеля нет, доступ к списку закрыт (on_failure=closed)')"
+		fi
 	) >/dev/null 2>&1 1000>&- &
 	# 1000>&- -- закрыть унаследованный замок procd (procd_lock, flock на
 	# дескрипторе 1000). Держа его, цикл не пускал stop и restart дальше
@@ -539,13 +546,13 @@ reload_service() {
 	# обратное.
 	if [ "$(uci -q get byway.main.enabled)" = "1" ]; then
 		if ! byway_running; then
-			logger -t byway "reload: включено -- запуск"
+			logger -t byway "$(_tr 'reload: включено -- запуск')"
 			start
 			return 0
 		fi
 	else
 		if byway_running; then
-			logger -t byway "reload: выключено -- остановка"
+			logger -t byway "$(_tr 'reload: выключено -- остановка')"
 		fi
 		# stop -- и при лежащем движке: запрет «Не пускать» и перехват стоят
 		# именно тогда, а снять их, кроме stop, некому (pulse и сторож при
@@ -567,21 +574,21 @@ reload_service() {
 	_mlw=$(xray_memlimit)
 	_mlr=$(tr '\0' '\n' < "/proc/$_xp/environ" 2>/dev/null | sed -n 's/^GOMEMLIMIT=//p')
 	if [ -n "$_xe" ] && [ "$_mlw" != "$_mlr" ]; then
-		logger -t byway "reload: сменился предел памяти, перезапуск"
+		logger -t byway "$(_tr 'reload: сменился предел памяти, перезапуск')"
 		_xe=changed
 	fi
 	# xray_root сменили: от кого движок работает, видно по Uid процесса.
 	_xr=$(awk '/^Uid:/ { print ($2 == 0) ? "root" : "user" }' "/proc/$_xp/status" 2>/dev/null)
 	if [ -n "$_xe" ] && [ -n "$_xr" ] && { [ "$(uci -q get byway.main.xray_root)" = "1" ] || [ ! -x /sbin/ujail ]; } &&
 	   [ "$_xr" = user ]; then
-		logger -t byway "reload: движок переводится на root (xray_root), перезапуск"
+		logger -t byway "$(_tr 'reload: движок переводится на root (xray_root), перезапуск')"
 		_xe=changed
 	elif [ -n "$_xe" ] && [ "$_xr" = root ] && [ "$(uci -q get byway.main.xray_root)" != "1" ] && [ -x /sbin/ujail ]; then
-		logger -t byway "reload: движок переводится на пользователя byway, перезапуск"
+		logger -t byway "$(_tr 'reload: движок переводится на пользователя byway, перезапуск')"
 		_xe=changed
 	fi
 	if [ -n "$_xe" ] && [ "$_xe" != "$(readlink -f "$XRAY" 2>/dev/null)" ]; then
-		[ "$_xe" = changed ] || logger -t byway "reload: сменилось ядро, перезапуск"
+		[ "$_xe" = changed ] || logger -t byway "$(_tr 'reload: сменилось ядро, перезапуск')"
 		BYWAY_KEEP_DNS=1
 		stop
 		BYWAY_KEEP_DNS=0
@@ -594,7 +601,7 @@ reload_service() {
 	have_nft=$(sed -n 2p "$STATE" 2>/dev/null)
 
 	if ! "$BYWAY" gen >/dev/null 2>&1; then
-		logger -t byway "reload: конфиг не собрался, работает прежний"
+		logger -t byway "$(_tr 'reload: конфиг не собрался, работает прежний')"
 		return 0
 	fi
 	want_conf=$(md5sum "$CONF" 2>/dev/null | cut -d' ' -f1)
@@ -604,7 +611,7 @@ reload_service() {
 	# память чистили. Перезапускаем: лишний перезапуск дешевле молчаливого
 	# расхождения, и он ровно один -- дальше слепок есть.
 	if [ -z "$have_conf" ] || [ "$have_conf" != "$want_conf" ]; then
-		logger -t byway "reload: конфиг изменился, перезапуск"
+		logger -t byway "$(_tr 'reload: конфиг изменился, перезапуск')"
 		# Тот же флаг, что и в restart: за stop сразу идёт start, и гонять
 		# резолвер туда-обратно незачем. Это самая частая дорога сюда --
 		# «Сохранить и применить» в панели.
@@ -622,7 +629,7 @@ reload_service() {
 	# до ручного `byway plumb on`. Перекладываем правила, движок не трогаем:
 	# рвать соединения ради смены списка интерфейсов незачем.
 	if [ "$have_nft" != "$want_nft" ]; then
-		logger -t byway "reload: изменились правила перехвата, перекладка"
+		logger -t byway "$(_tr 'reload: изменились правила перехвата, перекладка')"
 		# Слепок -- только после успеха. Стоя безусловно, он записывал
 		# ЖЕЛАЕМУЮ обвязку как применённую: следующий reload с теми же
 		# настройками уходил на «конфиг не изменился» и правила не
@@ -630,12 +637,16 @@ reload_service() {
 		if "$BYWAY" plumb on >/dev/null 2>&1; then
 			mark_applied
 		else
-			logger -t byway "reload: правила перехвата не легли -- туннеля нет, интернет работает"
+			if [ "$(uci -q get byway.main.on_failure)" = open ]; then
+				logger -t byway "$(_tr 'reload: правила перехвата не легли -- туннеля нет, интернет работает')"
+			else
+				logger -t byway "$(_tr 'reload: правила перехвата не легли -- туннеля нет, доступ к списку закрыт (on_failure=closed)')"
+			fi
 		fi
 		return 0
 	fi
 
-	logger -t byway "reload: конфиг не изменился, служба не тронута"
+	logger -t byway "$(_tr 'reload: конфиг не изменился, служба не тронута')"
 }
 
 service_triggers() {

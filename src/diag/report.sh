@@ -59,8 +59,13 @@ report_body() {
     cmd_health 2>&1 || true
     echo
     _r "== подключение (без значений) =="
-    if ( parse_node >/dev/null 2>&1 ); then
-        parse_node >/dev/null 2>&1 || true
+    # В автовыборе разбирается первый ключ списка, а не node_url (его там нет).
+    _rk=""
+    case "$(u conn_mode)" in
+      urltest|selector) _rk=$(u node_urls | awk '{ print $1; exit }') ;;
+    esac
+    if ( parse_node $_rk >/dev/null 2>&1 ); then
+        parse_node $_rk >/dev/null 2>&1 || true
         _rv "протокол" "$N_PROTO"
         _rv "транспорт" "$N_TYPE"
         _rv "защита" "$N_SEC"
@@ -103,7 +108,9 @@ report_body() {
     echo
     _r "== системный журнал byway (последние 30) =="
     # Те же вымарки, что у журнала движка: watch пишет сюда имя и адрес сервера.
-    logread -e byway 2>/dev/null | tail -30 |
+    # Строки crond о задачах byway (pulse раз в минуту) вытесняли бы сообщения
+    # самой программы.
+    logread -e byway 2>/dev/null | grep -v ' cron\.[a-z]* crond\[' | tail -30 |
       sed -E 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/x.x.x.x/g
               s/([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/'"$(_t ИМЯ | sed 's/[\/&]/\\&/g')"'/g' || true
     echo

@@ -119,7 +119,7 @@ build_proxies() {
         # негодный ключ из десяти валил бы весь gen. build_stream там же:
         # отказы по версии ядра тоже через die. Настоящий разбор -- после, в
         # текущей оболочке.
-        if ! _kerr=$( ( parse_node "$_k" && build_stream ) 2>&1 >/dev/null ); then
+        if ! _kerr=$( ( parse_node "$_k" && build_stream ) 2>&1 ); then
             warnf "ключ пропущен: %s" "$(printf '%s' "$_kerr" | tail -1 | tr -d '\033' | sed 's/\[[0-9;]*m//g; s/^ *\[x\] *//')"
             continue
         fi

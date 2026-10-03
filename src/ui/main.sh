@@ -30,6 +30,8 @@ case "${1:-}" in
   update) shift; cmd_update "$@" ;;
   engine) shift; cmd_engine "$@" ;;
   lang)   shift; cmd_lang "$@" ;;
+  # Служебная: перевод сообщения службы (init-скрипт), формат и доводы printf.
+  xlat)   shift; _xf=$(_t "$1"); shift; printf "$_xf" "$@" ;;
   clear)  shift; cmd_clear "$@" ;;
   import) shift; cmd_import "$@" ;;
   version|--version|-v) echo "byway $BYWAY_VERSION" ;;

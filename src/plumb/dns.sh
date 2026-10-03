@@ -18,15 +18,7 @@ DNSSEC="dhcp.@dnsmasq[0]"
 DNSSAVE=$LISTS/dns-saved
 
 dns_save_read() {   # $1 -- noresolv | server
-    if [ ! -f "$DNSSAVE" ]; then
-        # Подъём прежней редакцией (снимок в UCI), снятие этой: без чтения UCI
-        # возврат отдал бы пустоту.
-        case "$1" in
-          noresolv) uci -q get byway.main.saved_noresolv || true ;;
-          server)   uci -q get byway.main.saved_server   || true ;;
-        esac
-        return 0
-    fi
+    [ -f "$DNSSAVE" ] || return 0
     case "$1" in
       noresolv) sed -n '1s/^noresolv=//p' "$DNSSAVE" ;;
       server)   sed -n 's/^server=//p' "$DNSSAVE" ;;
@@ -71,16 +63,6 @@ dns_flush() {
 
 dns_up() {
     _l=$(dns_addr)
-    # Перенос снимка из UCI старой редакции: иначе файл собрался бы из нашего
-    # же адреса, и plumb off вернул бы нерабочий резолвер.
-    if [ ! -f "$DNSSAVE" ] && [ "$(uci -q get byway.main.dns_saved)" = "1" ]; then
-        {
-            printf 'noresolv=%s\n' "$(uci -q get byway.main.saved_noresolv 2>/dev/null || echo 0)"
-            for s in $(uci -q get byway.main.saved_server 2>/dev/null); do
-                printf 'server=%s\n' "$s"
-            done
-        } > "$DNSSAVE"
-    fi
     if [ ! -f "$DNSSAVE" ]; then
         {
             printf 'noresolv=%s\n' "$(uci -q get "$DNSSEC.noresolv" 2>/dev/null || echo 0)"
@@ -124,6 +106,10 @@ dns_up() {
     # (боевой, 2026-10-02).
     if dns_live_ok "$_l" && [ "$_dnew" = 0 ]; then
         dns_flush
+    elif [ "${DNS_DEFER_RESTART:-0}" = 1 ]; then
+        # Следом block_off снимает файл запрета и перезапускает dnsmasq сам:
+        # один перезапуск вместо двух (по девять секунд без DNS у дома).
+        :
     else
         /etc/init.d/dnsmasq restart >/dev/null 2>&1
     fi
@@ -170,14 +156,6 @@ dns_down() {
 
     rm -f "$DNSSAVE" 2>/dev/null || true
 
-    # Остатки прежней редакции (снимок в UCI): пустой commit тоже дёргает
-    # триггер.
-    if [ -n "$(uci -q get byway.main.dns_saved)" ]; then
-        uci -q delete byway.main.dns_saved 2>/dev/null || true
-        uci -q delete byway.main.saved_server 2>/dev/null || true
-        uci -q delete byway.main.saved_noresolv 2>/dev/null || true
-        uci commit byway
-    fi
     # Зеркально dns_up: резолвер не наш -- рестарт чистая потеря (plumb off на
     # роутере без обвязки дёргал DNS дома), кэш сбрасываем всё равно. «Не знаю»
     # (2) считаем нашим: пропущенный рестарт хуже лишнего.

@@ -9,24 +9,13 @@
 				"/etc/byway/subnets.lst": [
 					"read"
 				],
-				"/etc/byway/presets/*": [
-					"read"
-				],
 				"/etc/byway/routes/*": [
 					"read"
 				]
 			},
 			"uci": [
 				"byway"
-			],
-			"ubus": {
-				"luci": [
-					"getInitList"
-				],
-				"service": [
-					"list"
-				]
-			}
+			]
 		},
 		"write": {
 			"cgi-io": [
@@ -42,9 +31,6 @@
 				"/etc/byway/routes/*": [
 					"read",
 					"write"
-				],
-				"/etc/byway/usage.tsv": [
-					"read"
 				],
 				"/etc/byway/health.log": [
 					"read"

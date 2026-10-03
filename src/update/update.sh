@@ -5,6 +5,8 @@
 # нужна, а после перезагрузки проверка лишний раз безвредна.
 UPMARK=/tmp/byway-upcheck     # когда спрашивали в прошлый раз
 
+UPOK=/tmp/byway-upcheck-ok     # время последней проверки, дошедшей до GitHub
+UPFAIL=/tmp/byway-upcheck-fail # код ответа последней неудачной проверки
 NEWVER=/tmp/byway-newver      # номер найденной версии, если она новее
 
 RELNOTE=/tmp/byway-relnote    # первая строка описания выпуска

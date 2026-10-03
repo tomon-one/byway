@@ -17,8 +17,8 @@ EXPORT_KEYS="enabled conn_mode node_url sub_url outbound_json conn_label
              lists_update dns_route on_failure node_urls lang update_check
              auto_update auto_update_hour"
 
-# xray_bin не переносится: это путь к программе, которую byway запускает от
-# root, из чужого файла его брать не надо (xray_ok удержит, но незачем), и
+# xray_bin не переносится: это путь к программе, которую byway запускает
+# (от пользователя byway либо от root), из чужого файла его брать не надо (xray_ok удержит, но незачем), и
 # он машинный -- на другом роутере пути обычно нет.
 
 # Опции с ключом: ими различаются «поделиться настройкой» и «отдать доступ».
@@ -89,9 +89,10 @@ cmd_clear() {
     esac
 }
 
-# Куда можно писать выгрузку и откуда читать. Панель запускает byway с ЛЮБЫМИ
-# аргументами (rpcd проверяет только путь программы): без проверки `byway
-# export /etc/passwd` перезапишет системный файл от root. Системные каталоги
+# Куда можно писать выгрузку и откуда читать. Панель вправе запускать только
+# команды, перечисленные в acl.json (точные строки, без `export *`); эта
+# проверка -- для консоли: без неё `byway export /etc/passwd` перезапишет
+# системный файл от root. Системные каталоги
 # закрыты, кроме своего /etc/byway; остальное открыто -- консоли не мешаем.
 path_ok() {
     case "$1" in *..*) return 1 ;; esac
@@ -267,6 +268,14 @@ import_backup() {
     ( umask 077; rm -f "$_bak/config"; cp "$CONF" "$_bak/config" ) 2>/dev/null || true
     cp "$LISTS/domains.lst" "$_bak/domains.lst" 2>/dev/null || true
     cp "$LISTS/subnets.lst" "$_bak/subnets.lst" 2>/dev/null || true
+    # Списки направлений -- тоже каждый раз заново: копия прошлого приёма
+    # возвращала бы при отказе чужие, не нынешние списки.
+    rm -rf "$_bak/routes" 2>/dev/null || true
+    mkdir -p "$_bak/routes"
+    chmod 700 "$_bak/routes" 2>/dev/null || true
+    for _rb in "$ROUTES_DIR"/*.lst; do
+        [ -f "$_rb" ] && cp "$_rb" "$_bak/routes/" 2>/dev/null || true
+    done
     return 0
 }
 

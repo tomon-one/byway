@@ -9,7 +9,7 @@
 # Списки -- файлы в /etc/byway, а не инлайн в UCI: правка файла действует
 # после `byway gen`. Службой управляет /etc/init.d/byway, он и зовёт plumb
 # (nft, маршрут, dnsmasq). Список команд печатает `byway` без аргументов
-# (99-main.sh).
+# (ui/main.sh).
 
 set -e
 
@@ -80,7 +80,7 @@ xray_ok() {
 # присваивание молча убивает скрипт.
 XRAY=$(uci -q get byway.main.xray_bin || true)
 # Жалоба отложена: путь проверяется раньше, чем заведён словарь (_t), и
-# напечатанное здесь осталось бы русским. Печатается в 01-core.sh.
+# напечатанное здесь осталось бы русским. Печатается в core/lang.sh.
 XRAY_REJECTED=""
 if [ -n "$XRAY" ] && ! xray_ok "$XRAY"; then
     XRAY_REJECTED=$XRAY
@@ -192,7 +192,7 @@ _t() {
     printf '%s' "${_tv:-$1}"
 }
 
-# Отложенная жалоба из 00-head.sh: теперь словарь есть.
+# Отложенная жалоба из core/head.sh: теперь словарь есть.
 if [ -n "$XRAY_REJECTED" ]; then
     warnf "путь к движку отклонён: %s" "$XRAY_REJECTED" >&2
 fi
@@ -275,6 +275,13 @@ PROBE_DOMAIN=example.com
 take_lock() {   # путь замка, о чём говорить человеку
     if ! mkdir "$1" 2>/dev/null; then
         _lp=$(cat "$1/pid" 2>/dev/null || true)
+        # Хозяин только что сделал mkdir и ещё не записал метку и pid: в эту
+        # долю секунды замок неотличим от чужого и от брошенного, и второй
+        # претендент снимал его силой. Секунда на перечитывание.
+        if [ ! -f "$1/byway" ] || [ -z "$_lp" ]; then
+            sleep 1
+            _lp=$(cat "$1/pid" 2>/dev/null || true)
+        fi
         # Замок без нашей метки -- чужой. Не ждём: он может не уйти никогда, а
         # цена ожидания -- дом без резолвера.
         if [ ! -f "$1/byway" ]; then
@@ -340,6 +347,14 @@ a_of() {   # $1 -- имя, $2 -- резолвер или пусто
     nslookup "$1" ${2:+"$2"} 2>/dev/null | sed -n '/^Name:/,$p' |
       awk '/^Address/ {print $NF}' |
       grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1
+}
+
+# Все адреса имени: у имени с несколькими A-записями (round-robin) порядок
+# ответов меняется от запроса к запросу.
+a_all() {   # $1 -- имя, $2 -- резолвер или пусто
+    nslookup "$1" ${2:+"$2"} 2>/dev/null | sed -n '/^Name:/,$p' |
+      awk '/^Address/ {print $NF}' |
+      grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true
 }
 
 # Адрес имени по DoH, запросом К АДРЕСУ, не к имени: при сломанном туннеле
@@ -575,7 +590,9 @@ rest = before(rest, '#');
 if (scheme == 'vmess') {
     let j = b64d(rest);
     if (j == '') { flush(); die("vmess-ссылка не раскодировалась"); }
-    let o = json(j);
+    // Битый JSON бросает исключение: ucode выходил с трассой вместо отказа.
+    let o = null;
+    try { o = json(j); } catch (e) { o = null; }
     if (type(o) != 'object') { flush(); die("vmess-ссылка не раскодировалась"); }
     let jf = (k) => (o[k] == null) ? '' : '' + o[k];
     N.HOST = jf('add'); N.PORT = jf('port'); N.UUID = jf('id');
@@ -1349,7 +1366,7 @@ build_proxies() {
         # негодный ключ из десяти валил бы весь gen. build_stream там же:
         # отказы по версии ядра тоже через die. Настоящий разбор -- после, в
         # текущей оболочке.
-        if ! _kerr=$( ( parse_node "$_k" && build_stream ) 2>&1 >/dev/null ); then
+        if ! _kerr=$( ( parse_node "$_k" && build_stream ) 2>&1 ); then
             warnf "ключ пропущен: %s" "$(printf '%s' "$_kerr" | tail -1 | tr -d '\033' | sed 's/\[[0-9;]*m//g; s/^ *\[x\] *//')"
             continue
         fi
@@ -1728,7 +1745,7 @@ gen_dns() {
         else
             # Громкий отказ с возвратом к рабочему: имя без bootstrap -- дом
             # без DNS при зелёном отчёте.
-            warn "резолвер задан именем, а bootstrap не задан — разрешать имя нечем, взяты поставочные адреса"
+            warn "резолвер задан именем, а bootstrap не задан — разрешать имя нечем, взяты адреса по умолчанию"
             warn "  вписать: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway"
             DNS_UP=https://8.8.8.8/dns-query
             DNS_UP2=https://1.1.1.1/dns-query
@@ -1944,6 +1961,7 @@ gen_json() {
       "$DNS_UP",$DNS_UP2LINE
       {
         "address": "fakedns",
+        "skipFallback": true,
         "domains": [
 HEAD
       # Через файл: список в переменной ash -- 9,5 МБ на потолке пресета (200
@@ -2084,11 +2102,16 @@ MID
         printf '          "full:%s"\n' "$PROBE_DOMAIN"
         printf '        ], %s },\n' "$PROXY_TARGET"
         rm -f "$_djf" 2>/dev/null || true
-        if [ -f "$S" ] && [ "$(count_list "$S")" -gt 0 ]; then
+        # Через файл, как домены: список из одних негодных строк давал бы
+        # «"ip": [ ]», и движок отвергал весь конфиг без имени виновной строки.
+        _sjf=/tmp/byway-sub.json
+        if [ -f "$S" ]; then list_to_json "$S" "" > "$_sjf" 2>/dev/null || : > "$_sjf"; else : > "$_sjf"; fi
+        if [ -s "$_sjf" ]; then
           printf '      { "type": "field", "ip": [\n'
-          list_to_json "$S" ""
+          cat "$_sjf"
           printf '\n        ], %s },\n' "$PROXY_TARGET"
         fi
+        rm -f "$_sjf" 2>/dev/null || true
       fi
       cat <<MID2
 MID2
@@ -2755,18 +2778,6 @@ route_key() {
     return 1
 }
 
-# Не звать и не заводить это имя заново: настоящая классификация «сеть или
-# домен» -- в route_list, правило там строже; две функции на один вопрос
-# разойдутся.
-is_net_unused() {
-    case "$1" in
-        *[!0-9./]*) return 1 ;;
-        *.*.*.*) ;;
-        *) return 1 ;;
-    esac
-    return 0
-}
-
 # Список направления, разложенный надвое. $2 -- dom или net.
 route_list() {
     [ -f "$1" ] || return 0
@@ -2787,9 +2798,10 @@ route_list() {
 # Подписка: загрузка и вывод ключей построчно.
 
 # ── подписка ───────────────────────────────────────────────────────────────
-# Подписка -- обычный https-адрес со списком ключей, не ключ. Тело отдаётся
-# как есть, без раскодирования: подписки обычно base64, а на роутере нет ни
-# base64, ни openssl (busybox, проверено 2026-09-03); разбирает панель (atob).
+# Подписка -- обычный https-адрес со списком ключей, не ключ. Подписки
+# обычно base64 (и base64url), а на роутере нет ни base64, ни openssl
+# (busybox, проверено 2026-09-03): раскодирует ucode ниже, а не раскодированное
+# отдаётся как есть -- панель раскодирует сама (atob), если в ответе нет «://».
 # Сначала через прокси byway: домен подписки может лежать в списке, и
 # напрямую роутер до него не достанет.
 cmd_sub() {
@@ -2828,10 +2840,13 @@ cmd_sub() {
     esac
 
     _px=$(u local_proxy_port); _px=${_px:-1603}
-    _raw=$(curl -fsSL --max-time 25 --max-filesize 4194304 --max-redirs 3 -A "Mozilla/5.0" \
-           --proxy "http://127.0.0.1:$_px" "$_u" 2>/dev/null || true)
+    # Адрес (секрет) -- конфигом со стандартного ввода, а не аргументом: аргумент
+    # виден всем в /proc/*/cmdline.
+    _uq=$(printf '%s' "$_u" | sed 's/[\\"]/\\&/g')
+    _raw=$(printf 'url = "%s"\n' "$_uq" | curl -fsSL --max-time 25 --max-filesize 4194304 --max-redirs 3 -A "Mozilla/5.0" \
+           --proxy "http://127.0.0.1:$_px" --config - 2>/dev/null || true)
     if [ -z "$_raw" ]; then
-        _raw=$(curl -fsSL --max-time 25 --max-filesize 4194304 --max-redirs 3 -A "Mozilla/5.0" "$_u" 2>/dev/null || true)
+        _raw=$(printf 'url = "%s"\n' "$_uq" | curl -fsSL --max-time 25 --max-filesize 4194304 --max-redirs 3 -A "Mozilla/5.0" --config - 2>/dev/null || true)
     fi
     [ -n "$_raw" ] || die "подписка не скачалась: стоит проверить адрес и связь"
     # Подписка почти всегда в base64 (и base64url): раскодирует ucode. Не
@@ -3335,15 +3350,7 @@ DNSSEC="dhcp.@dnsmasq[0]"
 DNSSAVE=$LISTS/dns-saved
 
 dns_save_read() {   # $1 -- noresolv | server
-    if [ ! -f "$DNSSAVE" ]; then
-        # Подъём прежней редакцией (снимок в UCI), снятие этой: без чтения UCI
-        # возврат отдал бы пустоту.
-        case "$1" in
-          noresolv) uci -q get byway.main.saved_noresolv || true ;;
-          server)   uci -q get byway.main.saved_server   || true ;;
-        esac
-        return 0
-    fi
+    [ -f "$DNSSAVE" ] || return 0
     case "$1" in
       noresolv) sed -n '1s/^noresolv=//p' "$DNSSAVE" ;;
       server)   sed -n 's/^server=//p' "$DNSSAVE" ;;
@@ -3388,16 +3395,6 @@ dns_flush() {
 
 dns_up() {
     _l=$(dns_addr)
-    # Перенос снимка из UCI старой редакции: иначе файл собрался бы из нашего
-    # же адреса, и plumb off вернул бы нерабочий резолвер.
-    if [ ! -f "$DNSSAVE" ] && [ "$(uci -q get byway.main.dns_saved)" = "1" ]; then
-        {
-            printf 'noresolv=%s\n' "$(uci -q get byway.main.saved_noresolv 2>/dev/null || echo 0)"
-            for s in $(uci -q get byway.main.saved_server 2>/dev/null); do
-                printf 'server=%s\n' "$s"
-            done
-        } > "$DNSSAVE"
-    fi
     if [ ! -f "$DNSSAVE" ]; then
         {
             printf 'noresolv=%s\n' "$(uci -q get "$DNSSEC.noresolv" 2>/dev/null || echo 0)"
@@ -3441,6 +3438,10 @@ dns_up() {
     # (боевой, 2026-10-02).
     if dns_live_ok "$_l" && [ "$_dnew" = 0 ]; then
         dns_flush
+    elif [ "${DNS_DEFER_RESTART:-0}" = 1 ]; then
+        # Следом block_off снимает файл запрета и перезапускает dnsmasq сам:
+        # один перезапуск вместо двух (по девять секунд без DNS у дома).
+        :
     else
         /etc/init.d/dnsmasq restart >/dev/null 2>&1
     fi
@@ -3487,14 +3488,6 @@ dns_down() {
 
     rm -f "$DNSSAVE" 2>/dev/null || true
 
-    # Остатки прежней редакции (снимок в UCI): пустой commit тоже дёргает
-    # триггер.
-    if [ -n "$(uci -q get byway.main.dns_saved)" ]; then
-        uci -q delete byway.main.dns_saved 2>/dev/null || true
-        uci -q delete byway.main.saved_server 2>/dev/null || true
-        uci -q delete byway.main.saved_noresolv 2>/dev/null || true
-        uci commit byway
-    fi
     # Зеркально dns_up: резолвер не наш -- рестарт чистая потеря (plumb off на
     # роутере без обвязки дёргал DNS дома), кэш сбрасываем всё равно. «Не знаю»
     # (2) считаем нашим: пропущенный рестарт хуже лишнего.
@@ -3757,8 +3750,8 @@ cmd_plumb() {
         rm -f "$PLUMB_DOWN" 2>/dev/null || true
         plumb_wait
         if [ $_i -ge 15 ]; then
-            # Возвращаем dnsmasq провайдеру: иначе он остался бы с
-            # закоммиченной правкой.
+            # Возвращаем dnsmasq провайдеру: иначе дельта UCI осталась бы на
+            # нашем адресе.
             dns_down
             # Закрыть до сообщения: между ними страница ушла бы мимо туннеля.
             block_on
@@ -3822,7 +3815,13 @@ cmd_plumb() {
             rm -rf "$_plock" 2>/dev/null || true
             return 1
         fi
+        # Стоит запрет «не пускать» (файл в каталоге dnsmasq) -- его снимет
+        # block_off следующей строкой вместе с рестартом dnsmasq.
+        _bcd=$(dnsmasq_confdir)
+        DNS_DEFER_RESTART=0
+        if [ -n "$_bcd" ] && [ -f "$_bcd/byway-block.conf" ]; then DNS_DEFER_RESTART=1; fi
         dns_up
+        DNS_DEFER_RESTART=0
         block_off
         rm -rf "$_plock" 2>/dev/null || true
         sayf "перехват включён: таблица inet %s, правило fwmark, dnsmasq -> %s" "$TABLE" "$(dns_addr)"
@@ -4192,6 +4191,16 @@ watch_upcheck() {
             printf '%s\n' "$(( 720 + 0x$_ur % 1441 ))" > "$UPMARK"
             _uv=$(latest_version)
             _uc=${_uv%% *}; _un=${_uv#* }
+            # Дошла ли проверка до GitHub: doctor иначе писал бы «новее не
+            # найдено» и про сутки без связи, и про отказ 403.
+            if [ -n "$_un" ] && [ "$_un" != "$_uc" ]; then
+                : > "$UPOK" 2>/dev/null || true
+                rm -f "$UPFAIL" 2>/dev/null || true
+            else
+                printf '%s\n' "$_uc" > "$UPFAIL" 2>/dev/null || true
+                # Нет связи -- повтор через час, а не через 12-36 ч.
+                [ "$_uc" = "000" ] && printf '60\n' > "$UPMARK"
+            fi
             if [ -n "$_un" ] && [ "$_un" != "$_uc" ] && ver_gt "$_un" "$BYWAY_NUM"; then
                 # Пишем только при изменении, иначе строка каждые сутки.
                 if [ "$(cat "$NEWVER" 2>/dev/null)" != "$_un" ]; then
@@ -4339,7 +4348,11 @@ watch_hosts() {
     for _wp in $(grep -o '"hosts": {[^}]*}' "$OUT" 2>/dev/null | grep -o '"[^"]*": "[0-9.]*"' | tr -d '" ' ); do
         _wn=${_wp%%:*}; _wo=${_wp#*:}
         _wa=$(server_addr "$_wn")
-        [ -n "$_wa" ] && [ "$_wa" != "$_wo" ] && _wch="$_wch $_wn:$_wo->$_wa"
+        [ -n "$_wa" ] && [ "$_wa" != "$_wo" ] || continue
+        # Прежний адрес всё ещё среди ответов -- это чередование записей, а не
+        # смена сервера: пересборка зря перезапускала бы службу.
+        a_all "$_wn" 8.8.8.8 | grep -qx "$_wo" && continue
+        _wch="$_wch $_wn:$_wo->$_wa"
     done
     [ -n "$_wch" ] || return 0
     logf 'адрес сервера сменился (%s) -- пересборка конфига' "${_wch# }"
@@ -4363,7 +4376,11 @@ engine_gone() {
             # Текст зависит от модели: при закрытой обвязку снимаем, а
             # запрет оставляем -- интернета нет.
             if [ "$(u on_failure)" != "open" ]; then
-                logt "движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: доступа наружу нет"
+                case "$(cat "$BLOCK_MARK" 2>/dev/null || true)" in
+                  all)   logt "движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: трафик сетей byway закрыт" ;;
+                  lists) logt "движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: сайты и подсети списка закрыты" ;;
+                  *)     logt "движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» включён, но закрывать нечего" ;;
+                esac
             else
                 logt "движок не поднимается -- перехват снят, дом остаётся с интернетом и без туннеля"
             fi
@@ -4496,10 +4513,11 @@ status_urltest() {
         # ветка умирала молча.
         _cnt=$(grep -c '"tag": "proxy-' "$OUT" || true)
         printf "$(_t 'подключение автовыбор из %s ключей\n')" "$_cnt"
-        # Активный ключ виден только по обращениям, выбирает движок. Цифра в
-        # шаблоне обязательна: со звёздочкой ловится «proxy-» из «tproxy-in».
-        _act=$( { tail -200 "$ACCESS" 2>/dev/null || logread -e xray 2>/dev/null; } |
-                grep -o 'proxy-[0-9][0-9]*' | tail -1 || true)
+        # Активный ключ виден только по обращениям (сбор статистики), выбирает
+        # движок. Цифра в шаблоне обязательна: со звёздочкой ловится «proxy-»
+        # из «tproxy-in». Журнал движка (logread) обращений при поставочных
+        # настройках не пишет вовсе -- прежде строка не появлялась никогда.
+        _act=$(tail -200 "$ACCESS" 2>/dev/null | grep -o 'proxy-[0-9][0-9]*' | tail -1 || true)
         [ -n "$_act" ] && printf "$(_t 'сейчас      %s\n')" "$_act"
     elif [ -f "$OUT" ]; then
         _net=$(grep -o '"network": "[a-z0-9]*"' "$OUT" | tail -1 | cut -d'"' -f4)
@@ -4551,7 +4569,7 @@ status_block() {
         # было нечего» -- противоположные состояния.
         case "$(cat "$BLOCK_MARK" 2>/dev/null || true)" in
           all)
-            printf "$(_t "ВНИМАНИЕ    ВЕСЬ трафик мимо VPN ЗАКРЫТ: туннеля нет, так велит «не пускать мимо VPN»\n")" ;;
+            printf "$(_t "ВНИМАНИЕ    трафик перечисленных сетей мимо VPN ЗАКРЫТ: туннеля нет, так велит «не пускать мимо VPN»\n")" ;;
           none)
             printf "$(_t "ВНИМАНИЕ    «не пускать мимо VPN» включено, но закрывать было нечего — трафик идёт НАПРЯМУЮ\n")" ;;
           *)
@@ -4968,6 +4986,11 @@ doctor_updates() {
     if [ ! -s "$NEWVER" ]; then
         if [ "$(u update_check)" = "0" ]; then
             _d_ok "$(_t 'проверка новых версий выключена')"
+        elif [ -f "$UPFAIL" ] && { [ ! -f "$UPOK" ] || [ -n "$(find "$UPFAIL" -newer "$UPOK" 2>/dev/null)" ]; }; then
+            # Последняя проверка не дошла до GitHub: «новее не найдено» тут
+            # было бы ложью.
+            _d_warn "$(_f 'проверка новых версий не удалась (ответ GitHub: %s)' "$(cat "$UPFAIL" 2>/dev/null)")" \
+                    "новые выпуски не видны: нет связи с GitHub либо он отвечает отказом. Проверить вручную: byway update --check"
         else
             _d_ok "$(_f 'новее %s не найдено' "$BYWAY_NUM")"
         fi
@@ -4990,7 +5013,7 @@ doctor_updates() {
     if [ "$(u auto_update)" = "1" ]; then
         if [ ! -f "$BINSUM" ]; then
             _d_warn "$(_t 'автообновление включено, но происхождение файла неизвестно')" \
-                    "byway положен не установщиком -- обновление пропускается. Лечится запуском install.sh из поставки"
+                    "byway положен не установщиком -- обновление пропускается. Лечится запуском install.sh из файлов byway"
         elif [ "$(md5sum /usr/local/bin/byway 2>/dev/null | cut -d" " -f1)" != "$(cat "$BINSUM")" ]; then
             _d_warn "$(_t 'автообновление включено, но byway правлен руками')" \
                     "своя правка не будет перетёрта: обновление пропускается намеренно"
@@ -5118,7 +5141,7 @@ doctor_config() {
           *[!0-9a-fA-FxX]*) ;;
           *) [ "$(( _dsm & _dmk ))" -ne 0 ] &&
                _d_warn "$(_f 'self_mark %s пересекается битами с mark %s' "$_dsm" "$_dmk")" \
-                       "byway возьмёт другое значение сам; задать своё: uci set byway.main.self_mark=0x400000" ;;
+                       "byway возьмёт другое значение сам (его видно в byway nft, строка «meta mark … return»); закрепить: uci set byway.main.self_mark=ЗНАЧЕНИЕ && uci commit byway && /etc/init.d/byway reload" ;;
         esac
     fi
     return 0
@@ -5157,17 +5180,17 @@ doctor_dns() {
         # Сеть вне перехвата копится отдельно: в режиме «всё через VPN» это
         # дыра, чем бы она ни резолвила -- гейт `iifname != {…} return` стоит
         # первым и в перехвате, и в запрете.
-        _outside="$_outside $_dif"
+        _outside="$_outside $_dbr"
         # Свой резолвер сети задан через DHCP -- значит наш ей и не достаётся.
         uci -q get "dhcp.$_dsec.dhcp_option" 2>/dev/null | grep -q '6,' && continue
-        _lost="$_lost $_dif"
+        _lost="$_lost $_dbr"
     done
     if [ "$(u list_mode)" = "all" ] && [ -n "$_outside" ]; then
         _d_bad "$(_f 'режим «всё через VPN», а эти сети идут мимо него целиком:%s' "$_outside")" \
-               "в этом режиме byway.main.interface -- граница ВСЕЙ защиты, а не только списков: что вне его, то мимо туннеля и мимо запрета «не пускать мимо VPN». Добавить сети в byway.main.interface"
+               "в этом режиме byway.main.interface -- граница ВСЕЙ защиты, а не только списков: что вне его, то мимо туннеля и мимо запрета «не пускать мимо VPN». Добавить устройства в byway.main.interface"
     elif [ -n "$_lost" ]; then
         _d_warn "$(_f 'сети с резолвером byway, но без перехвата:%s' "$_lost")" \
-                "их клиенты получат подставной адрес, до туннеля не дойдут и потеряют ВЕСЬ список. Лечится одним из двух: добавить сеть в byway.main.interface либо выдать ей свой DNS через dhcp_option '6,…'"
+                "их клиенты получат подставной адрес, до туннеля не дойдут и потеряют ВЕСЬ список. Лечится одним из двух: добавить устройство в byway.main.interface либо выдать ей свой DNS через dhcp_option '6,…'"
     else
         _d_ok "$(_t 'перехват и резолвер согласованы по сетям')"
     fi
@@ -5305,11 +5328,11 @@ doctor_ports() {
             if [ -n "$(plain_domains "$(merged_domains)" | head -1)" ]; then
                 _d_ok "$(_t 'роутер ходит к сайтам из списка сам')"
             else
-                _d_warn "$(_t 'заворот трафика роутера включён, но список пуст — ловить нечего')" \
-                        "заворот работает по доменам списка: наполнить список либо подключить готовый"
+                _d_warn "$(_t 'VPN для программ на роутере (router_via_vpn) включён, но список пуст — ловить нечего')" \
+                        "VPN для программ на роутере работает по доменам списка: наполнить список либо подключить готовый"
             fi
         else
-            _d_warn "$(_t 'заворот трафика роутера включён, но цепочки в ядре нет')" \
+            _d_warn "$(_t 'VPN для программ на роутере (router_via_vpn) включён, но цепочки в ядре нет')" \
                     "переложить правила: byway plumb off && byway plumb on"
         fi
     elif [ "$(u router_via_vpn)" != "1" ]; then
@@ -5318,7 +5341,7 @@ doctor_ports() {
         # «Operation not permitted». byway не задет (ходит через прокси-вход),
         # задеты соседи: обновлялка zapret, Zapret-Manager, чужие скрипты.
         _d_warn "$(_t 'роутер сам до сайтов из списка не достаёт')" \
-                "заворот своего трафика выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload"
+                "VPN для программ на роутере (router_via_vpn) выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload"
     fi
 
     # Правило и маршрут снимаются разными руками: сосед, чистящий таблицу 100,
@@ -5397,8 +5420,13 @@ report_body() {
     cmd_health 2>&1 || true
     echo
     _r "== подключение (без значений) =="
-    if ( parse_node >/dev/null 2>&1 ); then
-        parse_node >/dev/null 2>&1 || true
+    # В автовыборе разбирается первый ключ списка, а не node_url (его там нет).
+    _rk=""
+    case "$(u conn_mode)" in
+      urltest|selector) _rk=$(u node_urls | awk '{ print $1; exit }') ;;
+    esac
+    if ( parse_node $_rk >/dev/null 2>&1 ); then
+        parse_node $_rk >/dev/null 2>&1 || true
         _rv "протокол" "$N_PROTO"
         _rv "транспорт" "$N_TYPE"
         _rv "защита" "$N_SEC"
@@ -5441,7 +5469,9 @@ report_body() {
     echo
     _r "== системный журнал byway (последние 30) =="
     # Те же вымарки, что у журнала движка: watch пишет сюда имя и адрес сервера.
-    logread -e byway 2>/dev/null | tail -30 |
+    # Строки crond о задачах byway (pulse раз в минуту) вытесняли бы сообщения
+    # самой программы.
+    logread -e byway 2>/dev/null | grep -v ' cron\.[a-z]* crond\[' | tail -30 |
       sed -E 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/x.x.x.x/g
               s/([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/'"$(_t ИМЯ | sed 's/[\/&]/\\&/g')"'/g' || true
     echo
@@ -5464,6 +5494,8 @@ report_body() {
 # нужна, а после перезагрузки проверка лишний раз безвредна.
 UPMARK=/tmp/byway-upcheck     # когда спрашивали в прошлый раз
 
+UPOK=/tmp/byway-upcheck-ok     # время последней проверки, дошедшей до GitHub
+UPFAIL=/tmp/byway-upcheck-fail # код ответа последней неудачной проверки
 NEWVER=/tmp/byway-newver      # номер найденной версии, если она новее
 
 RELNOTE=/tmp/byway-relnote    # первая строка описания выпуска
@@ -6370,6 +6402,15 @@ PANEL_LANG=/www/luci-static/resources/byway/lang.js
 # Полный ли словарь панели: у урезанного строк перевода нет вовсе.
 lang_panel_full() { grep -q '"Служба": "Service"' "$PANEL_LANG" 2>/dev/null; }
 
+# Не вышло переключить на английский: настройка языка, которую уже записала
+# панель, возвращается на русский (словаря нет) -- иначе панель показывала бы
+# «язык остался прежним» при lang=en в настройках.
+lang_back() {
+    [ -s "$LANGDIR/en.tsv" ] && return 0
+    [ "$(u lang)" = en ] || return 0
+    uci set byway.main.lang=ru 2>/dev/null && uci commit byway 2>/dev/null || true
+}
+
 cmd_lang() {
     _lw=${1:-}
     case "$_lw" in
@@ -6394,8 +6435,10 @@ cmd_lang() {
             case "$_lsr" in
               0) _lnv=1 ;;
               1) rm -rf "$_lt"
+                 lang_back
                  die "словарь не сверить с подписью выпуска — язык не переключён; без проверки: BYWAY_NO_VERIFY=1 byway lang en" ;;
               *) rm -rf "$_lt"
+                 lang_back
                  die "подпись выпуска не сошлась — язык не переключён" ;;
             esac
         fi
@@ -6404,10 +6447,12 @@ cmd_lang() {
             if ! eng_dl --max-time 30 -o "$_lt/en.tsv" "$_lb/lang/en.tsv" ||
                ! grep -q '	' "$_lt/en.tsv" 2>/dev/null; then
                 rm -rf "$_lt"; eng_nonet
+                lang_back
                 die "словарь не скачался — язык не переключён"
             fi
             if [ "$_lnv" = 1 ] && ! rel_sum_ok "$_lt/en.tsv" lang/en.tsv "$_lt/SHA256SUMS"; then
                 rm -rf "$_lt"
+                lang_back
                 die "словарь не совпал с подписанным выпуском — язык не переключён"
             fi
             mv "$_lt/en.tsv" "$LANGDIR/en.tsv" && chmod 644 "$LANGDIR/en.tsv"
@@ -6417,10 +6462,12 @@ cmd_lang() {
             if ! eng_dl --max-time 30 -o "$_lt/lang.js" "$_lb/luci/lang.js" ||
                ! grep -q '"Служба": "Service"' "$_lt/lang.js" 2>/dev/null; then
                 rm -rf "$_lt"; eng_nonet
+                lang_back
                 die "словарь панели не скачался — язык не переключён"
             fi
             if [ "$_lnv" = 1 ] && ! rel_sum_ok "$_lt/lang.js" luci/lang.js "$_lt/SHA256SUMS"; then
                 rm -rf "$_lt"
+                lang_back
                 die "словарь не совпал с подписанным выпуском — язык не переключён"
             fi
             mv "$_lt/lang.js" "$PANEL_LANG" && chmod 644 "$PANEL_LANG"
@@ -6461,8 +6508,8 @@ EXPORT_KEYS="enabled conn_mode node_url sub_url outbound_json conn_label
              lists_update dns_route on_failure node_urls lang update_check
              auto_update auto_update_hour"
 
-# xray_bin не переносится: это путь к программе, которую byway запускает от
-# root, из чужого файла его брать не надо (xray_ok удержит, но незачем), и
+# xray_bin не переносится: это путь к программе, которую byway запускает
+# (от пользователя byway либо от root), из чужого файла его брать не надо (xray_ok удержит, но незачем), и
 # он машинный -- на другом роутере пути обычно нет.
 
 # Опции с ключом: ими различаются «поделиться настройкой» и «отдать доступ».
@@ -6533,9 +6580,10 @@ cmd_clear() {
     esac
 }
 
-# Куда можно писать выгрузку и откуда читать. Панель запускает byway с ЛЮБЫМИ
-# аргументами (rpcd проверяет только путь программы): без проверки `byway
-# export /etc/passwd` перезапишет системный файл от root. Системные каталоги
+# Куда можно писать выгрузку и откуда читать. Панель вправе запускать только
+# команды, перечисленные в acl.json (точные строки, без `export *`); эта
+# проверка -- для консоли: без неё `byway export /etc/passwd` перезапишет
+# системный файл от root. Системные каталоги
 # закрыты, кроме своего /etc/byway; остальное открыто -- консоли не мешаем.
 path_ok() {
     case "$1" in *..*) return 1 ;; esac
@@ -6711,6 +6759,14 @@ import_backup() {
     ( umask 077; rm -f "$_bak/config"; cp "$CONF" "$_bak/config" ) 2>/dev/null || true
     cp "$LISTS/domains.lst" "$_bak/domains.lst" 2>/dev/null || true
     cp "$LISTS/subnets.lst" "$_bak/subnets.lst" 2>/dev/null || true
+    # Списки направлений -- тоже каждый раз заново: копия прошлого приёма
+    # возвращала бы при отказе чужие, не нынешние списки.
+    rm -rf "$_bak/routes" 2>/dev/null || true
+    mkdir -p "$_bak/routes"
+    chmod 700 "$_bak/routes" 2>/dev/null || true
+    for _rb in "$ROUTES_DIR"/*.lst; do
+        [ -f "$_rb" ] && cp "$_rb" "$_bak/routes/" 2>/dev/null || true
+    done
     return 0
 }
 
@@ -6808,15 +6864,29 @@ import_routes() {
 # имя. logqueries у dnsmasq отвергнут: раздувает буфер журнала (256 КБ) и
 # чаще пишет во флеш. Подсети идут по настоящим адресам -- строка «(по IP)».
 
+# Рабочие файлы учёта -- в каталоге root (/var/run/byway, 755), а не в общем
+# /tmp: движок от пользователя byway мог подложить туда карту «адрес -> домен»
+# или метку, и root записал бы её в usage.tsv.
+STATDIR=/var/run/byway
 STAT=$LISTS/usage.tsv        # домен, обращений, последний раз
 
-MAP=/tmp/byway-fakemap       # адрес -> домен, живёт в памяти как и сам Xray
+MAP=$STATDIR/fakemap       # адрес -> домен, живёт в памяти как и сам Xray
 
-MARK=/tmp/byway-statmark     # PID и метка времени последней обработанной строки
+MARK=$STATDIR/statmark     # PID и метка времени последней обработанной строки
 
-MAPPOS=/tmp/byway-fakemap.pos # докуда дошли, строя карту порциями
+MAPPOS=$STATDIR/fakemap.pos # докуда дошли, строя карту порциями
+
+# Журнал обращений, из которого считается учёт, движок пишет только при
+# show_usage=1 (или уровне info/debug).
+stat_off() {
+    [ "$(u show_usage)" = "1" ] && return 1
+    case "$(u log_level)" in info|debug) return 1 ;; esac
+    return 0
+}
 
 cmd_stat() {
+    mkdir -p "$STATDIR" 2>/dev/null || true
+    stat_off && warn "сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)"
     _p=$(xray_pid)
     [ -n "$_p" ] || { warn "xray не запущен, считать нечего"; return 0; }
     _l=$(dns_addr)
@@ -6838,8 +6908,8 @@ stat_domains() {
             [ "$(uci -q get "byway.$_rn.enabled")" = "0" ] && continue
             route_list "$ROUTES_DIR/$_rn.lst" dom
         done
-    } > /tmp/byway-stat-doms
-    plain_domains /tmp/byway-stat-doms
+    } > $STATDIR/stat-doms
+    plain_domains $STATDIR/stat-doms
 }
 
 stat_map() {
@@ -6852,11 +6922,11 @@ stat_map() {
     if [ "$_oldpid" != "$_p" ]; then : > "$MAP"; : > "$MAPPOS"; _newmap=1; fi
     _mpos=$(cat "$MAPPOS" 2>/dev/null || echo 0)
     case "$_mpos" in ''|*[!0-9]*) _mpos=0 ;; esac
-    stat_domains > /tmp/byway-stat-doms.plain
-    _mall=$(grep -c . /tmp/byway-stat-doms.plain || true); _mall=${_mall:-0}
+    stat_domains > $STATDIR/stat-doms.plain
+    _mall=$(grep -c . $STATDIR/stat-doms.plain || true); _mall=${_mall:-0}
     if [ "$_newmap" = 1 ] || [ "$_mpos" -lt "$_mall" ]; then
         _fre=$(fakeip_re)
-        sed -n "$((_mpos + 1)),$((_mpos + _MSTEP))p" /tmp/byway-stat-doms.plain |
+        sed -n "$((_mpos + 1)),$((_mpos + _MSTEP))p" $STATDIR/stat-doms.plain |
         while IFS= read -r _d; do
             _a=$(nslookup "$_d" "$_l" 2>/dev/null |
                  sed -n 's/^Address: *//p' | grep -E "^$_fre" | head -1)
@@ -6883,7 +6953,7 @@ stat_map() {
 # Отбор строк журнала обращений после последней учтённой.
 stat_collect() {
     _since=$(sed -n 2p "$MARK" 2>/dev/null || true)
-    _tmp=/tmp/byway-stat.tmp
+    _tmp=$STATDIR/stat.tmp
 
     # Метка -- время Xray из начала строки (монотонно в журнале, у syslog
     # другой пояс). Ветка logread -- для конфига версии до 2026-09-05, где
@@ -6937,13 +7007,13 @@ stat_count() {
             }
           }
           END { for (d in cnt) printf "%s\t%d\t%s\n", d, cnt[d], seen[d] }
-        ' "$_tmp" | sort > /tmp/byway-stat.new
+        ' "$_tmp" | sort > $STATDIR/stat.new
         # Во флеш -- только если итог изменился.
-        if ! cmp -s /tmp/byway-stat.new "$STAT"; then
-            mv /tmp/byway-stat.new "$STAT"
+        if ! cmp -s $STATDIR/stat.new "$STAT"; then
+            mv $STATDIR/stat.new "$STAT"
             chmod 600 "$STAT" 2>/dev/null || true
         else
-            rm -f /tmp/byway-stat.new
+            rm -f $STATDIR/stat.new
         fi
         [ -n "$_last" ] && printf '%s\n%s\n' "$_p" "$_last" > "$MARK"
         sayf "учтено соединений: %s, всего доменов в учёте: %s" "$_n" "$(grep -c . "$STAT")"
@@ -6955,7 +7025,10 @@ stat_count() {
 
 # Показать накопленное. Без аргумента — двадцать самых частых.
 cmd_top() {
-    [ -s "$STAT" ] || die "учёт пуст. Собирается задачей cron; вручную: byway stat"
+    if [ ! -s "$STAT" ]; then
+        stat_off && die "сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)"
+        die "учёт пуст. Собирается задачей cron; вручную: byway stat"
+    fi
     _n=${1:-20}
     # Ширина колонки -- в символах: printf в busybox считает байты, и
     # кириллица сдвигала колонку. Всё печатает один awk (`_len` на строку --
@@ -7165,6 +7238,20 @@ m_lists() {
     done
 }
 
+# Итог после запуска службы: движок ждём (до 12 с) и судим по нему, а не по
+# коду init -- он при procd всегда 0.
+m_svc_done() {   # 1 -- «запущена» либо «перезапущена»
+    if [ "$(u enabled)" != "1" ]; then
+        printf "$(_t '\n  byway ВЫКЛЮЧЕН настройкой — служба не запускается\n')"
+        printf "$(_t '  включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart\n')"
+        return 0
+    fi
+    _mw=0
+    while [ "$_mw" -lt 12 ] && [ -z "$(xray_pid)" ]; do _mw=$((_mw + 1)); sleep 1; done
+    if [ -n "$(xray_pid)" ]; then printf "\n  %s\n" "$1"
+    else printf "$(_t '\n  движок не поднялся — смотреть: logread -e byway\n')"; fi
+}
+
 m_service() {
     while :; do
         m_head "Служба"
@@ -7180,14 +7267,14 @@ m_service() {
         echo
         m_ask "Выбор"
         case "$REPLY" in
-          1) echo; /etc/init.d/byway restart; printf "$(_t "\n  перезапущена\n")"; m_pause ;;
+          1) echo; /etc/init.d/byway restart; m_svc_done "$(_t перезапущена)"; m_pause ;;
           2) echo
              printf "$(_t "  Туннеля не станет, интернет продолжит работать напрямую.\n")"
              if m_yes "Остановить?"; then
                  /etc/init.d/byway stop; printf "$(_t "\n  остановлена\n")"
              fi
              m_pause ;;
-          3) echo; /etc/init.d/byway start; printf "$(_t "\n  запущена\n")"; m_pause ;;
+          3) echo; /etc/init.d/byway start; m_svc_done "$(_t запущена)"; m_pause ;;
           4) if ls /etc/rc.d/S*byway >/dev/null 2>&1; then
                  /etc/init.d/byway disable; printf "$(_t "\n  автозапуск выключен\n")"
              else
@@ -7336,6 +7423,8 @@ case "${1:-}" in
   update) shift; cmd_update "$@" ;;
   engine) shift; cmd_engine "$@" ;;
   lang)   shift; cmd_lang "$@" ;;
+  # Служебная: перевод сообщения службы (init-скрипт), формат и доводы printf.
+  xlat)   shift; _xf=$(_t "$1"); shift; printf "$_xf" "$@" ;;
   clear)  shift; cmd_clear "$@" ;;
   import) shift; cmd_import "$@" ;;
   version|--version|-v) echo "byway $BYWAY_VERSION" ;;

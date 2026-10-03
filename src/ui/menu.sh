@@ -189,6 +189,20 @@ m_lists() {
     done
 }
 
+# Итог после запуска службы: движок ждём (до 12 с) и судим по нему, а не по
+# коду init -- он при procd всегда 0.
+m_svc_done() {   # 1 -- «запущена» либо «перезапущена»
+    if [ "$(u enabled)" != "1" ]; then
+        printf "$(_t '\n  byway ВЫКЛЮЧЕН настройкой — служба не запускается\n')"
+        printf "$(_t '  включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart\n')"
+        return 0
+    fi
+    _mw=0
+    while [ "$_mw" -lt 12 ] && [ -z "$(xray_pid)" ]; do _mw=$((_mw + 1)); sleep 1; done
+    if [ -n "$(xray_pid)" ]; then printf "\n  %s\n" "$1"
+    else printf "$(_t '\n  движок не поднялся — смотреть: logread -e byway\n')"; fi
+}
+
 m_service() {
     while :; do
         m_head "Служба"
@@ -204,14 +218,14 @@ m_service() {
         echo
         m_ask "Выбор"
         case "$REPLY" in
-          1) echo; /etc/init.d/byway restart; printf "$(_t "\n  перезапущена\n")"; m_pause ;;
+          1) echo; /etc/init.d/byway restart; m_svc_done "$(_t перезапущена)"; m_pause ;;
           2) echo
              printf "$(_t "  Туннеля не станет, интернет продолжит работать напрямую.\n")"
              if m_yes "Остановить?"; then
                  /etc/init.d/byway stop; printf "$(_t "\n  остановлена\n")"
              fi
              m_pause ;;
-          3) echo; /etc/init.d/byway start; printf "$(_t "\n  запущена\n")"; m_pause ;;
+          3) echo; /etc/init.d/byway start; m_svc_done "$(_t запущена)"; m_pause ;;
           4) if ls /etc/rc.d/S*byway >/dev/null 2>&1; then
                  /etc/init.d/byway disable; printf "$(_t "\n  автозапуск выключен\n")"
              else

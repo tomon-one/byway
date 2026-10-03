@@ -61,6 +61,8 @@ t() {
       "движок из пакетов OpenWrt оставлен -- он мог стоять до byway и нужен не только ему") printf %s "the core from OpenWrt packages is kept -- it may predate byway and may be used by something else" ;;
       "  снять вручную: %s") printf %s "  remove by hand: %s" ;;
       "было бы сделано:") printf %s "would be done:" ;;
+      "следов byway в настройках DNS нет — dnsmasq не трогается") printf %s "no trace of byway in the DNS settings — dnsmasq is left alone" ;;
+      "остановить фоновые процессы byway:") printf %s "stop the background byway processes:" ;;
       "СУХОЙ ПРОГОН: ничего не меняется") printf %s "DRY RUN: nothing is being changed" ;;
       "вычеркнуть из /etc/sysupgrade.conf строк: ") printf %s "lines to remove from /etc/sysupgrade.conf: " ;;
       *) printf %s "$1" ;;
@@ -103,6 +105,31 @@ PKG_DEL=del
 PURGE=0
 [ "${1:-}" = "--purge" ] && PURGE=1
 
+# Канарейка Firefox: dns_up byway дописывает её в server рядом со своим адресом.
+CANARY=/use-application-dns.net/
+
+# Следы byway, по которым dnsmasq и маршрут признаются СВОИМИ. Вторым
+# запуском (--purge после обычного удаления) программы и снимка уже нет, а
+# 127.0.0.42 и таблицу 100 по умолчанию занимают и podkop, и passwall:
+# опознавать своё по одному значению значило ломать поставленное после
+# byway. Берётся до первого шага.
+_ours=0
+[ -x /usr/local/bin/byway ] && _ours=1
+[ -f /etc/byway/dns-saved ] && _ours=1
+nft list tables 2>/dev/null | grep -q 'inet byway$' && _ours=1
+
+# Убрать свой адрес и канарейку из server; noresolv снять, если не осталось
+# ни одного апстрима (записи вида /домен/адрес апстримами не считаются).
+dns_strip_own() {   # 1 -- свой адрес
+    do_ uci -q del_list "dhcp.@dnsmasq[0].server=$1"
+    do_ uci -q del_list "dhcp.@dnsmasq[0].server=$CANARY"
+    _up=""
+    for _s in $(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null || true); do
+        case "$_s" in /*) ;; *) _up=1 ;; esac
+    done
+    [ -n "$_up" ] || do_ uci -q delete dhcp.@dnsmasq[0].noresolv
+}
+
 echo
 say "── 1. Сеть возвращается в исходное ──"
 
@@ -135,7 +162,12 @@ else
     # самый момент печатает «настройки сети не трогались».
     _mine=$(uci -q get byway.main.dns_listen 2>/dev/null || true)
     [ -n "$_mine" ] || _mine=127.0.0.42
-    if [ -f /etc/byway/dns-saved ]; then
+    # Незакоммиченная дельта byway (dns_up) не должна уйти во флеш вместе с
+    # нашим commit.
+    do_ uci -q revert dhcp
+    if [ "$_ours" != 1 ]; then
+        warn "следов byway в настройках DNS нет — dnsmasq не трогается"
+    elif [ -f /etc/byway/dns-saved ]; then
         # ⚠️ Запоминаем ТЕКУЩИЙ список до удаления: в нём могли появиться
         # доменные записи (server=/nas.lan/192.168.1.5), заведённые уже после
         # снимка -- руками или на странице DHCP. В снимок они не попали, а
@@ -155,7 +187,7 @@ else
         for _s in $_dcur; do
             case "$_s" in /*) ;; *) continue ;; esac
             case "$_dseen" in *" $_s "*) continue ;; esac
-            case "$_s" in *"$_mine"*) continue ;; esac
+            case "$_s" in *"$_mine"*|"$CANARY") continue ;; esac
             _dseen="$_dseen$_s "
             do_ uci add_list "dhcp.@dnsmasq[0].server=$_s"
         done
@@ -169,14 +201,14 @@ else
         # Чужие записи не наши, чтобы их судьбу решать: человек мог держать
         # на петле и свой резолвер (https-dns-proxy, stubby), и снести его
         # заодно значило бы повторить ту же беду с другой стороны.
-        do_ uci -q del_list "dhcp.@dnsmasq[0].server=$_mine"
         # noresolv снимаем, только если резолвить стало нечем. Он мог стоять
         # у человека и до byway, вместе с его собственными адресами.
-        [ -n "$(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null)" ] ||
-            do_ uci -q delete dhcp.@dnsmasq[0].noresolv
+        dns_strip_own "$_mine"
     fi
-    do_ uci commit dhcp
-    do_ /etc/init.d/dnsmasq restart
+    if [ "$_ours" = 1 ]; then
+        do_ uci commit dhcp
+        do_ /etc/init.d/dnsmasq restart
+    fi
     do_ nft delete table inet byway
     do_ nft delete table inet byway_block
     # Добавка dnsmasq от kill switch: без неё домены из списка так и
@@ -216,7 +248,12 @@ else
     # Точечно, а не flush. Таблица общая: flush стирал бы и `local default`
     # соседа по tproxy, и у него ложился бы весь трафик -- при удалении
     # ЧУЖОЙ программы. Свой маршрут один и известен.
-    do_ ip route del local default dev lo table 100
+    # И маршрут -- только если он поставлен byway (метка route.sh): таблицу 100
+    # соседа по tproxy сносить нельзя.
+    if [ -e /tmp/byway-route-mine ]; then
+        do_ ip route del local default dev lo table 100
+        do_ rm -f /tmp/byway-route-mine
+    fi
 fi
 
 # Проверяем, а не верим на слово: остаться без DNS дороже лишней проверки.
@@ -232,12 +269,13 @@ fi
 _lst=" $(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null || true) "
 _own=$(uci -q get byway.main.dns_listen 2>/dev/null || echo 127.0.0.42)
 [ -n "$_own" ] || _own=127.0.0.42
-if [ "$DRY" != "1" ] && [ "${_lst#* $_own }" != "$_lst" ]; then
+if [ "$DRY" != "1" ] && [ "$_ours" = 1 ] && [ "${_lst#* $_own }" != "$_lst" ]; then
     warn "dnsmasq всё ещё смотрит в byway — исправляется"
-    # Убираем ТОЛЬКО свой адрес, чужие записи остаются на месте.
-    do_ uci -q del_list "dhcp.@dnsmasq[0].server=$_own"
-    [ -n "$(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null)" ] ||
-        do_ uci -q delete dhcp.@dnsmasq[0].noresolv
+    # Дельта byway, не дошедшая до flash, уходит целиком: коммит записал бы
+    # её вместе с noresolv=1.
+    do_ uci -q revert dhcp
+    # Убираем ТОЛЬКО свой адрес и канарейку, чужие записи остаются на месте.
+    dns_strip_own "$_own"
     do_ uci commit dhcp
     do_ /etc/init.d/dnsmasq restart
 fi
@@ -245,6 +283,21 @@ say "DNS роутера больше не идёт через byway"
 
 echo
 say "── 2. Служба ──"
+# Служба может быть уже снята, а начатое ею в фоне (или сторожем) живёт.
+_bg=$(pgrep -f '/usr/local/bin/[b]yway (engine|update|job|watch)' 2>/dev/null || true)
+if [ -n "$_bg" ]; then
+    if [ "$DRY" = "1" ]; then
+        do_ "$(t 'остановить фоновые процессы byway:') $_bg"
+    else
+        # shellcheck disable=SC2086
+        kill $_bg 2>/dev/null || true
+        for _w in 1 2 3 4 5 6 7 8 9 10; do
+            pgrep -f '/usr/local/bin/[b]yway (engine|update|job|watch)' >/dev/null 2>&1 || break
+            sleep 1
+        done
+    fi
+fi
+[ "$DRY" = "1" ] || rm -rf /var/run/byway-engine.lock 2>/dev/null || true
 if [ -x /etc/init.d/byway ]; then
     do_ /etc/init.d/byway stop
     do_ /etc/init.d/byway disable
@@ -297,7 +350,11 @@ do_ rm -f /usr/local/bin/byway
 # Себя тоже. Удаляем ПОСЛЕДНИМ действием такого рода: файл уже прочитан
 # оболочкой целиком, дальше он ей не нужен. Оставленный, он был бы единственным
 # следом byway на роутере после удаления.
-do_ rm -f /usr/local/bin/byway-uninstall /usr/bin/byway-uninstall
+# Без --purge скрипт остаётся: он нужен для самого --purge (совет ниже), и
+# после обычного удаления команды больше не было.
+if [ "$PURGE" = "1" ]; then
+    do_ rm -f /usr/local/bin/byway-uninstall /usr/bin/byway-uninstall
+fi
 do_ rm -f /usr/bin/byway
 do_ rm -rf /www/luci-static/resources/view/byway
 do_ rm -rf /www/luci-static/resources/byway
@@ -335,7 +392,7 @@ say "программа и панель удалены"
 # узнал бы об этом после sysupgrade, когда откатываться некуда.
 KEEP_RE='^/etc/init\.d/byway$\|^/etc/rc\.d/[SK][0-9]*byway$'
 KEEP_RE="$KEEP_RE"'\|^/usr/local/bin/byway$\|^/usr/bin/byway$'
-KEEP_RE="$KEEP_RE"'\|^/usr/local/bin/byway-uninstall$\|^/usr/bin/byway-uninstall$'
+[ "$PURGE" = "1" ] && KEEP_RE="$KEEP_RE"'\|^/usr/local/bin/byway-uninstall$\|^/usr/bin/byway-uninstall$'
 KEEP_RE="$KEEP_RE"'\|^/www/luci-static/resources/view/byway$\|^/www/luci-static/resources/byway$'
 KEEP_RE="$KEEP_RE"'\|^/usr/share/luci/menu\.d/luci-app-byway\.json$\|^/usr/share/rpcd/acl\.d/luci-app-byway\.json$'
 [ "$PURGE" = "1" ] && KEEP_RE="$KEEP_RE"'\|^/etc/byway/$'

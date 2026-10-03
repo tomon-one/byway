@@ -353,7 +353,7 @@ gen_dns() {
         else
             # Громкий отказ с возвратом к рабочему: имя без bootstrap -- дом
             # без DNS при зелёном отчёте.
-            warn "резолвер задан именем, а bootstrap не задан — разрешать имя нечем, взяты поставочные адреса"
+            warn "резолвер задан именем, а bootstrap не задан — разрешать имя нечем, взяты адреса по умолчанию"
             warn "  вписать: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway"
             DNS_UP=https://8.8.8.8/dns-query
             DNS_UP2=https://1.1.1.1/dns-query
@@ -569,6 +569,7 @@ gen_json() {
       "$DNS_UP",$DNS_UP2LINE
       {
         "address": "fakedns",
+        "skipFallback": true,
         "domains": [
 HEAD
       # Через файл: список в переменной ash -- 9,5 МБ на потолке пресета (200
@@ -709,11 +710,16 @@ MID
         printf '          "full:%s"\n' "$PROBE_DOMAIN"
         printf '        ], %s },\n' "$PROXY_TARGET"
         rm -f "$_djf" 2>/dev/null || true
-        if [ -f "$S" ] && [ "$(count_list "$S")" -gt 0 ]; then
+        # Через файл, как домены: список из одних негодных строк давал бы
+        # «"ip": [ ]», и движок отвергал весь конфиг без имени виновной строки.
+        _sjf=/tmp/byway-sub.json
+        if [ -f "$S" ]; then list_to_json "$S" "" > "$_sjf" 2>/dev/null || : > "$_sjf"; else : > "$_sjf"; fi
+        if [ -s "$_sjf" ]; then
           printf '      { "type": "field", "ip": [\n'
-          list_to_json "$S" ""
+          cat "$_sjf"
           printf '\n        ], %s },\n' "$PROXY_TARGET"
         fi
+        rm -f "$_sjf" 2>/dev/null || true
       fi
       cat <<MID2
 MID2

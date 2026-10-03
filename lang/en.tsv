@@ -80,10 +80,8 @@ byway: неизвестная команда «%s». Список: byway\n	byway
 \n  добавлено\n	\n  added\n
 \n  убрано\n	\n  removed\n
 \n  такой записи нет\n	\n  no such entry\n
-\n  перезапущена\n	\n  restarted\n
   Туннеля не станет, интернет продолжит работать напрямую.\n	  The tunnel will be gone, the internet keeps working directly.\n
 \n  остановлена\n	\n  stopped\n
-\n  запущена\n	\n  started\n
 \n  автозапуск выключен\n	\n  autostart off\n
 \n  автозапуск включён\n	\n  autostart on\n
   Все настройки и списки одним текстом: перенести на другой\n	  All settings and lists as a single text: move them to another\n
@@ -390,7 +388,6 @@ firewall4 не найден — вероятно firewall3, 21.02 и старш�
 «не пускать мимо VPN»: ядро не приняло правило — %s	"no traffic outside the VPN": the kernel rejected the rule — %s
 «не пускать мимо VPN»: подсети закрыть не вышло — %s	"no traffic outside the VPN": blocking subnets failed — %s
 «не пускать мимо VPN»: %s записей списка нельзя закрыть по имени (keyword:, regexp: и подобные) — они останутся ОТКРЫТЫМИ	"no traffic outside the VPN": %s list entries cannot be blocked by name (keyword:, regexp: and the like) — they stay OPEN
-ВНИМАНИЕ    ВЕСЬ трафик мимо VPN ЗАКРЫТ: туннеля нет, так велит «не пускать мимо VPN»\n	WARNING     ALL traffic outside the VPN is BLOCKED: no tunnel, "no traffic outside the VPN" says so\n
 ВНИМАНИЕ    «не пускать мимо VPN» включено, но закрывать было нечего — трафик идёт НАПРЯМУЮ\n	WARNING     "no traffic outside the VPN" is on, but there was nothing to block — traffic goes DIRECT\n
 задачи cron на месте, crond работает	cron jobs are in place, crond is running
 задачи cron есть, но crond не работает	cron jobs are present, but crond is not running
@@ -410,7 +407,7 @@ byway не поднимется ни сейчас, ни после переза�
 список доменов: %s записей (своих %s)	domain list: %s entries (%s of them your own)
 порт %s занят другим входом byway — свой трафик роутер в туннель не пошлёт	port %s is taken by another byway inbound — the router will not send its own traffic into the tunnel
 роутер ходит к сайтам из списка сам	the router reaches the sites on the list on its own
-заворот трафика роутера включён, но цепочки в ядре нет	sending the router’s own traffic through the tunnel is on, but the kernel chain is missing
+VPN для программ на роутере (router_via_vpn) включён, но цепочки в ядре нет	sending the router’s own traffic through the tunnel is on, but the kernel chain is missing
 переложить правила: byway plumb off && byway plumb on	reapply the rules: byway plumb off && byway plumb on
 уровень журнала «%s» не годится, взят warning	log level "%s" is not usable, falling back to warning
 клиент со своим DNS проходит мимо туннеля	a client with its own DNS bypasses the tunnel
@@ -436,7 +433,6 @@ itdoginfo: подсети для сервисов, которые работаю
 да	yes
 нет	no
 путь к движку отклонён: %s	the core path was rejected: %s
-движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: доступа наружу нет	the core has not come up for five minutes -- interception removed, the "no traffic outside the VPN" block STAYS: no internet access
 движок не поднимается -- перехват снят, дом остаётся с интернетом и без туннеля	the core has not come up for five minutes -- interception removed, the home network keeps internet access without the tunnel
 byway watch: правил перехвата нет при работающем движке -- восстановление	byway watch: interception rules missing while the core is running -- restoring
 автообновление: byway правлен руками -- не трогается	auto-update: byway has been edited by hand -- leaving it alone
@@ -452,15 +448,14 @@ byway watch: правил перехвата нет при работающем 
 автообновление: %s поднялось	auto-update: %s came up
 автообновление: %s не поднялось -- откат на %s	auto-update: %s did not come up -- rolled back to %s
 автообновление: %s не скачалось, работает прежняя	auto-update: %s did not download, the previous one keeps running
-byway положен не установщиком -- обновление пропускается. Лечится запуском install.sh из поставки	byway was not put here by the installer -- the update is skipped. Fix: run install.sh from the release package
+byway положен не установщиком -- обновление пропускается. Лечится запуском install.sh из файлов byway	byway was not put here by the installer -- the update is skipped. Fix: run install.sh from the release package
 своя правка не будет перетёрта: обновление пропускается намеренно	your own edit will not be overwritten: the update is skipped on purpose
 движок не запущен или упал: /etc/init.d/byway restart, затем byway status и logread -e xray	the core is not running or has crashed: /etc/init.d/byway restart, then byway status and logread -e xray
 включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart	to turn it on: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart
 без него не работают ни проверка перехвата раз в 5 минут (byway watch), ни учёт трафика (byway stat), ни обрезка журналов: /etc/init.d/cron enable && /etc/init.d/cron start	without it the 5-minute interception check (byway watch), the traffic count (byway stat) and the log trimming all stop: /etc/init.d/cron enable && /etc/init.d/cron start
 переустановить byway либо завести вручную: */5 * * * * /usr/local/bin/byway watch и 7 * * * * /usr/local/bin/byway stat	reinstall byway or add them by hand: */5 * * * * /usr/local/bin/byway watch and 7 * * * * /usr/local/bin/byway stat
 byway работает только на firewall4, это OpenWrt 22.03 и новее — на firewall3 правило по метке не встанет	byway works only on firewall4, that is OpenWrt 22.03 and newer -- on firewall3 a mark-based rule will not go in
-их клиенты получат подставной адрес, до туннеля не дойдут и потеряют ВЕСЬ список. Лечится одним из двух: добавить сеть в byway.main.interface либо выдать ей свой DNS через dhcp_option '6,…'	their clients will get a placeholder address, never reach the tunnel and lose the WHOLE list. Two fixes: add the network to byway.main.interface, or give it its own DNS via dhcp_option '6,…'
-заворот трафика роутера включён, но список пуст — ловить нечего	router traffic redirect is on, but the list is empty - nothing to catch
+VPN для программ на роутере (router_via_vpn) включён, но список пуст — ловить нечего	router traffic redirect is on, but the list is empty - nothing to catch
 маршрут     %s\n	route       %s\n
 пинов в /etc/hosts перебивают записи списка: %s	/etc/hosts pins override list entries: %s
 режим «всё через VPN», а эти сети идут мимо него целиком:%s	"everything through the VPN" mode, yet these networks bypass it entirely:%s
@@ -473,10 +468,8 @@ byway работает только на firewall4, это OpenWrt 22.03 и но
 правила не легли в ядро — %s	rules did not reach the kernel - %s
 и домены, и подсети закрывают только IPv4: клиент, получивший AAAA, предпочтёт его и уйдёт напрямую. Выключить IPv6 на WAN -- либо помнить, что подсети сервиса его не покрывают	both domains and subnets cover IPv4 only: a client that got an AAAA record will prefer it and go direct. Turn IPv6 off on the WAN - or remember that the service subnets do not cover it
 dnsmasq отвечает по пину сам, подставного адреса не будет — эти домены в туннель не пойдут, и запрет «не пускать мимо VPN» их тоже не закроет	dnsmasq answers from the pin itself, so there will be no fake address - those domains will not enter the tunnel, and the "no traffic outside the VPN" block will not cover them either
-в этом режиме byway.main.interface -- граница ВСЕЙ защиты, а не только списков: что вне его, то мимо туннеля и мимо запрета «не пускать мимо VPN». Добавить сети в byway.main.interface	in this mode byway.main.interface is the boundary of ALL protection, not just of the lists: whatever is outside it bypasses both the tunnel and the "no traffic outside the VPN" block. Add the networks to byway.main.interface
 маршрут решает DNS: устройство с «Приватным DNS», DoH в браузере или чужим резолвером в настройках уйдёт напрямую, и byway этого не увидит. Лечится либо выключением шифрованного DNS на устройствах, либо перехватом 53-го порта в firewall, либо добавлением к доменам ПОДСЕТЕЙ сервиса: подсеть работает по адресу, а значит и для того, кто спросил адрес не у роутера. Третий способ проще двух первых, но покрывает ТОЛЬКО IPv4: клиент, получивший AAAA, уйдёт мимо подсетей	DNS decides the route: a device with Private DNS, DoH in the browser or a third-party resolver in its settings goes direct, and byway will not see it. Fix it either by turning encrypted DNS off on the devices, or by intercepting port 53 in the firewall, or by adding the service SUBNETS next to the domains: a subnet works by address, and therefore also for a client that asked another resolver for that address. The third way is simpler than the first two, but covers IPv4 ONLY: a client that got an AAAA record will bypass the subnets
-заворот работает по доменам списка: наполнить список либо подключить готовый	the redirect works by the domains of the list: fill the list in or enable a preset
-переложить правила: byway plumb off && byway plumb on	reapply the rules: byway plumb off && byway plumb on
+VPN для программ на роутере работает по доменам списка: наполнить список либо подключить готовый	the redirect works by the domains of the list: fill the list in or enable a preset
 ОТКАТ НЕ УДАЛСЯ: на диске %s, копия в %s\n	ROLLBACK FAILED: %s is on disk, the copy is in %s\n
 часы роутера идут по UTC (timezone=%s) — окно обновления придётся на %s:00 UTC	the router clock runs on UTC (timezone=%s) - the update window will fall on %s:00 UTC
 часы %s (%s, смещение %s), обновление в %s:00 по часам роутера — сейчас %s	clock %s (%s, offset %s), update at %s:00 by the router clock - now %s
@@ -504,11 +497,10 @@ self_mark пересекается битами с mark %s -- взято %s	self
 вписать кусок JSON на вкладке «Основное»	paste the JSON snippet on the Overview tab
 без проверки версий автообновлению нечего ставить — включить: uci set byway.main.update_check=1 && uci commit byway	without the version check auto-update has nothing to install — turn it on: uci set byway.main.update_check=1 && uci commit byway
 в туннель уйдёт и чужой трафик, и скорость упадёт: проверить subnets.lst	other traffic will go into the tunnel and speed will drop: check subnets.lst
-byway возьмёт другое значение сам; задать своё: uci set byway.main.self_mark=0x400000	byway picks another value itself; to set your own: uci set byway.main.self_mark=0x400000
-резолвер задан именем, а bootstrap не задан — разрешать имя нечем, взяты поставочные адреса	the resolver is given by name, but no bootstrap is set -- there is nothing to resolve the name with, stock addresses taken
+резолвер задан именем, а bootstrap не задан — разрешать имя нечем, взяты адреса по умолчанию	the resolver is given by name, but no bootstrap is set -- there is nothing to resolve the name with, stock addresses taken
   вписать: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway	  set it: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway
 роутер сам до сайтов из списка не достаёт	the router itself cannot reach the sites on the list
-заворот своего трафика выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload	routing the router's own traffic is off: programs on the router — zapret updates, your own scripts — hang on a fake address until they time out. To turn it on: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload
+VPN для программ на роутере (router_via_vpn) выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload	routing the router's own traffic is off: programs on the router — zapret updates, your own scripts — hang on a fake address until they time out. To turn it on: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload
   Xray-core с 26.7.11 не пускает vless и trojan без TLS или reality к публичному адресу	  since 26.7.11 Xray-core refuses vless and trojan without TLS or reality to a public address
   нужен ключ с security=tls или reality; без шифрования транспорта — только сервер в частной сети	  a key with security=tls or reality is needed; no transport encryption only works for a server on a private network
 замена движка	engine replacement
@@ -731,3 +723,43 @@ BYWAY_NO_VERIFY=1: подпись выпуска не проверяется	BYW
 ни новое, ни прежнее ядро не легло на флеш — туннеля нет. Архив прежнего: %s (в памяти, до перезагрузки); поставить: %s > %s && chmod 755 %s && /etc/init.d/byway start	neither the new nor the previous core fit on flash — no tunnel. Archive of the previous one: %s (in memory, until reboot); install: %s > %s && chmod 755 %s && /etc/init.d/byway start
 адрес подписки с IPv6-литералом не поддерживается — нужно имя или IPv4	subscription address with an IPv6 literal is not supported — use a name or IPv4
 откат не завершён — освободить место на флеше и повторить: byway update --rollback	rollback incomplete — free some flash space and retry: byway update --rollback
+предел памяти «%s» не разобран -- взят авто	memory limit "%s" not understood -- using auto
+правила перехвата не снялись с первой попытки — следующая через паузу	interception rules were not removed on the first try — the next one after a pause
+Перехват не снят, резолвер не возвращён. Снять руками: byway plumb off	Interception not removed, resolver not restored. Remove by hand: byway plumb off
+byway выключен в /etc/config/byway (option enabled)	byway is turned off in /etc/config/byway (option enabled)
+нет %s — движок не найден	no %s — core not found
+  рядом лежит %s	  found next to it: %s
+  указать его: uci set byway.main.xray_bin=%s && uci commit byway	  point byway at it: uci set byway.main.xray_bin=%s && uci commit byway
+  движок ставится в фоне: byway engine restore (журнал: logread -e byway)	  the core is being installed in the background: byway engine restore (log: logread -e byway)
+  поставить руками: byway engine restore, либо %s xray-core	  install by hand: byway engine restore, or %s xray-core
+  либо указать свой путь: uci set byway.main.xray_bin=/путь/к/xray	  or set your own path: uci set byway.main.xray_bin=/path/to/xray
+конфиг не пересобрался — служба поднимается на прежнем рабочем конфиге	the config was not rebuilt — the service starts on the previous working config
+правила перехвата не легли с попытки %s, следующая через паузу	interception rules failed on attempt %s, the next one after a pause
+правила перехвата не легли за три попытки -- туннеля нет, интернет работает напрямую	interception rules failed after three attempts -- no tunnel, internet works directly
+правила перехвата не легли за три попытки -- туннеля нет, доступ к списку закрыт (on_failure=closed)	interception rules failed after three attempts -- no tunnel, access to the list is closed (on_failure=closed)
+reload: включено -- запуск	reload: turned on -- starting
+reload: выключено -- остановка	reload: turned off -- stopping
+reload: сменился предел памяти, перезапуск	reload: memory limit changed, restarting
+reload: движок переводится на root (xray_root), перезапуск	reload: the core is moving to root (xray_root), restarting
+reload: движок переводится на пользователя byway, перезапуск	reload: the core is moving to the byway user, restarting
+reload: сменилось ядро, перезапуск	reload: the core changed, restarting
+reload: конфиг не собрался, работает прежний	reload: the config was not built, the previous one keeps running
+reload: конфиг изменился, перезапуск	reload: the config changed, restarting
+reload: изменились правила перехвата, перекладка	reload: interception rules changed, reapplying
+reload: правила перехвата не легли -- туннеля нет, интернет работает	reload: interception rules failed -- no tunnel, internet works
+reload: правила перехвата не легли -- туннеля нет, доступ к списку закрыт (on_failure=closed)	reload: interception rules failed -- no tunnel, access to the list is closed (on_failure=closed)
+reload: конфиг не изменился, служба не тронута	reload: the config did not change, the service was left alone
+ВНИМАНИЕ    трафик перечисленных сетей мимо VPN ЗАКРЫТ: туннеля нет, так велит «не пускать мимо VPN»\n	WARNING     Traffic of the listed networks outside the VPN is BLOCKED: no tunnel, "no traffic outside the VPN" says so\n
+движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: трафик сетей byway закрыт	the core is not coming up -- interception removed, the "no leaks past the VPN" block STAYS: traffic of the byway networks is closed
+движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: сайты и подсети списка закрыты	the core is not coming up -- interception removed, the "no leaks past the VPN" block STAYS: the sites and subnets of the list are closed
+движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» включён, но закрывать нечего	the core is not coming up -- interception removed, the "no leaks past the VPN" block is on, but there is nothing to close
+перезапущена	restarted
+запущена	started
+\n  byway ВЫКЛЮЧЕН настройкой — служба не запускается\n	\n  byway is TURNED OFF by setting — the service does not start\n
+\n  движок не поднялся — смотреть: logread -e byway\n	\n  the core did not come up — see: logread -e byway\n
+сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)	statistics collection is off — turn on: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (panel: Maintenance → Statistics collection)
+byway возьмёт другое значение сам (его видно в byway nft, строка «meta mark … return»); закрепить: uci set byway.main.self_mark=ЗНАЧЕНИЕ && uci commit byway && /etc/init.d/byway reload	byway will pick another value itself (see byway nft, the "meta mark … return" line); to pin it: uci set byway.main.self_mark=VALUE && uci commit byway && /etc/init.d/byway reload
+их клиенты получат подставной адрес, до туннеля не дойдут и потеряют ВЕСЬ список. Лечится одним из двух: добавить устройство в byway.main.interface либо выдать ей свой DNS через dhcp_option '6,…'	their clients will get a placeholder address, never reach the tunnel and lose the WHOLE list. Two fixes: add the device to byway.main.interface, or give it its own DNS via dhcp_option '6,…'
+в этом режиме byway.main.interface -- граница ВСЕЙ защиты, а не только списков: что вне его, то мимо туннеля и мимо запрета «не пускать мимо VPN». Добавить устройства в byway.main.interface	in this mode byway.main.interface is the boundary of ALL protection, not just of the lists: whatever is outside it bypasses both the tunnel and the "no traffic outside the VPN" block. Add the devices to byway.main.interface
+проверка новых версий не удалась (ответ GitHub: %s)	the version check failed (GitHub answer: %s)
+новые выпуски не видны: нет связи с GitHub либо он отвечает отказом. Проверить вручную: byway update --check	new releases are not visible: no connection to GitHub, or it answers with a refusal. Check by hand: byway update --check

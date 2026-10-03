@@ -333,10 +333,11 @@ return view.extend({
 				   о пересечении с zapret, о подозрительно широкой подсети, о
 				   выключенном mux. Раньше весь его вывод выбрасывался при
 				   коде 0, и человек не видел этих слов НИКОГДА. */
-				if (out.trim())
+				var warns = out.split('\n').filter(function (l) { return /\[!\]/.test(l); }).join('\n');
+				if (warns.trim())
 					ui.addNotification(null, [
 						E('p', {}, _('Применено, но byway есть что сказать:')),
-						E('pre', { 'style': 'white-space:pre-wrap' }, [ out.trim() ])
+						E('pre', { 'style': 'white-space:pre-wrap' }, [ warns.trim() ])
 					], 'warning');
 				else
 					ui.addNotification(null, E('p', {}, _('Применено')), 'info');

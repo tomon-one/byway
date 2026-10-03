@@ -133,7 +133,9 @@ rest = before(rest, '#');
 if (scheme == 'vmess') {
     let j = b64d(rest);
     if (j == '') { flush(); die("vmess-ссылка не раскодировалась"); }
-    let o = json(j);
+    // Битый JSON бросает исключение: ucode выходил с трассой вместо отказа.
+    let o = null;
+    try { o = json(j); } catch (e) { o = null; }
     if (type(o) != 'object') { flush(); die("vmess-ссылка не раскодировалась"); }
     let jf = (k) => (o[k] == null) ? '' : '' + o[k];
     N.HOST = jf('add'); N.PORT = jf('port'); N.UUID = jf('id');
