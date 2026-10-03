@@ -30,7 +30,21 @@ plumb_down_held() {
     if [ "$(u enabled)" = "1" ] && [ -z "$(xray_pid)" ]; then
         logf 'метка остановки от умершего процесса %s снята -- служба запускается' "$_pdo"
         /etc/init.d/byway start >/dev/null 2>&1 || true
+        # Этот прогон пропускаем: снятый до старта pid пуст, и следом шёл бы
+        # engine_gone поверх идущего подъёма (П3, 2026-10-04).
+        return 0
     fi
+    return 1
+}
+
+# Служба зарегистрирована в procd. `/etc/init.d/byway stop` снимает её
+# оттуда, упавший движок -- нет (procd держит её и ждёт respawn). Без этой
+# проверки сторож принимал остановку руками за падение и при закрытой модели
+# запирал дом (Ф-1, 2026-10-04). Нет ответа ubus -- считаем зарегистрированной:
+# при закрытой модели лучше лишний запрет, чем дыра.
+svc_registered() {
+    _sl=$(ubus call service list '{"name":"byway"}' 2>/dev/null) || return 0
+    case "$_sl" in *'"byway"'*) return 0 ;; esac
     return 1
 }
 
@@ -155,7 +169,8 @@ watch_heal() {
     _healed=""
     # Движка нет при включённой службе -- упал, а не выключен; при закрытой
     # модели отказа ради этого случая она и заведена.
-    if [ -z "$_pid" ] && [ "$(u enabled)" = "1" ] && ! plumb_down_held; then
+    if [ -z "$_pid" ] && [ "$(u enabled)" = "1" ] && ! plumb_down_held &&
+       svc_registered; then
         engine_gone
         if [ "$_healed" = "(nodns)" ]; then
             # Пересобираем состояние: в журнал -- то, что стало.
@@ -421,7 +436,10 @@ watch_hosts() {
 # поднимает упавший движок за секунды -- на каждый перезапуск не снимаем.
 # Зовут сторож и pulse; _dm -- текущие резолверы dnsmasq.
 engine_gone() {
-    block_on
+    # Под замком перехвата, в подоболочке: замок снимает её EXIT, а сторож
+    # следом может звать plumb on. Без замка запрет ложился поверх идущего
+    # подъёма фонового цикла (П3). Замок занят -- запрет поставит сам цикл.
+    ( cmd_plumb close ) >/dev/null 2>&1 || true
     _miss=$(cat "$NOPID" 2>/dev/null || echo 0)
     _miss=$((_miss + 1))
     printf '%s' "$_miss" > "$NOPID" 2>/dev/null || true
@@ -440,10 +458,12 @@ engine_gone() {
                 logt "движок не поднимается -- перехват снят, дом остаётся с интернетом и без туннеля"
             fi
             # --service: метку «сняли руками» не ставим, иначе сторож не
-            # поднял бы обвязку, когда движок вернётся. --keep-block:
-            # снимает сторож, не человек; безусловное снятие запрета
-            # открывало при закрытой модели окно прямого трафика.
-            cmd_plumb off --service --keep-block >/dev/null 2>&1 || true
+            # поднял бы обвязку, когда движок вернётся. --keep-block (только
+            # при закрытой модели): снимает сторож, не человек; безусловное
+            # снятие запрета открывало окно прямого трафика.
+            _gkb=""
+            [ "$(u on_failure)" != "open" ] && _gkb=--keep-block
+            cmd_plumb off --service $_gkb >/dev/null 2>&1 || true
             _healed="(nodns)"
         fi ;;
     esac
@@ -456,6 +476,9 @@ engine_gone() {
 engine_back() {
     if [ "$(u enabled)" != "1" ]; then
         block_off
+    elif [ ! -f "$BLOCK_MARK" ] && cmd_plumb on >/dev/null 2>&1; then
+        logt "движок вернулся -- перехват поднят"
+        _healed="(healed)"
     elif cmd_plumb on >/dev/null 2>&1; then
         logt "движок вернулся -- перехват поднят, запрет «не пускать мимо VPN» снят"
         _healed="(healed)"
@@ -477,11 +500,18 @@ cmd_pulse() {
     _pid=$(xray_pid)
     _healed=""
     if [ -z "$_pid" ]; then
+        svc_registered || return 0
         _dm=$(uci -q get "$DNSSEC.server" 2>/dev/null || echo none)
         engine_gone
-    else
+    elif [ -f "$BLOCK_MARK" ]; then
         rm -f "$NOPID" 2>/dev/null || true
-        [ -f "$BLOCK_MARK" ] && engine_back
+        engine_back
+    elif [ -f "$NOPID" ]; then
+        # Движок пропадал, и при открытой модели engine_gone снял перехват
+        # без запрета: вернуть его -- тоже дело pulse, а не сторожа через
+        # пять минут (Ф-4, 2026-10-04). Таблица цела -- снимать было нечего.
+        rm -f "$NOPID" 2>/dev/null || true
+        nft list table inet "$TABLE" >/dev/null 2>&1 || engine_back
     fi
     return 0
 }

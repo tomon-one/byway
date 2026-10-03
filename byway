@@ -1889,9 +1889,13 @@ gen_dns_route() {
         QSTRAT=UseIP
         TP_LISTEN="::"
         # Тот же пул -- и в правило блокировки, по той же причине, что и у v4.
-        # fc00::/7 -- адреса домашней сети (ULA), как 192.168/16 у v4.
-        BLOCK6=", \"::1/128\", \"fc00::/7\", \"fe80::/10\", \"$_p6\""
+        BLOCK6=", \"$_p6\""
     fi
+    # Частные v6 -- всегда, не только при ipv6=1: сниффер берёт имя из Host,
+    # а там бывает и литерал [::1] (П1, 2026-10-04). fc00::/7 -- адреса
+    # домашней сети (ULA), как 192.168/16 у v4. ::ffff:0:0/96 сюда не
+    # кладём: матчер, приводящий v4 к этой форме, закрыл бы весь direct.
+    BLOCK6=", \"::/128\", \"::1/128\", \"fc00::/7\", \"fe80::/10\"$BLOCK6"
     # Приватное, зарезервированное и пулы fakeip одним списком: правило
     # маршрута и итоговые правила direct обязаны совпадать.
     PRIVNETS="\"0.0.0.0/8\", \"10.0.0.0/8\", \"100.64.0.0/10\", \"127.0.0.0/8\", \"169.254.0.0/16\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"$POOL\", \"224.0.0.0/4\", \"240.0.0.0/4\"$BLOCK6"
@@ -3166,6 +3170,33 @@ nft_ruleset() {
         _selfchain=""
     fi
 
+    # Свои адреса роутера движку закрыты (Д-3, 2026-10-04). finalRules в
+    # конфиге движка закрывают частное, но не публичный адрес WAN и не
+    # глобальный v6: гость через имя, разрешённое в такой адрес, доходил до
+    # служб роутера на 0.0.0.0 (uhttpd, dropbear) -- соединение идёт по lo,
+    # а input его пропускает. fib видит адрес роутера, каким бы он ни был.
+    # Движок узнаём по uid процесса (не от root), иначе по self_mark (её
+    # ставит direct при router_via_vpn=1); нечем узнать -- правила нет.
+    # Петля и порт 53 вне правила: resolv.conf роутера смотрит в 127.0.0.1,
+    # и Go-резолвер движка ходит туда за адресом сервера. Только новые
+    # соединения: ответы движка клиентам на петле -- уже установленные.
+    _eng=""
+    _euid=$(awk '/^Uid:/ { print $2 }' "/proc/$(xray_pid)/status" 2>/dev/null || true)
+    if [ -n "$_euid" ] && [ "$_euid" != 0 ]; then
+        _eng="meta skuid $_euid"
+    elif [ "$(u router_via_vpn)" = "1" ]; then
+        _eng="meta mark $(self_mark)"
+    fi
+    _localchain=""
+    if [ -n "$_eng" ]; then
+        _localchain="
+	chain engine_local {
+		type filter hook output priority filter; policy accept;
+		$_eng ct state new meta nfproto ipv4 ip daddr != 127.0.0.0/8 meta l4proto { tcp, udp } th dport != 53 fib daddr type local counter reject
+		$_eng ct state new meta nfproto ipv6 ip6 daddr != ::1 meta l4proto { tcp, udp } th dport != 53 fib daddr type local counter reject
+	}"
+    fi
+
     # Режим списков: пул fakeip и подсети. Режим «всё через VPN»: всё, что
     # дошло сюда, -- приватное и адреса роутера отсечены выше набором privnets.
     if [ "$(u list_mode)" = "all" ]; then
@@ -3307,7 +3338,7 @@ table inet $TABLE {
 		iif lo return$_quic
 		meta l4proto { tcp, udp } th dport $_port counter drop$_rdrop
 	}
-$_selfchain
+$_selfchain$_localchain
 }
 NFT
 }
@@ -3523,7 +3554,13 @@ dnsmasq_confdir() {
 BLOCK_MARK=/tmp/byway-blocked
 
 block_on() {
-    [ "$(u on_failure)" != "open" ] || return 0
+    # Открытая модель: запрет, оставшийся от закрытой, снимается здесь. Иначе
+    # переключение на open при падающем движке его не снимало: подъём не
+    # проходит, сторож снимает обвязку с --keep-block (Д-2, 2026-10-04).
+    if [ "$(u on_failure)" = "open" ]; then
+        [ -f "$BLOCK_MARK" ] && block_off
+        return 0
+    fi
     _ifs=$(eff_ifs)
     _ifl=$(echo "$_ifs" | awk '{for(i=1;i<=NF;i++) printf "%s\"%s\"", (i>1?", ":""), $i}')
     # Стоящий запрет пересобирается на месте, если сменились режим, сети, IPv6
@@ -3979,7 +4016,21 @@ plumb_down_held() {
     if [ "$(u enabled)" = "1" ] && [ -z "$(xray_pid)" ]; then
         logf 'метка остановки от умершего процесса %s снята -- служба запускается' "$_pdo"
         /etc/init.d/byway start >/dev/null 2>&1 || true
+        # Этот прогон пропускаем: снятый до старта pid пуст, и следом шёл бы
+        # engine_gone поверх идущего подъёма (П3, 2026-10-04).
+        return 0
     fi
+    return 1
+}
+
+# Служба зарегистрирована в procd. `/etc/init.d/byway stop` снимает её
+# оттуда, упавший движок -- нет (procd держит её и ждёт respawn). Без этой
+# проверки сторож принимал остановку руками за падение и при закрытой модели
+# запирал дом (Ф-1, 2026-10-04). Нет ответа ubus -- считаем зарегистрированной:
+# при закрытой модели лучше лишний запрет, чем дыра.
+svc_registered() {
+    _sl=$(ubus call service list '{"name":"byway"}' 2>/dev/null) || return 0
+    case "$_sl" in *'"byway"'*) return 0 ;; esac
     return 1
 }
 
@@ -4104,7 +4155,8 @@ watch_heal() {
     _healed=""
     # Движка нет при включённой службе -- упал, а не выключен; при закрытой
     # модели отказа ради этого случая она и заведена.
-    if [ -z "$_pid" ] && [ "$(u enabled)" = "1" ] && ! plumb_down_held; then
+    if [ -z "$_pid" ] && [ "$(u enabled)" = "1" ] && ! plumb_down_held &&
+       svc_registered; then
         engine_gone
         if [ "$_healed" = "(nodns)" ]; then
             # Пересобираем состояние: в журнал -- то, что стало.
@@ -4370,7 +4422,10 @@ watch_hosts() {
 # поднимает упавший движок за секунды -- на каждый перезапуск не снимаем.
 # Зовут сторож и pulse; _dm -- текущие резолверы dnsmasq.
 engine_gone() {
-    block_on
+    # Под замком перехвата, в подоболочке: замок снимает её EXIT, а сторож
+    # следом может звать plumb on. Без замка запрет ложился поверх идущего
+    # подъёма фонового цикла (П3). Замок занят -- запрет поставит сам цикл.
+    ( cmd_plumb close ) >/dev/null 2>&1 || true
     _miss=$(cat "$NOPID" 2>/dev/null || echo 0)
     _miss=$((_miss + 1))
     printf '%s' "$_miss" > "$NOPID" 2>/dev/null || true
@@ -4389,10 +4444,12 @@ engine_gone() {
                 logt "движок не поднимается -- перехват снят, дом остаётся с интернетом и без туннеля"
             fi
             # --service: метку «сняли руками» не ставим, иначе сторож не
-            # поднял бы обвязку, когда движок вернётся. --keep-block:
-            # снимает сторож, не человек; безусловное снятие запрета
-            # открывало при закрытой модели окно прямого трафика.
-            cmd_plumb off --service --keep-block >/dev/null 2>&1 || true
+            # поднял бы обвязку, когда движок вернётся. --keep-block (только
+            # при закрытой модели): снимает сторож, не человек; безусловное
+            # снятие запрета открывало окно прямого трафика.
+            _gkb=""
+            [ "$(u on_failure)" != "open" ] && _gkb=--keep-block
+            cmd_plumb off --service $_gkb >/dev/null 2>&1 || true
             _healed="(nodns)"
         fi ;;
     esac
@@ -4405,6 +4462,9 @@ engine_gone() {
 engine_back() {
     if [ "$(u enabled)" != "1" ]; then
         block_off
+    elif [ ! -f "$BLOCK_MARK" ] && cmd_plumb on >/dev/null 2>&1; then
+        logt "движок вернулся -- перехват поднят"
+        _healed="(healed)"
     elif cmd_plumb on >/dev/null 2>&1; then
         logt "движок вернулся -- перехват поднят, запрет «не пускать мимо VPN» снят"
         _healed="(healed)"
@@ -4426,11 +4486,18 @@ cmd_pulse() {
     _pid=$(xray_pid)
     _healed=""
     if [ -z "$_pid" ]; then
+        svc_registered || return 0
         _dm=$(uci -q get "$DNSSEC.server" 2>/dev/null || echo none)
         engine_gone
-    else
+    elif [ -f "$BLOCK_MARK" ]; then
         rm -f "$NOPID" 2>/dev/null || true
-        [ -f "$BLOCK_MARK" ] && engine_back
+        engine_back
+    elif [ -f "$NOPID" ]; then
+        # Движок пропадал, и при открытой модели engine_gone снял перехват
+        # без запрета: вернуть его -- тоже дело pulse, а не сторожа через
+        # пять минут (Ф-4, 2026-10-04). Таблица цела -- снимать было нечего.
+        rm -f "$NOPID" 2>/dev/null || true
+        nft list table inet "$TABLE" >/dev/null 2>&1 || engine_back
     fi
     return 0
 }
@@ -5883,13 +5950,24 @@ eng_cat() {
 }
 
 # Ядро из архива $1 в путь $2: через временное имя, чтобы оборванная
-# распаковка не оставила под рабочим именем половину файла.
-eng_put() {   # 1 архив, 2 путь
+# распаковка не оставила под рабочим именем половину файла. Размер ($3, если
+# известен) и запуск -- ДО замены: под рабочим именем бывает прежний файл той
+# же версии (ядро без права запуска сторож считает пропавшим), и на стенде
+# 2026-10-04 недописанное на полный диск ядро заменило его, не запустилось и
+# было удалено -- не осталось ни одного. Код 2 -- распаковано, но не
+# запускается.
+eng_put() {   # 1 архив, 2 путь, 3 размер
     rm -f "$2.new" 2>/dev/null || true
-    if eng_cat "$1" > "$2.new" && [ -s "$2.new" ] &&
-       chmod 755 "$2.new" && mv "$2.new" "$2"; then
-        return 0
+    if ! { eng_cat "$1" > "$2.new" && [ -s "$2.new" ] && chmod 755 "$2.new"; } ||
+       { [ -n "${3:-}" ] && [ "$(wc -c < "$2.new")" != "$3" ]; }; then
+        rm -f "$2.new" 2>/dev/null || true
+        return 1
     fi
+    if ! "$2.new" version >/dev/null 2>&1; then
+        rm -f "$2.new" 2>/dev/null || true
+        return 2
+    fi
+    mv "$2.new" "$2" && return 0
     rm -f "$2.new" 2>/dev/null || true
     return 1
 }
@@ -6092,12 +6170,13 @@ eng_fresh() {
         dief "на флеше свободно %s МБ, ядру нужно %s — ничего не тронуто" \
              "$(( ${_efree:-0} / 1024 ))" 25
     sayf "ядра нет — ставится Xray %s" "$_env"
-    eng_put "$_epkg" "$_enew" || die "ядро не распаковалось на флеш — ничего не тронуто"
-    if ! "$_enew" version >/dev/null 2>&1; then
-        rm -f "$_enew" 2>/dev/null || true
-        eng_noexec_mark
-        die "ядро не запускается на этом железе — удалено"
-    fi
+    _epr=0; eng_put "$_epkg" "$_enew" "$_esz" || _epr=$?
+    case "$_epr" in
+      0) ;;
+      2) eng_noexec_mark
+         die "ядро не запускается на этом железе — удалено" ;;
+      *) die "ядро не распаковалось на флеш — ничего не тронуто" ;;
+    esac
     rm -f "$ENG_NOEXEC" 2>/dev/null || true
     eng_bin_set "$_enew"
     logf 'движок поставлен: %s (прежнего не было)' "$_env"
@@ -6111,13 +6190,14 @@ eng_fresh() {
 # Путь «рядом». Прежнее ядро не трогается до успеха: откат -- вернуть путь.
 eng_side() {
     say "места хватает — новое ядро кладётся рядом с прежним"
-    eng_put "$_epkg" "$_enew" || die "ядро не распаковалось на флеш — ничего не тронуто"
+    _epr=0; eng_put "$_epkg" "$_enew" "$_esz" || _epr=$?
     rm -f "$_epkg" 2>/dev/null || true
-    if ! "$_enew" version >/dev/null 2>&1; then
-        rm -f "$_enew" 2>/dev/null || true
-        eng_noexec_mark
-        die "новое ядро не запускается на этом железе — удалено, работает прежнее"
-    fi
+    case "$_epr" in
+      0) ;;
+      2) eng_noexec_mark
+         die "новое ядро не запускается на этом железе — удалено, работает прежнее" ;;
+      *) die "ядро не распаковалось на флеш — ничего не тронуто" ;;
+    esac
     if eng_idle; then
         eng_bin_set "$_enew"
         case "$_eold" in /usr/local/bin/xray-*) rm -f "$_eold" 2>/dev/null || true ;; esac

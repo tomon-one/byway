@@ -9,7 +9,13 @@
 BLOCK_MARK=/tmp/byway-blocked
 
 block_on() {
-    [ "$(u on_failure)" != "open" ] || return 0
+    # Открытая модель: запрет, оставшийся от закрытой, снимается здесь. Иначе
+    # переключение на open при падающем движке его не снимало: подъём не
+    # проходит, сторож снимает обвязку с --keep-block (Д-2, 2026-10-04).
+    if [ "$(u on_failure)" = "open" ]; then
+        [ -f "$BLOCK_MARK" ] && block_off
+        return 0
+    fi
     _ifs=$(eff_ifs)
     _ifl=$(echo "$_ifs" | awk '{for(i=1;i<=NF;i++) printf "%s\"%s\"", (i>1?", ":""), $i}')
     # Стоящий запрет пересобирается на месте, если сменились режим, сети, IPv6

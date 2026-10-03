@@ -185,6 +185,33 @@ nft_ruleset() {
         _selfchain=""
     fi
 
+    # Свои адреса роутера движку закрыты (Д-3, 2026-10-04). finalRules в
+    # конфиге движка закрывают частное, но не публичный адрес WAN и не
+    # глобальный v6: гость через имя, разрешённое в такой адрес, доходил до
+    # служб роутера на 0.0.0.0 (uhttpd, dropbear) -- соединение идёт по lo,
+    # а input его пропускает. fib видит адрес роутера, каким бы он ни был.
+    # Движок узнаём по uid процесса (не от root), иначе по self_mark (её
+    # ставит direct при router_via_vpn=1); нечем узнать -- правила нет.
+    # Петля и порт 53 вне правила: resolv.conf роутера смотрит в 127.0.0.1,
+    # и Go-резолвер движка ходит туда за адресом сервера. Только новые
+    # соединения: ответы движка клиентам на петле -- уже установленные.
+    _eng=""
+    _euid=$(awk '/^Uid:/ { print $2 }' "/proc/$(xray_pid)/status" 2>/dev/null || true)
+    if [ -n "$_euid" ] && [ "$_euid" != 0 ]; then
+        _eng="meta skuid $_euid"
+    elif [ "$(u router_via_vpn)" = "1" ]; then
+        _eng="meta mark $(self_mark)"
+    fi
+    _localchain=""
+    if [ -n "$_eng" ]; then
+        _localchain="
+	chain engine_local {
+		type filter hook output priority filter; policy accept;
+		$_eng ct state new meta nfproto ipv4 ip daddr != 127.0.0.0/8 meta l4proto { tcp, udp } th dport != 53 fib daddr type local counter reject
+		$_eng ct state new meta nfproto ipv6 ip6 daddr != ::1 meta l4proto { tcp, udp } th dport != 53 fib daddr type local counter reject
+	}"
+    fi
+
     # Режим списков: пул fakeip и подсети. Режим «всё через VPN»: всё, что
     # дошло сюда, -- приватное и адреса роутера отсечены выше набором privnets.
     if [ "$(u list_mode)" = "all" ]; then
@@ -326,7 +353,7 @@ table inet $TABLE {
 		iif lo return$_quic
 		meta l4proto { tcp, udp } th dport $_port counter drop$_rdrop
 	}
-$_selfchain
+$_selfchain$_localchain
 }
 NFT
 }
