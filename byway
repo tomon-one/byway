@@ -1765,7 +1765,30 @@ gen_dns_route() {
         QSTRAT=UseIP
         TP_LISTEN="::"
         # Тот же пул -- и в правило блокировки, по той же причине, что и у v4.
-        BLOCK6=", \"::1/128\", \"fe80::/10\", \"$_p6\""
+        # fc00::/7 -- адреса домашней сети (ULA), как 192.168/16 у v4.
+        BLOCK6=", \"::1/128\", \"fc00::/7\", \"fe80::/10\", \"$_p6\""
+    fi
+    # Приватное, зарезервированное и пулы fakeip одним списком: правило
+    # маршрута и итоговые правила direct обязаны совпадать.
+    PRIVNETS="\"0.0.0.0/8\", \"10.0.0.0/8\", \"100.64.0.0/10\", \"127.0.0.0/8\", \"169.254.0.0/16\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"$POOL\", \"224.0.0.0/4\", \"240.0.0.0/4\"$BLOCK6"
+    # Правило маршрута сверяет адрес, а сниффер подставляет ИМЯ из Host или
+    # SNI: имя правило пропускает, и direct разрешает его сам -- в том числе
+    # в адрес роутера или домашней сети. Итоговые правила freedom (Xray
+    # 26.5.9+) сверяют уже разрешённый адрес. blockDelay 0: по умолчанию движок
+    # держит отказанное соединение 30-90 с, на роутере это дескрипторы.
+    # Движку старше поле незнакомо и молча отбрасывается -- там имя разрешает
+    # сам маршрут (IPOnDemand), а в режиме «всё через VPN» правило блокировки
+    # встаёт до правил, отправляющих в direct.
+    ROUTE_STRAT=IPIfNonMatch
+    if [ "$XRAYVER" -ge 260509 ]; then
+        _fr="\"finalRules\": [ { \"action\": \"block\", \"blockDelay\": 0, \"ip\": [ $PRIVNETS ] } ]"
+        if [ -n "$DIRECT_SET" ]; then
+            DIRECT_SET=", \"settings\": { \"domainStrategy\": \"UseIP\", $_fr }"
+        else
+            DIRECT_SET=", \"settings\": { $_fr }"
+        fi
+    else
+        ROUTE_STRAT=IPOnDemand
     fi
     DNSTAG=""; DNSHOSTS=""; DNSRULE=""
     if [ "$(u dns_route)" = "tunnel" ]; then
@@ -1909,7 +1932,7 @@ $PROXIES,$ROUTE_OUT
 
   "routing": {
     $BALANCERS
-    "domainStrategy": "IPIfNonMatch",
+    "domainStrategy": "$ROUTE_STRAT",
     "rules": [
       { "type": "field", "inboundTag": [ "dns-in" ], "outboundTag": "dns-out" },$DNSRULE$ROUTE_RULES
 MID
@@ -1920,6 +1943,9 @@ MID
         # ошибки в журнале.
         # Русские зоны мимо туннеля: банки, госуслуги и маркетплейсы через VPN
         # ломаются. .рф -- пуникодом (xn--p1ai): в DNS и SNI идёт он.
+        if [ "$ROUTE_STRAT" = "IPOnDemand" ]; then
+          printf '      { "type": "field", "ip": [ %s ], "outboundTag": "block" },\n' "$PRIVNETS"
+        fi
         if [ "$(u ru_direct)" = "1" ]; then
           printf '      { "type": "field", "domain": [ "domain:ru", "domain:su", "domain:xn--p1ai" ], "outboundTag": "direct" },\n'
         fi
@@ -1975,11 +2001,8 @@ MID2
       // Пул подставляется переменной, а не литералом: он настраивается в
       // панели, и со своим значением защита от петли перечисляла бы чужой
       // диапазон, а нужный оставляла открытым.
-      { "type": "field", "ip": [
-          "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
-          "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16",
-          "$POOL", "224.0.0.0/4", "240.0.0.0/4"$BLOCK6
-        ], "outboundTag": "block" },
+      // Имя вместо адреса это правило не ловит -- см. PRIVNETS выше.
+      { "type": "field", "ip": [ $PRIVNETS ], "outboundTag": "block" },
       { "type": "field", "network": "tcp,udp", $LAST_TARGET }
     ]
   }
