@@ -171,7 +171,10 @@ u() { uci -q get "byway.main.$1" || true; }
 # Русские строки в коде -- ключ; перевод -- файл «ключ<TAB>перевод» на язык.
 # Язык добавляется без правки кода, пропущенная строка остаётся русской, а не
 # пустой. gettext не годится: его нет в busybox, панели нужен был бы пакет.
-BW_LANG=$(u lang); BW_LANG=${BW_LANG:-ru}
+BW_LANG=$(u lang)
+# Только две строчные буквы: из значения строится путь к словарю, а строки
+# словаря становятся форматами printf. Опцию пишут и панель, и импорт.
+case "$BW_LANG" in [a-z][a-z]) ;; *) BW_LANG=ru ;; esac
 
 LANGDIR=$LISTS/lang
 
@@ -392,6 +395,11 @@ parse_node() {
     if [ -z "${1:-}" ] && [ "$(u conn_mode)" = "outbound" ]; then
         N_RAW=$(u outbound_json)
         [ -n "$N_RAW" ] || die "выбран свой конфиг, но он пуст"
+        # Только один JSON-объект: в конфиг движка он идёт разобранным и
+        # собранным заново (proxy_block), склейка текста дописывала туда
+        # чужие ключи верхнего уровня.
+        raw_json_out proxy >/dev/null ||
+            die "свой конфиг — не один JSON-объект аутбаунда: проверить скобки и кавычки"
         N_PROTO=raw
         N_LABEL=$(u conn_label)
         [ -n "$N_LABEL" ] || N_LABEL=$(_t 'свой конфиг')
@@ -1226,19 +1234,7 @@ stream_security() {
 proxy_block() {
     _tag=${1:-proxy}
     if [ "$N_PROTO" = "raw" ]; then
-        # "tag" -- последним полем: на повторе ключа Xray берёт последний (`run
-        # -dump`, 26.9.30), а `run -test` дубль не замечает.
-        printf '%s' "$N_RAW" | awk -v t="$_tag" '
-            { s = s $0 "\n" }
-            END {
-                n = 0
-                for (i = length(s); i > 0; i--) if (substr(s, i, 1) == "}") { n = i; break }
-                if (n == 0) { printf "%s", s; exit }
-                head = substr(s, 1, n - 1); tail = substr(s, n)
-                b = head; sub(/[[:space:]]+$/, "", b)
-                sep = (substr(b, length(b), 1) == "{") ? " " : ", "
-                printf "%s%s\"tag\": \"%s\" %s", b, sep, t, tail
-            }' 
+        raw_json_out "$_tag"
     else
         # Только непустые части: у wireguard транспорта нет, и «{ %s, %s }»
         # дало бы «{ , …}».
@@ -1259,6 +1255,23 @@ self_sockopt() {
     # функцию из трёх мест.
     [ "$(u router_via_vpn)" = "1" ] || return 0
     printf ', "sockopt": { "mark": %s }' "$(self_mark_dec)"
+}
+
+# Свой конфиг (N_RAW) -- разобранным и собранным заново, с тегом. Склейка
+# текста (тег перед последней «}») пропускала в конфиг движка всё, что
+# человек или чужая выгрузка допишет после объекта: «}, { ... }» становилось
+# новыми ключами верхнего уровня -- входами, журналом в любой путь, а движок
+# может идти от root. Дубля тега тоже нет: свой удаляется, наш ставится.
+# Не один объект -- код 1.
+raw_json_out() {   # 1 -- тег
+    BW_RAW=$N_RAW BW_TAG=$1 ucode -e '
+        let o;
+        try { o = json(getenv("BW_RAW")); } catch (e) { exit(1); }
+        if (type(o) != "object") exit(1);
+        delete o.tag;
+        o.tag = getenv("BW_TAG");
+        print(sprintf("%J", o));
+    ' 2>/dev/null
 }
 
 # Адреса серверов своего конфига (N_RAW): address у settings, vnext, servers,
@@ -4735,8 +4748,8 @@ node_udp() {
 # vpn при автовыборе: все ключи разом, в фоне (по очереди десяток не уложился
 # бы в 20 с панели); ответ -- сколько отвечают и лучшая задержка.
 health_urltest() {
-    _hd=/tmp/byway-health.$$
-    mkdir -p "$_hd"
+    # mktemp: каталог с $$, заведённый заранее, подсовывал бы чужие замеры.
+    _hd=$(mktemp -d /tmp/byway-health.XXXXXX) || { _hfail vpn "$(_t 'не отвечает ни один ключ')"; return 0; }
     _hn=0
     for _hk in $(uci -q get byway.main.node_urls 2>/dev/null); do
         _hn=$((_hn + 1))
@@ -5409,7 +5422,7 @@ report_body() {
       sed -E 's/^([A-Z][a-z]{2} [A-Z][a-z]{2} +[0-9]+ [0-9:]+ [0-9]{4}) [^:]*: /\1 /
               s/[0-9]{1,3}(\.[0-9]{1,3}){3}/x.x.x.x/g
               s/\[[0-9a-fA-F]*:[0-9a-fA-F:]*\]|[0-9a-fA-F]*::[0-9a-fA-F:]+/x::x/g
-              s/([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/'"$(_t ИМЯ)"'/g' || true
+              s/([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/'"$(_t ИМЯ | sed 's/[\/&]/\\&/g')"'/g' || true
 }
 
 # Обновление самого byway: номер свежей версии, загрузка, откат; метки
@@ -5525,12 +5538,11 @@ cmd_update() {
     fi
     [ "$_uf" = --check ] && return 0
 
-    # Распаковка в память. Каталог свой у каждого запуска ($$): на общем
-    # имени в /tmp кто угодно подложил бы исходник, который установщик от
-    # root разложит в /usr/local/bin.
-    _d=/tmp/byway-update.$$
-    rm -rf "$_d" 2>/dev/null || true
-    mkdir -p "$_d"
+    # Распаковка в память. Каталог свой у каждого запуска и создаётся
+    # атомарно (mktemp, права 700): на имени с $$ каталог, заведённый заранее
+    # другим пользователем, mkdir -p принимал как свой, и в него подкладывали
+    # исходник, который установщик от root разложит в /usr/local/bin.
+    _d=$(mktemp -d /tmp/byway-update.XXXXXX) || die "не создать рабочий каталог в /tmp"
     trap 'rm -rf "$_d" 2>/dev/null' EXIT INT TERM
     _px=$(u local_proxy_port); _px=${_px:-1603}
     _url="https://github.com/$BYWAY_REPO/archive/refs/tags/v$_new.tar.gz"
@@ -5542,11 +5554,17 @@ cmd_update() {
     [ -n "$_src" ] || die "в пакете нет install.sh -- ничего не тронуто"
     if [ "$_nov" = 1 ]; then
         warn "--no-verify: подпись выпуска не проверяется"
-    elif upd_verify "$_new" "$(dirname "$_src")" "$_d"; then
-        say "подпись выпуска сошлась с ключом byway"
     else
-        warn "выпуск не поставлен -- ничего не тронуто; поставить без проверки подписи: byway update --no-verify"
-        exit 6
+        # 1 -- проверить нечем (нет usign, нет подписи): обход назвать можно.
+        # 2 -- подлинность опровергнута: обход не советовать.
+        _uvr=0; upd_verify "$_new" "$(dirname "$_src")" "$_d" || _uvr=$?
+        case "$_uvr" in
+          0) say "подпись выпуска сошлась с ключом byway" ;;
+          1) warn "выпуск не поставлен -- ничего не тронуто; поставить без проверки подписи: byway update --no-verify"
+             exit 6 ;;
+          *) warn "архив не совпал с подписанным выпуском -- подменён или повреждён; ничего не тронуто, повторить позже"
+             exit 6 ;;
+        esac
     fi
 
     # Связь до установки: откатывать за мёртвый сервер нельзя (eng_wait).
@@ -5601,9 +5619,8 @@ upd_restore() {
     [ -s "$PREVSET" ] || { warn "копии прежней версии нет"; return 1; }
     # Через каталог в памяти и mv на место: запись поверх файла, который
     # сейчас исполняется (byway update --rollback), портила бы его чтение.
-    _ur=/tmp/byway-rollback.$$
-    rm -rf "$_ur" 2>/dev/null || true
-    mkdir -p "$_ur"
+    _ur=$(mktemp -d /tmp/byway-rollback.XXXXXX) ||
+        { warnf "откат не удался -- копия в %s" "$PREVSET"; return 1; }
     tar xzf "$PREVSET" -C "$_ur" 2>/dev/null || { rm -rf "$_ur"; warnf "откат не удался -- копия в %s" "$PREVSET"; return 1; }
     _urf=0
     for _uf in $(cd "$_ur" && find . -type f); do
@@ -5626,22 +5643,42 @@ upd_restore() {
 # и его подпись лежат вложениями выпуска на GitHub, ключ -- BYWAY_PUBKEY.
 # Архив с чужого зеркала или подменённый по дороге не пройдёт: каждый файл
 # обязан быть в списке и с той суммой, лишних нет.
-upd_verify() {   # 1 -- номер, 2 -- корень распакованного архива, 3 -- рабочий каталог
+# Подписанный список сумм выпуска -- в каталог $2/SHA256SUMS. 0 -- подпись
+# сошлась; 1 -- проверить нечем (нет usign, подпись не скачалась); 2 -- не
+# сошлась. Общая для byway update и byway lang.
+rel_sums() {   # 1 -- номер, 2 -- рабочий каталог
     command -v usign >/dev/null 2>&1 || { warn "нет usign — подпись выпуска проверить нечем"; return 1; }
     _rel="https://github.com/$BYWAY_REPO/releases/download/v$1"
-    if ! net_get --max-time 30 -o "$3/SHA256SUMS" "$_rel/SHA256SUMS" ||
-       ! net_get --max-time 30 -o "$3/SHA256SUMS.sig" "$_rel/SHA256SUMS.sig"; then
+    if ! net_get --max-time 30 -o "$2/SHA256SUMS" "$_rel/SHA256SUMS" ||
+       ! net_get --max-time 30 -o "$2/SHA256SUMS.sig" "$_rel/SHA256SUMS.sig"; then
         warnf "у выпуска %s нет подписи (SHA256SUMS.sig) либо она не скачалась" "$1"
         return 1
     fi
-    printf 'untrusted comment: byway release key public key\n%s\n' "$BYWAY_PUBKEY" > "$3/key.pub"
-    usign -V -q -m "$3/SHA256SUMS" -x "$3/SHA256SUMS.sig" -p "$3/key.pub" ||
-        { warn "подпись выпуска не сошлась с ключом byway"; return 1; }
+    printf 'untrusted comment: byway release key public key\n%s\n' "$BYWAY_PUBKEY" > "$2/key.pub"
+    usign -V -q -m "$2/SHA256SUMS" -x "$2/SHA256SUMS.sig" -p "$2/key.pub" ||
+        { warn "подпись выпуска не сошлась с ключом byway"; return 2; }
+    return 0
+}
+
+# Файл совпал со своей строкой подписанного списка.
+rel_sum_ok() {   # 1 -- файл, 2 -- путь в выпуске (lang/en.tsv), 3 -- SHA256SUMS
+    _rw=$(awk -v f="$2" '{ p = $2; sub(/^\*/, "", p) } p == f { print $1; exit }' "$3")
+    [ -n "$_rw" ] && [ "$(sha256sum "$1" 2>/dev/null | cut -d' ' -f1)" = "$_rw" ]
+}
+
+upd_verify() {   # 1 -- номер, 2 -- корень распакованного архива, 3 -- рабочий каталог
+    _rsr=0; rel_sums "$1" "$3" || _rsr=$?
+    [ "$_rsr" = 0 ] || return "$_rsr"
     ( cd "$2" && sha256sum -c "$3/SHA256SUMS" >/dev/null 2>&1 ) ||
-        { warn "файлы архива не совпали с подписанным списком"; return 1; }
+        { warn "файлы архива не совпали с подписанным списком"; return 2; }
     _ul=$(cd "$2" && find . -type f | sed 's|^\./||' | sort)
     _us=$(awk '{ sub(/^\*/, "", $2); print $2 }' "$3/SHA256SUMS" | sort)
-    [ "$_ul" = "$_us" ] || { warn "в архиве есть файлы вне подписанного списка"; return 1; }
+    [ "$_ul" = "$_us" ] || { warn "в архиве есть файлы вне подписанного списка"; return 2; }
+    # Подпись не несёт номера выпуска: подписанный список старого выпуска
+    # сошёлся бы и под новым тегом. Номер -- из подписанных файлов.
+    grep -qx "VER=$1" "$2/install.sh" 2>/dev/null &&
+        grep -qx "BYWAY_NUM=\"$1\"" "$2/byway" 2>/dev/null ||
+        { warnf "архив не того выпуска: внутри не v%s" "$1"; return 2; }
     return 0
 }
 
@@ -5893,9 +5930,8 @@ cmd_engine() {
     _enew=/usr/local/bin/xray-$_env
     _elk=/var/run/byway-engine.lock
     take_lock "$_elk" "$(_t 'замена движка')" || die "замена движка уже идёт"
-    _ed=/tmp/byway-engine.$$
-    rm -rf "$_ed" 2>/dev/null || true
-    mkdir -p "$_ed"
+    # mktemp: атомарно и права 700 (см. cmd_update).
+    _ed=$(mktemp -d /tmp/byway-engine.XXXXXX) || { rm -rf "$_elk"; die "не создать рабочий каталог в /tmp"; }
     trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT INT TERM
 
     # Нужная версия уже лежит рядом -- переключение без загрузки.
@@ -6155,9 +6191,8 @@ eng_local() {
     _enew=/usr/local/bin/xray-local-$(date +%Y%m%d%H%M)
     _elk=/var/run/byway-engine.lock
     take_lock "$_elk" "$(_t 'замена движка')" || die "замена движка уже идёт"
-    _ed=/tmp/byway-engine.$$
-    rm -rf "$_ed" 2>/dev/null || true
-    mkdir -p "$_ed"
+    # mktemp: атомарно и права 700 (см. cmd_update).
+    _ed=$(mktemp -d /tmp/byway-engine.XXXXXX) || { rm -rf "$_elk"; die "не создать рабочий каталог в /tmp"; }
     trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT INT TERM
     _emk=$(eng_mem_kb || echo 0)
     [ "${_emk:-0}" -ge 40960 ] ||
@@ -6253,16 +6288,35 @@ cmd_lang() {
       *) dief "непонятный язык «%s» — нужен ru или en" "$_lw" ;;
     esac
     if [ "$_lw" = en ]; then
-        _lt=/tmp/byway-lang.$$
-        rm -rf "$_lt" 2>/dev/null || true
-        mkdir -p "$_lt" "$LANGDIR"
-        _lb="https://raw.githubusercontent.com/$BYWAY_REPO/v$BYWAY_NUM"
+        _lt=$(mktemp -d /tmp/byway-lang.XXXXXX) || die "не создать рабочий каталог в /tmp"
+        mkdir -p "$LANGDIR"
+        # refs/tags: ветка с тем же именем, что тег, иначе перебила бы его.
+        _lb="https://raw.githubusercontent.com/$BYWAY_REPO/refs/tags/v$BYWAY_NUM"
+        # Словари -- строки форматов printf, которые byway печатает от root:
+        # берутся только сверенными с подписанным списком сумм выпуска.
+        _lnv=0
+        if [ "${BYWAY_NO_VERIFY:-0}" = 1 ]; then
+            warn "BYWAY_NO_VERIFY=1: подпись выпуска не проверяется"
+        else
+            _lsr=0; rel_sums "$BYWAY_NUM" "$_lt" || _lsr=$?
+            case "$_lsr" in
+              0) _lnv=1 ;;
+              1) rm -rf "$_lt"
+                 die "словарь не сверить с подписью выпуска — язык не переключён; без проверки: BYWAY_NO_VERIFY=1 byway lang en" ;;
+              *) rm -rf "$_lt"
+                 die "подпись выпуска не сошлась — язык не переключён" ;;
+            esac
+        fi
         if [ ! -s "$LANGDIR/en.tsv" ]; then
             say "загрузка английского словаря"
             if ! eng_dl --max-time 30 -o "$_lt/en.tsv" "$_lb/lang/en.tsv" ||
                ! grep -q '	' "$_lt/en.tsv" 2>/dev/null; then
                 rm -rf "$_lt"; eng_nonet
                 die "словарь не скачался — язык не переключён"
+            fi
+            if [ "$_lnv" = 1 ] && ! rel_sum_ok "$_lt/en.tsv" lang/en.tsv "$_lt/SHA256SUMS"; then
+                rm -rf "$_lt"
+                die "словарь не совпал с подписанным выпуском — язык не переключён"
             fi
             mv "$_lt/en.tsv" "$LANGDIR/en.tsv" && chmod 644 "$LANGDIR/en.tsv"
         fi
@@ -6272,6 +6326,10 @@ cmd_lang() {
                ! grep -q '"Служба": "Service"' "$_lt/lang.js" 2>/dev/null; then
                 rm -rf "$_lt"; eng_nonet
                 die "словарь панели не скачался — язык не переключён"
+            fi
+            if [ "$_lnv" = 1 ] && ! rel_sum_ok "$_lt/lang.js" luci/lang.js "$_lt/SHA256SUMS"; then
+                rm -rf "$_lt"
+                die "словарь не совпал с подписанным выпуском — язык не переключён"
             fi
             mv "$_lt/lang.js" "$PANEL_LANG" && chmod 644 "$PANEL_LANG"
         fi
@@ -6467,13 +6525,12 @@ cmd_import() {
         die "это не выгрузка byway: в первой строке нет заголовка"
     import_backup
 
-    _tmp=/tmp/byway-import.$$
+    _tmp=$(mktemp -d /tmp/byway-import.XXXXXX) || die "не создать рабочий каталог в /tmp"
     # Ловушка обязательна: в разобранной выгрузке лежит ключ, а выйти можно и
     # по die, и по Ctrl+C. $_bak ловушка НЕ трогает: копию конфига (с ключом,
     # во флеше, права 700) заводят ради отката ПОСЛЕ удачного приёма, меню и
     # панель на неё ссылаются. Каталог один, следующий приём перезапишет.
     trap 'rm -rf "$_tmp" 2>/dev/null' EXIT INT TERM
-    mkdir -p "$_tmp"
     chmod 700 "$_tmp" 2>/dev/null || true
     awk -v d="$_tmp" '
         function nm(str,   n) { n = substr(str, index(str, ":") + 1)
@@ -6621,6 +6678,13 @@ import_routes() {
             case "$_rn" in
               *[!A-Za-z0-9_-]*|'') warnf "направление «%s» пропущено: имя не годится" "$_rn"; continue ;;
             esac
+            # Имя уже занято секцией другого типа (main и прочие): присвоение
+            # сменило бы её тип, а label/enabled легли бы в главные настройки.
+            _rty=$(uci -q get "byway.$_rn" 2>/dev/null || true)
+            if [ -n "$_rty" ] && [ "$_rty" != route ]; then
+                warnf "направление «%s» пропущено: имя занято настройкой byway" "$_rn"
+                continue
+            fi
             uci -q set "byway.$_rn=route"
             while IFS= read -r _rl; do
                 case "$_rl" in

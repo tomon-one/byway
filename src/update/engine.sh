@@ -246,9 +246,8 @@ cmd_engine() {
     _enew=/usr/local/bin/xray-$_env
     _elk=/var/run/byway-engine.lock
     take_lock "$_elk" "$(_t 'замена движка')" || die "замена движка уже идёт"
-    _ed=/tmp/byway-engine.$$
-    rm -rf "$_ed" 2>/dev/null || true
-    mkdir -p "$_ed"
+    # mktemp: атомарно и права 700 (см. cmd_update).
+    _ed=$(mktemp -d /tmp/byway-engine.XXXXXX) || { rm -rf "$_elk"; die "не создать рабочий каталог в /tmp"; }
     trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT INT TERM
 
     # Нужная версия уже лежит рядом -- переключение без загрузки.
@@ -508,9 +507,8 @@ eng_local() {
     _enew=/usr/local/bin/xray-local-$(date +%Y%m%d%H%M)
     _elk=/var/run/byway-engine.lock
     take_lock "$_elk" "$(_t 'замена движка')" || die "замена движка уже идёт"
-    _ed=/tmp/byway-engine.$$
-    rm -rf "$_ed" 2>/dev/null || true
-    mkdir -p "$_ed"
+    # mktemp: атомарно и права 700 (см. cmd_update).
+    _ed=$(mktemp -d /tmp/byway-engine.XXXXXX) || { rm -rf "$_elk"; die "не создать рабочий каталог в /tmp"; }
     trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT INT TERM
     _emk=$(eng_mem_kb || echo 0)
     [ "${_emk:-0}" -ge 40960 ] ||

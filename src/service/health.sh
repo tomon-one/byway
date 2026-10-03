@@ -161,8 +161,8 @@ node_udp() {
 # vpn при автовыборе: все ключи разом, в фоне (по очереди десяток не уложился
 # бы в 20 с панели); ответ -- сколько отвечают и лучшая задержка.
 health_urltest() {
-    _hd=/tmp/byway-health.$$
-    mkdir -p "$_hd"
+    # mktemp: каталог с $$, заведённый заранее, подсовывал бы чужие замеры.
+    _hd=$(mktemp -d /tmp/byway-health.XXXXXX) || { _hfail vpn "$(_t 'не отвечает ни один ключ')"; return 0; }
     _hn=0
     for _hk in $(uci -q get byway.main.node_urls 2>/dev/null); do
         _hn=$((_hn + 1))

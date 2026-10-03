@@ -143,7 +143,10 @@ t() {
       "  нет задачи byway watch: не будет ни проверки версии, ни обновления списков") printf %s "  the byway watch job is missing: no version check and no list updates" ;;
       "  нет задачи byway stat: учёт использования собираться не будет") printf %s "  the byway stat job is missing: usage accounting will not be collected" ;;
       "BYWAY_NO_VERIFY=1: подпись выпуска не проверяется") printf %s "BYWAY_NO_VERIFY=1: the release signature is not checked" ;;
-      "архив byway не прошёл проверку подписи выпуска — установка отменена; без проверки: BYWAY_NO_VERIFY=1 sh install.sh") printf %s "the byway archive failed the release signature check — installation cancelled; without the check: BYWAY_NO_VERIFY=1 sh install.sh" ;;
+      "выпуска v%s на GitHub нет — установка отменена; разрабатываемую версию без подписи ставит BYWAY_ALLOW_MAIN=1 в начале команды установки") printf %s "release v%s is not on GitHub — installation cancelled; BYWAY_ALLOW_MAIN=1 at the start of the install command installs the unsigned development version" ;;
+      "подпись выпуска проверить нечем — установка отменена; без проверки: BYWAY_NO_VERIFY=1 в начале команды установки") printf %s "nothing to check the release signature with — installation cancelled; without the check: BYWAY_NO_VERIFY=1 at the start of the install command" ;;
+      "архив byway не совпал с подписанным выпуском — подменён или повреждён; установка отменена, повторить позже") printf %s "the byway archive does not match the signed release — tampered with or damaged; installation cancelled, try again later" ;;
+      "архив не того выпуска: внутри не v%s") printf %s "the archive is from another release: it is not v%s inside" ;;
       "в архиве есть файлы вне подписанного списка") printf %s "the archive has files outside the signed list" ;;
       "нет usign — подпись выпуска проверить нечем") printf %s "no usign — nothing to check the release signature with" ;;
       "подпись выпуска не сошлась с ключом byway") printf %s "the release signature does not match the byway key" ;;
@@ -531,9 +534,9 @@ fetch_src() {
         command -v "$_need" >/dev/null 2>&1 ||
             dief "нет утилиты %s -- это не похоже на рабочий OpenWrt" "$_need"
     done
-    _sd=/tmp/byway-src.$$
-    rm -rf "$_sd"
-    mkdir -p "$_sd" || return 1
+    # mktemp: атомарно и права 700 -- каталог с $$, заведённый заранее
+    # другим пользователем, mkdir -p принимал как свой.
+    _sd=$(mktemp -d /tmp/byway-src.XXXXXX) || return 1
     # Убираем за собой НА ВЫХОДЕ, а не здесь: из этого каталога идёт
     # установка, он нужен до последнего шага. Без трапа каждый запуск
     # оставлял мегабайт в tmpfs навсегда -- это ОПЕРАТИВНАЯ ПАМЯТЬ роутера,
@@ -548,6 +551,9 @@ fetch_src() {
     _urls=$(gh "https://github.com/$REPO/archive/refs/tags/v$VER.tar.gz")
     _tagged=1
     if [ "$(http_code "$_urls")" = 404 ]; then
+        # 404 на теге отвечает и чужое зеркало: молча уходить на ветку без
+        # подписи нельзя. Разрабатываемая версия -- только по явному слову.
+        [ "${BYWAY_ALLOW_MAIN:-0}" = 1 ] || dief "выпуска v%s на GitHub нет — установка отменена; разрабатываемую версию без подписи ставит BYWAY_ALLOW_MAIN=1 в начале команды установки" "$VER"
         warnf "выпуска v%s ещё нет — взята разрабатываемая версия (main)" "$VER"
         _urls=$(gh "https://github.com/$REPO/archive/refs/heads/main.tar.gz")
         _tagged=0
@@ -563,9 +569,15 @@ fetch_src() {
         SRC=$(dirname "$_cf")
         have_src || continue
         # Архив тега -- только с подписью выпуска: зеркало gh-proxy чужое.
-        if [ "$_tagged" = 1 ] && [ "${BYWAY_NO_VERIFY:-0}" != 1 ] &&
-           ! verify_src "$SRC" "$_sd"; then
-            dief "архив byway не прошёл проверку подписи выпуска — установка отменена; без проверки: BYWAY_NO_VERIFY=1 sh install.sh"
+        if [ "$_tagged" = 1 ] && [ "${BYWAY_NO_VERIFY:-0}" != 1 ]; then
+            # 1 -- проверить нечем (нет usign, нет подписи): обход назвать
+            # можно. 2 -- подлинность опровергнута: обход не советовать.
+            _vr=0; verify_src "$SRC" "$_sd" || _vr=$?
+            case "$_vr" in
+              0) ;;
+              1) die "подпись выпуска проверить нечем — установка отменена; без проверки: BYWAY_NO_VERIFY=1 в начале команды установки" ;;
+              *) die "архив byway не совпал с подписанным выпуском — подменён или повреждён; установка отменена, повторить позже" ;;
+            esac
         fi
         [ "${BYWAY_NO_VERIFY:-0}" = 1 ] && warn "BYWAY_NO_VERIFY=1: подпись выпуска не проверяется"
         return 0
@@ -583,12 +595,17 @@ verify_src() {   # 1 -- корень распакованного архива, 
         { warn "у выпуска нет подписи (SHA256SUMS.sig) либо она не скачалась"; return 1; }
     printf 'untrusted comment: byway release key public key\n%s\n' "$BYWAY_PUBKEY" > "$2/key.pub"
     usign -V -q -m "$2/SHA256SUMS" -x "$2/SHA256SUMS.sig" -p "$2/key.pub" ||
-        { warn "подпись выпуска не сошлась с ключом byway"; return 1; }
+        { warn "подпись выпуска не сошлась с ключом byway"; return 2; }
     ( cd "$1" && sha256sum -c "$2/SHA256SUMS" >/dev/null 2>&1 ) ||
-        { warn "файлы архива не совпали с подписанным списком"; return 1; }
+        { warn "файлы архива не совпали с подписанным списком"; return 2; }
     [ "$(cd "$1" && find . -type f | sed 's|^\./||' | sort)" = \
       "$(awk '{ sub(/^\*/, "", $2); print $2 }' "$2/SHA256SUMS" | sort)" ] ||
-        { warn "в архиве есть файлы вне подписанного списка"; return 1; }
+        { warn "в архиве есть файлы вне подписанного списка"; return 2; }
+    # Подпись не несёт номера выпуска: подписанный список старого выпуска
+    # сошёлся бы и под новым тегом. Номер -- из подписанных файлов.
+    grep -qx "VER=$VER" "$1/install.sh" 2>/dev/null &&
+        grep -qx "BYWAY_NUM=\"$VER\"" "$1/byway" 2>/dev/null ||
+        { warnf "архив не того выпуска: внутри не v%s" "$VER"; return 2; }
     say "подпись выпуска сошлась с ключом byway"
     return 0
 }
@@ -817,12 +834,15 @@ xray_from_github() {
     # `unzip -o` от root распаковал бы ЕГО содержимое в /usr/local/bin.
     # Защита -- непредсказуемое имя и удаление чужого файла перед записью;
     # сумма из .dgst выпуска сверяется ниже, когда есть sha256sum.
-    _z=/tmp/xray.$$.zip
-    rm -f "$_z" 2>/dev/null || true
+    # Свой каталог (mktemp, 700): файл с $$ в общем /tmp другой пользователь
+    # создаёт заранее, root пишет в него, а владелец меняет содержимое уже
+    # после сверки суммы (fs.protected_regular на OpenWrt выключен).
+    _zd=$(mktemp -d /tmp/byway-xray.XXXXXX) || return 1
+    _z=$_zd/xray.zip
     sayf "установка Xray-core %s (%s)" "$_ver" "$_as"
     _zu="https://github.com/XTLS/Xray-core/releases/download/v$_ver/Xray-$_as.zip"
     dl --max-time 300 -o "$_z" "$(gh "$_zu")" ||
-        { warn "не скачался"; rm -f "$_z"; return 1; }
+        { warn "не скачался"; rm -rf "$_zd"; return 1; }
     # Сверка с SHA2-256 из .dgst того же выпуска: от битой загрузки и от
     # посредника, отдавшего не то, -- а зеркало gh-proxy здесь ЧУЖОЕ. Не
     # подпись: .dgst лежит рядом с архивом. Нет sha256sum -- архив не ставим,
@@ -832,10 +852,10 @@ xray_from_github() {
               sed -n 's/^SHA2-256= *\([0-9a-f]\{64\}\).*/\1/p' | head -1)
         _zg=$(sha256sum "$_z" 2>/dev/null | cut -d' ' -f1)
         if [ -z "$_zw" ]; then
-            warn "контрольная сумма выпуска (.dgst) не получена — архив отброшен"; rm -f "$_z"; return 1
+            warn "контрольная сумма выпуска (.dgst) не получена — архив отброшен"; rm -rf "$_zd"; return 1
         fi
         if [ "$_zw" != "$_zg" ]; then
-            warn "архив не сошёлся с контрольной суммой SHA2-256 из выпуска — отброшен"; rm -f "$_z"; return 1
+            warn "архив не сошёлся с контрольной суммой SHA2-256 из выпуска — отброшен"; rm -rf "$_zd"; return 1
         fi
         say "архив сверен с контрольной суммой из выпуска"
         # Проверенная версия -- ещё и с суммой, вшитой в byway: .dgst лежит
@@ -843,12 +863,12 @@ xray_from_github() {
         if [ "$_ver" = "$XRAY_TESTED" ]; then
             _zb=$(printf '%s\n' "$XRAY_TESTED_SUMS" | sed -n "s/^$_as=//p")
             if [ -n "$_zb" ] && [ "$_zb" != "$_zg" ]; then
-                warn "архив не сошёлся с суммой, вшитой в byway для проверенной версии — отброшен"; rm -f "$_z"; return 1
+                warn "архив не сошёлся с суммой, вшитой в byway для проверенной версии — отброшен"; rm -rf "$_zd"; return 1
             fi
         fi
     else
         warn "нет sha256sum — архив движка нечем сверить, ставится ядро из пакетов OpenWrt"
-        rm -f "$_z"; return 1
+        rm -rf "$_zd"; return 1
     fi
 
     mkdir -p /usr/local/bin
@@ -856,8 +876,8 @@ xray_from_github() {
     # мегабайты на разделе в 43.7 МБ. Путь стал достижим именно теперь, когда
     # порог места опущен и ветка «взять с GitHub» наконец работает.
     unzip -o -j "$_z" xray -d /usr/local/bin >/dev/null 2>&1 ||
-        { warn "не распаковался"; rm -f "$_z" /usr/local/bin/xray; return 1; }
-    rm -f "$_z"
+        { warn "не распаковался"; rm -rf "$_zd" /usr/local/bin/xray; return 1; }
+    rm -rf "$_zd"
     mv /usr/local/bin/xray "/usr/local/bin/xray-$_ver" && chmod 755 "/usr/local/bin/xray-$_ver"
 
     # Проверяем, что оно вообще запускается на этом железе: неверно угаданная

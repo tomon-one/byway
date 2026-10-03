@@ -5,19 +5,7 @@
 proxy_block() {
     _tag=${1:-proxy}
     if [ "$N_PROTO" = "raw" ]; then
-        # "tag" -- последним полем: на повторе ключа Xray берёт последний (`run
-        # -dump`, 26.9.30), а `run -test` дубль не замечает.
-        printf '%s' "$N_RAW" | awk -v t="$_tag" '
-            { s = s $0 "\n" }
-            END {
-                n = 0
-                for (i = length(s); i > 0; i--) if (substr(s, i, 1) == "}") { n = i; break }
-                if (n == 0) { printf "%s", s; exit }
-                head = substr(s, 1, n - 1); tail = substr(s, n)
-                b = head; sub(/[[:space:]]+$/, "", b)
-                sep = (substr(b, length(b), 1) == "{") ? " " : ", "
-                printf "%s%s\"tag\": \"%s\" %s", b, sep, t, tail
-            }' 
+        raw_json_out "$_tag"
     else
         # Только непустые части: у wireguard транспорта нет, и «{ %s, %s }»
         # дало бы «{ , …}».
@@ -38,6 +26,23 @@ self_sockopt() {
     # функцию из трёх мест.
     [ "$(u router_via_vpn)" = "1" ] || return 0
     printf ', "sockopt": { "mark": %s }' "$(self_mark_dec)"
+}
+
+# Свой конфиг (N_RAW) -- разобранным и собранным заново, с тегом. Склейка
+# текста (тег перед последней «}») пропускала в конфиг движка всё, что
+# человек или чужая выгрузка допишет после объекта: «}, { ... }» становилось
+# новыми ключами верхнего уровня -- входами, журналом в любой путь, а движок
+# может идти от root. Дубля тега тоже нет: свой удаляется, наш ставится.
+# Не один объект -- код 1.
+raw_json_out() {   # 1 -- тег
+    BW_RAW=$N_RAW BW_TAG=$1 ucode -e '
+        let o;
+        try { o = json(getenv("BW_RAW")); } catch (e) { exit(1); }
+        if (type(o) != "object") exit(1);
+        delete o.tag;
+        o.tag = getenv("BW_TAG");
+        print(sprintf("%J", o));
+    ' 2>/dev/null
 }
 
 # Адреса серверов своего конфига (N_RAW): address у settings, vnext, servers,

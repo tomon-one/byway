@@ -714,3 +714,12 @@ header и seed у mkcp удалены в Xray-core с 26.1.31 и в конфиг
 настройка %s содержит управляющие знаки и не годится для %s, взято %s	setting %s contains control characters and is not usable for %s, using %s
 vpn\twarn\tсервер на UDP: задержка не меряется\n	vpn\twarn\tUDP server: latency is not measured\n
 vpn\twarn\tсерверы на UDP: задержка не меряется\n	vpn\twarn\tUDP servers: latency is not measured\n
+не создать рабочий каталог в /tmp	cannot create a working directory in /tmp
+направление «%s» пропущено: имя занято настройкой byway	direction “%s” skipped: the name is taken by a byway setting
+архив не совпал с подписанным выпуском -- подменён или повреждён; ничего не тронуто, повторить позже	the archive does not match the signed release -- tampered with or damaged; nothing touched, try again later
+архив не того выпуска: внутри не v%s	the archive is from another release: it is not v%s inside
+словарь не сверить с подписью выпуска — язык не переключён; без проверки: BYWAY_NO_VERIFY=1 byway lang en	the dictionary cannot be checked against the release signature — language not switched; without the check: BYWAY_NO_VERIFY=1 byway lang en
+подпись выпуска не сошлась — язык не переключён	the release signature does not match — language not switched
+словарь не совпал с подписанным выпуском — язык не переключён	the dictionary does not match the signed release — language not switched
+BYWAY_NO_VERIFY=1: подпись выпуска не проверяется	BYWAY_NO_VERIFY=1: the release signature is not checked
+свой конфиг — не один JSON-объект аутбаунда: проверить скобки и кавычки	custom config is not a single outbound JSON object: check brackets and quotes

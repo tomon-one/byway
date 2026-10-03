@@ -173,13 +173,12 @@ cmd_import() {
         die "это не выгрузка byway: в первой строке нет заголовка"
     import_backup
 
-    _tmp=/tmp/byway-import.$$
+    _tmp=$(mktemp -d /tmp/byway-import.XXXXXX) || die "не создать рабочий каталог в /tmp"
     # Ловушка обязательна: в разобранной выгрузке лежит ключ, а выйти можно и
     # по die, и по Ctrl+C. $_bak ловушка НЕ трогает: копию конфига (с ключом,
     # во флеше, права 700) заводят ради отката ПОСЛЕ удачного приёма, меню и
     # панель на неё ссылаются. Каталог один, следующий приём перезапишет.
     trap 'rm -rf "$_tmp" 2>/dev/null' EXIT INT TERM
-    mkdir -p "$_tmp"
     chmod 700 "$_tmp" 2>/dev/null || true
     awk -v d="$_tmp" '
         function nm(str,   n) { n = substr(str, index(str, ":") + 1)
@@ -327,6 +326,13 @@ import_routes() {
             case "$_rn" in
               *[!A-Za-z0-9_-]*|'') warnf "направление «%s» пропущено: имя не годится" "$_rn"; continue ;;
             esac
+            # Имя уже занято секцией другого типа (main и прочие): присвоение
+            # сменило бы её тип, а label/enabled легли бы в главные настройки.
+            _rty=$(uci -q get "byway.$_rn" 2>/dev/null || true)
+            if [ -n "$_rty" ] && [ "$_rty" != route ]; then
+                warnf "направление «%s» пропущено: имя занято настройкой byway" "$_rn"
+                continue
+            fi
             uci -q set "byway.$_rn=route"
             while IFS= read -r _rl; do
                 case "$_rl" in

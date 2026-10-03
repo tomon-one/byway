@@ -14,6 +14,11 @@ parse_node() {
     if [ -z "${1:-}" ] && [ "$(u conn_mode)" = "outbound" ]; then
         N_RAW=$(u outbound_json)
         [ -n "$N_RAW" ] || die "выбран свой конфиг, но он пуст"
+        # Только один JSON-объект: в конфиг движка он идёт разобранным и
+        # собранным заново (proxy_block), склейка текста дописывала туда
+        # чужие ключи верхнего уровня.
+        raw_json_out proxy >/dev/null ||
+            die "свой конфиг — не один JSON-объект аутбаунда: проверить скобки и кавычки"
         N_PROTO=raw
         N_LABEL=$(u conn_label)
         [ -n "$N_LABEL" ] || N_LABEL=$(_t 'свой конфиг')

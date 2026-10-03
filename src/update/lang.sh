@@ -19,16 +19,35 @@ cmd_lang() {
       *) dief "непонятный язык «%s» — нужен ru или en" "$_lw" ;;
     esac
     if [ "$_lw" = en ]; then
-        _lt=/tmp/byway-lang.$$
-        rm -rf "$_lt" 2>/dev/null || true
-        mkdir -p "$_lt" "$LANGDIR"
-        _lb="https://raw.githubusercontent.com/$BYWAY_REPO/v$BYWAY_NUM"
+        _lt=$(mktemp -d /tmp/byway-lang.XXXXXX) || die "не создать рабочий каталог в /tmp"
+        mkdir -p "$LANGDIR"
+        # refs/tags: ветка с тем же именем, что тег, иначе перебила бы его.
+        _lb="https://raw.githubusercontent.com/$BYWAY_REPO/refs/tags/v$BYWAY_NUM"
+        # Словари -- строки форматов printf, которые byway печатает от root:
+        # берутся только сверенными с подписанным списком сумм выпуска.
+        _lnv=0
+        if [ "${BYWAY_NO_VERIFY:-0}" = 1 ]; then
+            warn "BYWAY_NO_VERIFY=1: подпись выпуска не проверяется"
+        else
+            _lsr=0; rel_sums "$BYWAY_NUM" "$_lt" || _lsr=$?
+            case "$_lsr" in
+              0) _lnv=1 ;;
+              1) rm -rf "$_lt"
+                 die "словарь не сверить с подписью выпуска — язык не переключён; без проверки: BYWAY_NO_VERIFY=1 byway lang en" ;;
+              *) rm -rf "$_lt"
+                 die "подпись выпуска не сошлась — язык не переключён" ;;
+            esac
+        fi
         if [ ! -s "$LANGDIR/en.tsv" ]; then
             say "загрузка английского словаря"
             if ! eng_dl --max-time 30 -o "$_lt/en.tsv" "$_lb/lang/en.tsv" ||
                ! grep -q '	' "$_lt/en.tsv" 2>/dev/null; then
                 rm -rf "$_lt"; eng_nonet
                 die "словарь не скачался — язык не переключён"
+            fi
+            if [ "$_lnv" = 1 ] && ! rel_sum_ok "$_lt/en.tsv" lang/en.tsv "$_lt/SHA256SUMS"; then
+                rm -rf "$_lt"
+                die "словарь не совпал с подписанным выпуском — язык не переключён"
             fi
             mv "$_lt/en.tsv" "$LANGDIR/en.tsv" && chmod 644 "$LANGDIR/en.tsv"
         fi
@@ -38,6 +57,10 @@ cmd_lang() {
                ! grep -q '"Служба": "Service"' "$_lt/lang.js" 2>/dev/null; then
                 rm -rf "$_lt"; eng_nonet
                 die "словарь панели не скачался — язык не переключён"
+            fi
+            if [ "$_lnv" = 1 ] && ! rel_sum_ok "$_lt/lang.js" luci/lang.js "$_lt/SHA256SUMS"; then
+                rm -rf "$_lt"
+                die "словарь не совпал с подписанным выпуском — язык не переключён"
             fi
             mv "$_lt/lang.js" "$PANEL_LANG" && chmod 644 "$PANEL_LANG"
         fi
