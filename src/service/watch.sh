@@ -14,6 +14,25 @@ WATCH_LAST=/tmp/byway-watch.last
 # Метка «обвязку сняли намеренно», сторож её не трогает. В tmpfs: после
 # перезагрузки снимается, обвязку поднимает запуск службы.
 PLUMB_DOWN=/tmp/byway-plumb-down
+# Метка держит сторожа и pulse. Пустая -- сняли руками (`byway plumb off`),
+# держит до plumb on. С номером -- службу остановила замена ядра: умер её
+# процесс (обрыв ssh посреди замены) -- до своего запуска службы она не
+# дошла. Метка снимается, служба запускается: иначе её не поднял бы никто --
+# сторож при лежащем движке только закрывает доступ.
+plumb_down_held() {
+    [ -f "$PLUMB_DOWN" ] || return 1
+    _pdo=$(cat "$PLUMB_DOWN" 2>/dev/null || true)
+    [ -n "$_pdo" ] || return 0
+    if tr '\0' ' ' < "/proc/$_pdo/cmdline" 2>/dev/null | grep -q byway; then
+        return 0
+    fi
+    rm -f "$PLUMB_DOWN" 2>/dev/null || true
+    if [ "$(u enabled)" = "1" ] && [ -z "$(xray_pid)" ]; then
+        logf 'метка остановки от умершего процесса %s снята -- служба запускается' "$_pdo"
+        /etc/init.d/byway start >/dev/null 2>&1 || true
+    fi
+    return 1
+}
 
 # Сколько проверок подряд не нашлось движка; в tmpfs, после перезагрузки с 0.
 NOPID=/tmp/byway-nopid
@@ -135,7 +154,7 @@ watch_heal() {
     _healed=""
     # Движка нет при включённой службе -- упал, а не выключен; при закрытой
     # модели отказа ради этого случая она и заведена.
-    if [ -z "$_pid" ] && [ "$(u enabled)" = "1" ] && [ ! -f "$PLUMB_DOWN" ]; then
+    if [ -z "$_pid" ] && [ "$(u enabled)" = "1" ] && ! plumb_down_held; then
         engine_gone
         if [ "$_healed" = "(nodns)" ]; then
             # Пересобираем состояние: в журнал -- то, что стало.
@@ -156,7 +175,7 @@ watch_heal() {
         engine_back
     fi
     if [ -n "$_pid" ] && [ "$(u enabled)" = "1" ] &&
-       [ "$(u guard)" != "0" ] && [ ! -f "$PLUMB_DOWN" ]; then
+       [ "$(u guard)" != "0" ] && ! plumb_down_held; then
         # Вхождением, а не равенством: в списке резолверов бывают доменные
         # записи пользователя, при равенстве сторож чинил бы исправное
         # каждые пять минут.
@@ -434,7 +453,7 @@ cmd_pulse() {
     _pm=$(date +%M); _pm=${_pm#0}
     [ $(( ${_pm:-0} % 5 )) = 0 ] && return 0
     [ "$(u enabled)" = "1" ] || return 0
-    [ -f "$PLUMB_DOWN" ] && return 0
+    plumb_down_held && return 0
     _pid=$(xray_pid)
     _healed=""
     if [ -z "$_pid" ]; then
