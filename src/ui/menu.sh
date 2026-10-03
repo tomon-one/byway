@@ -140,6 +140,9 @@ m_lists() {
     _dl=$(merged_domains)
     _sl=$LISTS/subnets.lst
     while :; do
+        # Кэш пересобирается при каждом обращении: после добавления домена
+        # проверка «уже есть» и счёт судили по прежнему содержимому.
+        _dl=$(merged_domains)
         m_head "Списки"
         printf "$(_t "  доменов %s, подсетей %s\n\n")" \
             "$(count_list "$_dl" 2>/dev/null || echo 0)" \
@@ -156,18 +159,24 @@ m_lists() {
           1) echo; grep -vE "^[[:space:]]*$" "$_dl" 2>/dev/null | more || true; m_pause ;;
           2) echo; m_ask "Домен"
              if [ -n "$REPLY" ]; then
+                 # Проверка -- по объединённому списку, запись -- в свой файл:
+                 # объединённый кэш пересобирается из своего и пресетов, и
+                 # дописанное в него пропадало при первой же сборке.
                  if grep -qxF "$REPLY" "$_dl" 2>/dev/null; then
                      printf "$(_t "\n  уже есть\n")"
                  else
-                     printf "%s\n" "$REPLY" >> "$_dl"
+                     [ ! -s "$LISTS/domains.lst" ] || [ -z "$(tail -c1 "$LISTS/domains.lst")" ] ||
+                         printf '\n' >> "$LISTS/domains.lst"
+                     printf "%s\n" "$REPLY" >> "$LISTS/domains.lst"
                      printf "$(_t "\n  добавлено\n")"; m_apply
                  fi
              fi
              m_pause ;;
           3) echo; m_ask "Домен"
              if [ -n "$REPLY" ]; then
-                 if grep -qxF "$REPLY" "$_dl" 2>/dev/null; then
-                     grep -vxF "$REPLY" "$_dl" > "$_dl.new" && mv "$_dl.new" "$_dl"
+                 if grep -qxF "$REPLY" "$LISTS/domains.lst" 2>/dev/null; then
+                     grep -vxF "$REPLY" "$LISTS/domains.lst" > "$LISTS/domains.lst.new" &&
+                         mv "$LISTS/domains.lst.new" "$LISTS/domains.lst"
                      printf "$(_t "\n  убрано\n")"; m_apply
                  else
                      printf "$(_t "\n  такой записи нет\n")"
@@ -258,7 +267,7 @@ m_transfer() {
              echo; cmd_export "${REPLY:-/tmp/settings-byway.txt}" --no-key || true
              m_pause ;;
           2) echo; m_ask "Куда сохранить [/tmp/settings-byway.txt]"
-             echo; cmd_export "${REPLY:-/tmp/settings-byway.txt}" || true
+             echo; cmd_export "${REPLY:-/tmp/settings-byway.txt}" --with-key || true
              m_pause ;;
           3) echo; m_ask "Файл"
              if [ -n "$REPLY" ]; then

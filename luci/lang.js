@@ -159,6 +159,7 @@ var DICT = {
 		"Применение": "Applying",
 		"Идёт пересборка и перезапуск": "Rebuilding and restarting",
 		"Не применилось — работает прежняя настройка.": "Not applied — the previous setting is running.",
+		"Конфиг собран, но служба не перезапущена — нажмите «Перезапустить» на вкладке «Основное»": "The config was built, but the service was not restarted — press “Restart” on the Main tab",
 		"Обслуживание": "Maintenance",
 		"Полное состояние": "Full status",
 		"Сводка": "Summary",

@@ -1106,7 +1106,7 @@ fi
 # записывается всегда, и мёртвый путь (ядро не пережило sysupgrade, пакет
 # снят) тоже ищется заново: прежде непустой xray_bin не трогали вовсе, и
 # служба не стартовала с новым ядром на диске.
-_xb=$(uci -q get byway.main.xray_bin)
+_xb=$(uci -q get byway.main.xray_bin || true)
 if [ -n "$XRAY_PATH" ] || [ -z "$_xb" ] || [ ! -x "$_xb" ]; then
     if [ -z "$XRAY_PATH" ]; then
         if command -v xray >/dev/null 2>&1; then
@@ -1337,7 +1337,9 @@ echo
 # и три шага ему нужнее всего.
 # Настроен -- любым из способов: ключ, список ключей, свой конфиг. Прежде
 # смотрели только node_url, и автовыбор после обновления жил на старой сборке.
-_cfgd=$(uci -q get byway.main.node_url 2>/dev/null)$(uci -q get byway.main.node_urls 2>/dev/null)$(uci -q get byway.main.outbound_json 2>/dev/null)
+# `|| true` у каждой: uci отвечает 1 на пустую опцию, а под set -e голое
+# присваивание обрывало установку и откатывало обновление.
+_cfgd=$(uci -q get byway.main.node_url 2>/dev/null || true)$(uci -q get byway.main.node_urls 2>/dev/null || true)$(uci -q get byway.main.outbound_json 2>/dev/null || true)
 if [ "$WAS_INSTALLED" = 1 ] && [ -n "$_cfgd" ]; then
     # Конфиг движка собран ПРЕЖНЕЙ версией программы. Один перезапуск поднял
     # бы движок на нём же: новая программа на диске, работает старая сборка,

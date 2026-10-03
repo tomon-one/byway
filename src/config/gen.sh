@@ -176,8 +176,15 @@ cmd_gen() {
             dief "на флеше свободно %s КБ, для конфига нужно %s -- рабочий не тронут" \
                  "${_have:-0}" "$_need"
         mv "$TMP" "$OUT"
-        # В конфиге uuid ключа: читать должен только root.
-        chmod 600 "$OUT" 2>/dev/null || true
+        # В конфиге uuid ключа: читают root и, когда движок идёт не от root
+        # (то же условие, что у xray_user_prep в init), группа byway. Голый
+        # 600 оставлял следующий respawn движка без права прочитать конфиг.
+        if [ "$(u xray_root)" != "1" ] && [ -x /sbin/ujail ] &&
+           chgrp byway "$OUT" 2>/dev/null; then
+            chmod 640 "$OUT" 2>/dev/null || true
+        else
+            chmod 600 "$OUT" 2>/dev/null || true
+        fi
         sayf "конфиг собран и проверен движком: %s (%s байт)" "$OUT" "$(wc -c < "$OUT")"
         _own=$(count_list "$D")
         _all=$(count_list "$MERGED")
@@ -213,7 +220,7 @@ gen_routes() {
     # До главного ключа: разбор ссылки пишет в общие N_*, и главный должен
     # разобраться последним, иначе сводка расскажет про чужую ноду. Пояснение
     # внутри ROUTE_RULES: без направлений оно не должно попасть в конфиг.
-    ROUTE_OUT=""; ROUTE_HOSTS=""; ROUTE_N=0
+    ROUTE_OUT=""; ROUTE_HOSTS=""; ROUTE_N=0; ROUTE_OK=""
     ROUTE_RULES="
       // Направления идут ПЕРЕД общими правилами: Xray берёт первое
       // совпавшее, и домен, попавший и сюда, и в общий список, уходит
@@ -266,6 +273,7 @@ $_rd
 $_rs
         ], \"outboundTag\": \"route-$_rn\" },"
         ROUTE_N=$((ROUTE_N + 1))
+        ROUTE_OK="$ROUTE_OK $_rn"
     done
     [ "$ROUTE_N" = 0 ] && ROUTE_RULES=""
 
@@ -276,8 +284,10 @@ $_rs
         MAINDOM=/tmp/byway-domains-main.lst
         _rall=/tmp/byway-domains-routes.lst
         : > "$_rall"
-        for _rn2 in $(route_names); do
-            [ "$(uci -q get "byway.$_rn2.enabled")" = "0" ] && continue
+        # Только направления, получившие правило: домены пропущенного
+        # (нет ключа, негодный ключ) остаются в общем и идут в основной
+        # туннель, а не повисают без правила.
+        for _rn2 in $ROUTE_OK; do
             [ -f "$ROUTES_DIR/$_rn2.lst" ] && route_list "$ROUTES_DIR/$_rn2.lst" dom >> "$_rall"
         done
         grep -Fvxf "$_rall" "$MERGED" > "$MAINDOM" 2>/dev/null || cp "$MERGED" "$MAINDOM"

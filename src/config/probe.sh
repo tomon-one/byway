@@ -36,7 +36,10 @@ cmd_probe() {
     XP=""
     # Ловушка -- до записи конфига: выход по «отвергнут ядром» иначе оставил бы
     # файл с uuid в /tmp.
-    trap '[ -n "$XP" ] && kill $XP 2>/dev/null; : > "$CFG" 2>/dev/null; : > "$LOG" 2>/dev/null; : > /tmp/byway-probe.out 2>/dev/null' EXIT INT TERM
+    # `|| true`: движок к выходу обычно уже убит, kill по нему отвечает 1, и под
+    # set -e ловушка обрывалась с кодом 1 -- проверка рабочего ключа
+    # заканчивалась неудачей.
+    trap '[ -z "$XP" ] || kill $XP 2>/dev/null || true; : > "$CFG" 2>/dev/null; : > "$LOG" 2>/dev/null; : > /tmp/byway-probe.out 2>/dev/null' EXIT INT TERM
     umask 077
     cat > "$CFG" <<PROBE
 {
@@ -75,6 +78,9 @@ PROBE
         grep -iE "fail|error|reject" "$LOG" | tail -2 | sed 's/^/      /'
     fi
     : > "$CFG"; : > "$LOG"; : > /tmp/byway-probe.out
+    # Код возврата -- исход проверки: probe --all по нему считает «работают N
+    # из M», а последняя команда выше успешна всегда.
+    [ "$OKC" = "1" ]
 }
 
 # ── разбор ссылки без единого соединения ───────────────────────────────────

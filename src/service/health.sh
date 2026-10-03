@@ -72,6 +72,11 @@ cmd_health() {
         if [ "$N_PROTO" = "raw" ]; then
             printf "$(_t 'vpn\twarn\tсвой конфиг: адрес сервера неизвестен\n')"
             _ms=-1
+        elif node_udp; then
+            # Сервер слушает UDP: TCP-замер к нему всегда «не отвечает» при
+            # рабочем туннеле. Работу туннеля показывает шаг tunnel ниже.
+            printf "$(_t 'vpn\twarn\tсервер на UDP: задержка не меряется\n')"
+            _ms=-1
         fi
         # Две попытки: одиночный замер изредка не укладывается в таймаут.
         [ "${_ms:-0}" = "-1" ] || _ms=0
@@ -147,6 +152,12 @@ _proc_age() {
     echo $(( _pu - _ps / 100 ))
 }
 
+# Сервер ключа слушает UDP (hysteria2, wireguard, mKCP): замер TCP-соединением
+# к нему не годится. Читает N_* после parse_node.
+node_udp() {
+    [ "$N_PROTO" = "hysteria" ] || [ "$N_PROTO" = "wireguard" ] || [ "$N_TYPE" = "kcp" ]
+}
+
 # vpn при автовыборе: все ключи разом, в фоне (по очереди десяток не уложился
 # бы в 20 с панели); ответ -- сколько отвечают и лучшая задержка.
 health_urltest() {
@@ -156,20 +167,25 @@ health_urltest() {
     for _hk in $(uci -q get byway.main.node_urls 2>/dev/null); do
         _hn=$((_hn + 1))
         ( parse_node "$_hk" >/dev/null 2>&1 || exit 0
+          if node_udp; then echo udp > "$_hd/$_hn"; exit 0; fi
           curl -s -o /dev/null --connect-timeout 3 --max-time 4 -w '%{time_connect}' \
                "http://$N_HOST:$N_PORT" > "$_hd/$_hn" 2>/dev/null ) &
     done
     wait
-    _hok=0; _hbest=0
+    _hok=0; _hbest=0; _hu=0
     for _hf in "$_hd"/*; do
         [ -f "$_hf" ] || continue
+        # UDP-ключ в замер не входит и в «N из M» не считается.
+        if [ "$(cat "$_hf" 2>/dev/null)" = udp ]; then _hu=$((_hu + 1)); _hn=$((_hn - 1)); continue; fi
         _hm=$(awk '{ printf "%d", $1 * 1000 }' "$_hf" 2>/dev/null)
         [ "${_hm:-0}" -gt 0 ] || continue
         _hok=$((_hok + 1))
         { [ "$_hbest" = 0 ] || [ "$_hm" -lt "$_hbest" ]; } && _hbest=$_hm
     done
     rm -rf "$_hd" 2>/dev/null || true
-    if [ "$_hok" = 0 ]; then
+    if [ "$_hok" = 0 ] && [ "$_hu" -gt 0 ] && [ "$_hn" = 0 ]; then
+        printf "$(_t 'vpn\twarn\tсерверы на UDP: задержка не меряется\n')"
+    elif [ "$_hok" = 0 ]; then
         _hfail vpn "$(_t 'не отвечает ни один ключ')"
     elif [ "$_hok" = "$_hn" ]; then
         printf "$(_t 'vpn\tok\tотвечают %s из %s ключей, лучший — %s мс\n')" "$_hok" "$_hn" "$_hbest"

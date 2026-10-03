@@ -712,3 +712,5 @@ header и seed у mkcp удалены в Xray-core с 26.1.31 и в конфиг
 архив %s не сошёлся с суммой, вшитой в byway для проверенной версии — отброшен, ничего не тронуто	archive %s does not match the checksum built into byway for the tested version — discarded, nothing touched
 метка остановки от умершего процесса %s снята -- служба запускается	stop marker left by dead process %s removed -- starting the service
 настройка %s содержит управляющие знаки и не годится для %s, взято %s	setting %s contains control characters and is not usable for %s, using %s
+vpn\twarn\tсервер на UDP: задержка не меряется\n	vpn\twarn\tUDP server: latency is not measured\n
+vpn\twarn\tсерверы на UDP: задержка не меряется\n	vpn\twarn\tUDP servers: latency is not measured\n

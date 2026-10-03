@@ -1537,8 +1537,15 @@ cmd_gen() {
             dief "на флеше свободно %s КБ, для конфига нужно %s -- рабочий не тронут" \
                  "${_have:-0}" "$_need"
         mv "$TMP" "$OUT"
-        # В конфиге uuid ключа: читать должен только root.
-        chmod 600 "$OUT" 2>/dev/null || true
+        # В конфиге uuid ключа: читают root и, когда движок идёт не от root
+        # (то же условие, что у xray_user_prep в init), группа byway. Голый
+        # 600 оставлял следующий respawn движка без права прочитать конфиг.
+        if [ "$(u xray_root)" != "1" ] && [ -x /sbin/ujail ] &&
+           chgrp byway "$OUT" 2>/dev/null; then
+            chmod 640 "$OUT" 2>/dev/null || true
+        else
+            chmod 600 "$OUT" 2>/dev/null || true
+        fi
         sayf "конфиг собран и проверен движком: %s (%s байт)" "$OUT" "$(wc -c < "$OUT")"
         _own=$(count_list "$D")
         _all=$(count_list "$MERGED")
@@ -1574,7 +1581,7 @@ gen_routes() {
     # До главного ключа: разбор ссылки пишет в общие N_*, и главный должен
     # разобраться последним, иначе сводка расскажет про чужую ноду. Пояснение
     # внутри ROUTE_RULES: без направлений оно не должно попасть в конфиг.
-    ROUTE_OUT=""; ROUTE_HOSTS=""; ROUTE_N=0
+    ROUTE_OUT=""; ROUTE_HOSTS=""; ROUTE_N=0; ROUTE_OK=""
     ROUTE_RULES="
       // Направления идут ПЕРЕД общими правилами: Xray берёт первое
       // совпавшее, и домен, попавший и сюда, и в общий список, уходит
@@ -1627,6 +1634,7 @@ $_rd
 $_rs
         ], \"outboundTag\": \"route-$_rn\" },"
         ROUTE_N=$((ROUTE_N + 1))
+        ROUTE_OK="$ROUTE_OK $_rn"
     done
     [ "$ROUTE_N" = 0 ] && ROUTE_RULES=""
 
@@ -1637,8 +1645,10 @@ $_rs
         MAINDOM=/tmp/byway-domains-main.lst
         _rall=/tmp/byway-domains-routes.lst
         : > "$_rall"
-        for _rn2 in $(route_names); do
-            [ "$(uci -q get "byway.$_rn2.enabled")" = "0" ] && continue
+        # Только направления, получившие правило: домены пропущенного
+        # (нет ключа, негодный ключ) остаются в общем и идут в основной
+        # туннель, а не повисают без правила.
+        for _rn2 in $ROUTE_OK; do
             [ -f "$ROUTES_DIR/$_rn2.lst" ] && route_list "$ROUTES_DIR/$_rn2.lst" dom >> "$_rall"
         done
         grep -Fvxf "$_rall" "$MERGED" > "$MAINDOM" 2>/dev/null || cp "$MERGED" "$MAINDOM"
@@ -2138,7 +2148,10 @@ cmd_probe() {
     XP=""
     # Ловушка -- до записи конфига: выход по «отвергнут ядром» иначе оставил бы
     # файл с uuid в /tmp.
-    trap '[ -n "$XP" ] && kill $XP 2>/dev/null; : > "$CFG" 2>/dev/null; : > "$LOG" 2>/dev/null; : > /tmp/byway-probe.out 2>/dev/null' EXIT INT TERM
+    # `|| true`: движок к выходу обычно уже убит, kill по нему отвечает 1, и под
+    # set -e ловушка обрывалась с кодом 1 -- проверка рабочего ключа
+    # заканчивалась неудачей.
+    trap '[ -z "$XP" ] || kill $XP 2>/dev/null || true; : > "$CFG" 2>/dev/null; : > "$LOG" 2>/dev/null; : > /tmp/byway-probe.out 2>/dev/null' EXIT INT TERM
     umask 077
     cat > "$CFG" <<PROBE
 {
@@ -2177,6 +2190,9 @@ PROBE
         grep -iE "fail|error|reject" "$LOG" | tail -2 | sed 's/^/      /'
     fi
     : > "$CFG"; : > "$LOG"; : > /tmp/byway-probe.out
+    # Код возврата -- исход проверки: probe --all по нему считает «работают N
+    # из M», а последняя команда выше успешна всегда.
+    [ "$OKC" = "1" ]
 }
 
 # ── разбор ссылки без единого соединения ───────────────────────────────────
@@ -4630,6 +4646,11 @@ cmd_health() {
         if [ "$N_PROTO" = "raw" ]; then
             printf "$(_t 'vpn\twarn\tсвой конфиг: адрес сервера неизвестен\n')"
             _ms=-1
+        elif node_udp; then
+            # Сервер слушает UDP: TCP-замер к нему всегда «не отвечает» при
+            # рабочем туннеле. Работу туннеля показывает шаг tunnel ниже.
+            printf "$(_t 'vpn\twarn\tсервер на UDP: задержка не меряется\n')"
+            _ms=-1
         fi
         # Две попытки: одиночный замер изредка не укладывается в таймаут.
         [ "${_ms:-0}" = "-1" ] || _ms=0
@@ -4705,6 +4726,12 @@ _proc_age() {
     echo $(( _pu - _ps / 100 ))
 }
 
+# Сервер ключа слушает UDP (hysteria2, wireguard, mKCP): замер TCP-соединением
+# к нему не годится. Читает N_* после parse_node.
+node_udp() {
+    [ "$N_PROTO" = "hysteria" ] || [ "$N_PROTO" = "wireguard" ] || [ "$N_TYPE" = "kcp" ]
+}
+
 # vpn при автовыборе: все ключи разом, в фоне (по очереди десяток не уложился
 # бы в 20 с панели); ответ -- сколько отвечают и лучшая задержка.
 health_urltest() {
@@ -4714,20 +4741,25 @@ health_urltest() {
     for _hk in $(uci -q get byway.main.node_urls 2>/dev/null); do
         _hn=$((_hn + 1))
         ( parse_node "$_hk" >/dev/null 2>&1 || exit 0
+          if node_udp; then echo udp > "$_hd/$_hn"; exit 0; fi
           curl -s -o /dev/null --connect-timeout 3 --max-time 4 -w '%{time_connect}' \
                "http://$N_HOST:$N_PORT" > "$_hd/$_hn" 2>/dev/null ) &
     done
     wait
-    _hok=0; _hbest=0
+    _hok=0; _hbest=0; _hu=0
     for _hf in "$_hd"/*; do
         [ -f "$_hf" ] || continue
+        # UDP-ключ в замер не входит и в «N из M» не считается.
+        if [ "$(cat "$_hf" 2>/dev/null)" = udp ]; then _hu=$((_hu + 1)); _hn=$((_hn - 1)); continue; fi
         _hm=$(awk '{ printf "%d", $1 * 1000 }' "$_hf" 2>/dev/null)
         [ "${_hm:-0}" -gt 0 ] || continue
         _hok=$((_hok + 1))
         { [ "$_hbest" = 0 ] || [ "$_hm" -lt "$_hbest" ]; } && _hbest=$_hm
     done
     rm -rf "$_hd" 2>/dev/null || true
-    if [ "$_hok" = 0 ]; then
+    if [ "$_hok" = 0 ] && [ "$_hu" -gt 0 ] && [ "$_hn" = 0 ]; then
+        printf "$(_t 'vpn\twarn\tсерверы на UDP: задержка не меряется\n')"
+    elif [ "$_hok" = 0 ]; then
         _hfail vpn "$(_t 'не отвечает ни один ключ')"
     elif [ "$_hok" = "$_hn" ]; then
         printf "$(_t 'vpn\tok\tотвечают %s из %s ключей, лучший — %s мс\n')" "$_hok" "$_hn" "$_hbest"
@@ -6925,6 +6957,9 @@ m_lists() {
     _dl=$(merged_domains)
     _sl=$LISTS/subnets.lst
     while :; do
+        # Кэш пересобирается при каждом обращении: после добавления домена
+        # проверка «уже есть» и счёт судили по прежнему содержимому.
+        _dl=$(merged_domains)
         m_head "Списки"
         printf "$(_t "  доменов %s, подсетей %s\n\n")" \
             "$(count_list "$_dl" 2>/dev/null || echo 0)" \
@@ -6941,18 +6976,24 @@ m_lists() {
           1) echo; grep -vE "^[[:space:]]*$" "$_dl" 2>/dev/null | more || true; m_pause ;;
           2) echo; m_ask "Домен"
              if [ -n "$REPLY" ]; then
+                 # Проверка -- по объединённому списку, запись -- в свой файл:
+                 # объединённый кэш пересобирается из своего и пресетов, и
+                 # дописанное в него пропадало при первой же сборке.
                  if grep -qxF "$REPLY" "$_dl" 2>/dev/null; then
                      printf "$(_t "\n  уже есть\n")"
                  else
-                     printf "%s\n" "$REPLY" >> "$_dl"
+                     [ ! -s "$LISTS/domains.lst" ] || [ -z "$(tail -c1 "$LISTS/domains.lst")" ] ||
+                         printf '\n' >> "$LISTS/domains.lst"
+                     printf "%s\n" "$REPLY" >> "$LISTS/domains.lst"
                      printf "$(_t "\n  добавлено\n")"; m_apply
                  fi
              fi
              m_pause ;;
           3) echo; m_ask "Домен"
              if [ -n "$REPLY" ]; then
-                 if grep -qxF "$REPLY" "$_dl" 2>/dev/null; then
-                     grep -vxF "$REPLY" "$_dl" > "$_dl.new" && mv "$_dl.new" "$_dl"
+                 if grep -qxF "$REPLY" "$LISTS/domains.lst" 2>/dev/null; then
+                     grep -vxF "$REPLY" "$LISTS/domains.lst" > "$LISTS/domains.lst.new" &&
+                         mv "$LISTS/domains.lst.new" "$LISTS/domains.lst"
                      printf "$(_t "\n  убрано\n")"; m_apply
                  else
                      printf "$(_t "\n  такой записи нет\n")"
@@ -7043,7 +7084,7 @@ m_transfer() {
              echo; cmd_export "${REPLY:-/tmp/settings-byway.txt}" --no-key || true
              m_pause ;;
           2) echo; m_ask "Куда сохранить [/tmp/settings-byway.txt]"
-             echo; cmd_export "${REPLY:-/tmp/settings-byway.txt}" || true
+             echo; cmd_export "${REPLY:-/tmp/settings-byway.txt}" --with-key || true
              m_pause ;;
           3) echo; m_ask "Файл"
              if [ -n "$REPLY" ]; then
