@@ -293,9 +293,7 @@ gen_dns() {
     # даже без кавычек), входят в EXPORT_KEYS, и значением с `", ...` можно
     # было задать всю конфигурацию Xray, исполняемую от root; `run -test`
     # проверяет только синтаксис. Описка в порте расходила конфиг движка и nft.
-    POOL=$(val_or fakeip_pool "$(u fakeip_pool)" \
-           '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' 198.18.0.0/15 "$(_t 'конфига движка')")
-    pool_sane "$POOL" || POOL=198.18.0.0/15
+    POOL=$(eff_pool loud)
     DNS_UP=$(val_or dns_upstream "$(u dns_upstream)" \
              '^(https|tcp|udp|tls|quic)://[A-Za-z0-9._:/?=&%+-]+$' \
              https://8.8.8.8/dns-query "$(_t 'конфига движка')")

@@ -10,12 +10,15 @@ BLOCK_MARK=/tmp/byway-blocked
 
 block_on() {
     [ "$(u on_failure)" != "open" ] || return 0
-    _ifs=$(u interface); _ifs=${_ifs:-br-lan}
+    _ifs=$(eff_ifs)
     _ifl=$(echo "$_ifs" | awk '{for(i=1;i<=NF;i++) printf "%s\"%s\"", (i>1?", ":""), $i}')
     # Стоящий запрет пересобирается на месте, если сменились режим, сети, IPv6
     # или списки.
     _bsig=$( { u list_mode; echo "$_ifs"; v6on && echo v6; cat "$(merged_domains)" "$(merged_subnets)" 2>/dev/null; } | md5sum | cut -c1-32)
-    if [ -f "$BLOCK_MARK" ] && [ "$(cat "$BLOCK_MARK.sig" 2>/dev/null)" = "$_bsig" ]; then
+    # И стоит ли он в ядре: чужой `nft flush ruleset` снимал таблицу, а запрет
+    # по файлам в /tmp числился стоящим.
+    if [ -f "$BLOCK_MARK" ] && [ "$(cat "$BLOCK_MARK.sig" 2>/dev/null)" = "$_bsig" ] &&
+       block_intact; then
         return 0
     fi
     printf '%s\n' "$_bsig" > "$BLOCK_MARK.sig"
@@ -57,6 +60,7 @@ NFTA
             "$(printf '%s' "$_nfterr" | head -2 | tr '\n' ' ')"
         if nft list table inet "${TABLE}_block" >/dev/null 2>&1; then
             printf 'all\n' > "$BLOCK_MARK"
+            printf 'table\n' > "$BLOCK_MARK.parts"
             # Не «весь трафик»: цепочка отсекает сети вне byway.main.interface.
             warn "туннеля нет, и трафик перечисленных сетей мимо VPN закрыт: так велит настройка «не пускать мимо VPN». Сети вне byway.main.interface запрет не закрывает"
         else
@@ -90,6 +94,7 @@ NFTB
     # Строка про закрытый доступ -- только когда есть что закрывать.
     if [ "${_bl_dom:-0}" -gt 0 ] || [ "${_bl_net:-0}" = 1 ]; then
         printf 'lists\n' > "$BLOCK_MARK"
+        { [ "${_bl_dom:-0}" -gt 0 ] && echo conf; [ "${_bl_net:-0}" = 1 ] && echo table; } > "$BLOCK_MARK.parts"
         warnf "туннеля нет, и доступ к списку закрыт: доменов %s, подсети %s" \
               "$_bl_dom" "$([ "${_bl_net:-0}" = 1 ] && _t да || _t нет)"
     else
@@ -181,5 +186,19 @@ block_off() {
         /etc/init.d/dnsmasq restart >/dev/null 2>&1
     fi
     nft delete table inet "${TABLE}_block" 2>/dev/null || true
-    rm -f "$BLOCK_MARK" "$BLOCK_MARK.sig" 2>/dev/null || true
+    rm -f "$BLOCK_MARK" "$BLOCK_MARK.sig" "$BLOCK_MARK.parts" 2>/dev/null || true
+}
+
+# Стоит ли запрет в ядре и в dnsmasq -- по списку частей, записанному при
+# укладке. Списка нет (запрет от прежней версии) -- судить нечем, верим файлу.
+block_intact() {
+    [ -f "$BLOCK_MARK.parts" ] || return 0
+    for _bp in $(cat "$BLOCK_MARK.parts" 2>/dev/null); do
+        case "$_bp" in
+          table) nft list table inet "${TABLE}_block" >/dev/null 2>&1 || return 1 ;;
+          conf)  _bcd=$(dnsmasq_confdir)
+                 [ -n "$_bcd" ] && [ -f "$_bcd/byway-block.conf" ] || return 1 ;;
+        esac
+    done
+    return 0
 }

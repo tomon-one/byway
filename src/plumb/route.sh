@@ -25,7 +25,7 @@ self_mark() {
     fi
     # Бит не должен пересекаться с mark: пакеты движка ушли бы в таблицу 100 на
     # петлю, а все проверки зелёные (проба отвечает от локального fakedns).
-    _smk=$(nft_val mark "$(u mark)" '^0x[0-9a-fA-F]{1,8}$' 0x100000)
+    _smk=$(eff_mark)
     if [ "$(( _sm & _smk ))" -ne 0 ]; then
         _sm=0x400000
         [ "$(( _sm & _smk ))" -ne 0 ] && _sm=0x800000
@@ -44,7 +44,7 @@ self_mark_dec() {
 # passwall, nikki) занимает ту же таблицу, и его правило принималось за своё.
 # Конец закреплён: «lookup 100» совпадает и с «lookup 1000».
 rule_re() {
-    _rm=$(u mark); _rm=${_rm:-0x100000}
+    _rm=$(eff_mark)
     printf 'fwmark %s(/%s)?[[:space:]]+lookup %s([[:space:]]|$)' "$_rm" "$_rm" "$RT_TABLE"
 }
 
@@ -58,7 +58,7 @@ route_up() {
             warnf "в таблице маршрутизации %s есть чужие маршруты -- byway их не трогает" "$RT_TABLE"
         fi
     fi
-    _mark=$(u mark); _mark=${_mark:-0x100000}
+    _mark=$(eff_mark)
     ip rule show 2>/dev/null | grep -qE "$(rule_re)" ||
         ip rule add fwmark "$_mark/$_mark" lookup "$RT_TABLE"
     # Отметка «маршрут наш»: формой от чужого не отличить; в памяти, как и
@@ -80,7 +80,7 @@ route_up() {
 }
 
 route_down() {
-    _mark=$(u mark); _mark=${_mark:-0x100000}
+    _mark=$(eff_mark)
     while ip rule show 2>/dev/null | grep -qE "$(rule_re)"; do
         ip rule del fwmark "$_mark/$_mark" lookup "$RT_TABLE" 2>/dev/null || break
     done

@@ -143,7 +143,7 @@ plumb_fwrule() {
         # помеченный трафик, а doctor считает правила, не значение. Сверка --
         # до укладки своей таблицы: перезагрузка firewall сносит ruleset
         # целиком.
-        _fwm=$(nft_val mark "$(u mark)" '^0x[0-9a-fA-F]{1,8}$' 0x100000)
+        _fwm=$(eff_mark)
         _fwr=$(uci -q get firewall.bywaytproxy.mark 2>/dev/null || true)
         # Правила нет (удалили, сброс firewall) -- заводим как установщик: без
         # него гостевая зона теряет туннель.
@@ -182,7 +182,8 @@ plumb_wait() {
         _gone=0
         while [ $_i -lt 15 ]; do
             if [ -n "$_probe" ]; then
-                nslookup "$_probe" "$_l" 2>/dev/null | grep -qE "$(fakeip_re)" && break
+                nslookup "$_probe" "$_l" 2>/dev/null | awk '/^Address/{print $NF}' |
+                    grep -qE "^$(fakeip_re)" && break
             else
                 # Списка нет -- достаточно, что резолвер отвечает.
                 nslookup example.com "$_l" >/dev/null 2>&1 && break

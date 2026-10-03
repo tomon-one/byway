@@ -120,12 +120,10 @@ set_elements() {
 }
 
 nft_ruleset() {
-    _pool=$(nft_val fakeip_pool "$(u fakeip_pool)" \
-            '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' 198.18.0.0/15)
-    _mark=$(nft_val mark "$(u mark)" '^0x[0-9a-fA-F]{1,8}$' 0x100000)
+    _pool=$(eff_pool)
+    _mark=$(eff_mark loud)
     _port=$(nft_val tproxy_port "$(u tproxy_port)" '^[0-9]{1,5}$' 1602)
-    _ifs=$(nft_val interface "$(u interface)" \
-           '^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$' br-lan)
+    _ifs=$(eff_ifs loud)
     _iflist=$(echo "$_ifs" | awk '{for(i=1;i<=NF;i++) printf "%s\"%s\"", (i>1?", ":""), $i}')
     _nets=$(set_elements "$(merged_subnets)")
 

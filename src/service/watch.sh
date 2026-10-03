@@ -138,7 +138,8 @@ watch_snapshot() {
         # dns_listen и fakeip_pool совпадают с podkop'овскими. Спрашиваем и
         # свою таблицу nft -- её ставит и снимает только byway.
         if nft list table inet "$TABLE" >/dev/null 2>&1 &&
-           nslookup "$_d" 127.0.0.1 2>/dev/null | grep -qE "$(fakeip_re)"; then
+           nslookup "$_d" 127.0.0.1 2>/dev/null | awk '/^Address/{print $NF}' |
+               grep -qE "^$(fakeip_re)"; then
             _fk=yes
         fi
     fi

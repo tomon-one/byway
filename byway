@@ -305,6 +305,13 @@ take_lock() {   # путь замка, о чём говорить человек
 # Предупреждение в stderr: stdout уходит прямо в `nft -f -`.
 val_or() {   # имя, значение, образец, умолчание, куда идёт
     [ -n "$2" ] || { printf '%s' "$4"; return 0; }
+    # grep судит построчно: значение с годной первой строкой и переводом
+    # строки проходило, и вторая строка попадала в правила nft и конфиги.
+    case "$2" in
+      *[[:cntrl:]]*)
+        warnf "настройка %s содержит управляющие знаки и не годится для %s, взято %s" "$1" "$5" "$4" >&2
+        printf '%s' "$4"; return 0 ;;
+    esac
     if printf '%s' "$2" | grep -qE "$3"; then
         printf '%s' "$2"
     else
@@ -906,12 +913,53 @@ pool_size() {   # 1 -- пул вида a.b.c.d/len
     }'
 }
 
+# Действующие пул, метка и мосты -- одно значение для конфига движка, правил
+# nft, ip rule, запрета и проверок. Каждый читал своё: при негодной настройке
+# движок раздавал один пул, nft ловил другой, проверки искали третий, а ip
+# rule искал метку не в том виде, в каком её печатает ядро. Аргумент
+# «loud» -- предупреждать о негодной настройке (сборка конфига и правил).
+eff_pool() {
+    if [ "${1:-}" = loud ]; then
+        _ep=$(val_or fakeip_pool "$(u fakeip_pool)" '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' 198.18.0.0/15 "$(_t 'конфига движка')")
+        pool_sane "$_ep" || _ep=198.18.0.0/15
+    else
+        _ep=$(val_or fakeip_pool "$(u fakeip_pool)" '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' 198.18.0.0/15 "" 2>/dev/null)
+        pool_sane "$_ep" 2>/dev/null || _ep=198.18.0.0/15
+    fi
+    printf '%s' "$_ep"
+}
+eff_mark() {
+    if [ "${1:-}" = loud ]; then
+        _em=$(nft_val mark "$(u mark)" '^0x[0-9a-fA-F]{1,8}$' 0x100000)
+    else
+        _em=$(nft_val mark "$(u mark)" '^0x[0-9a-fA-F]{1,8}$' 0x100000 2>/dev/null)
+    fi
+    # Как печатает ip rule show: строчными, без ведущих нулей.
+    printf '0x%x' "$((_em))"
+}
+eff_ifs() {
+    if [ "${1:-}" = loud ]; then
+        nft_val interface "$(u interface)" '^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$' br-lan
+    else
+        nft_val interface "$(u interface)" '^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$' br-lan 2>/dev/null
+    fi
+}
+
+# Образец адреса из пула -- по всему пулу, а не по двум первым октетам: пул
+# шире /16 давал ложное «движок не отвечает» на трёх адресах из четырёх.
+# Без якоря слева: потребитель сам ставит ^ перед адресом.
 fakeip_re() {
-    _fp=$(u fakeip_pool); _fp=${_fp:-198.18.0.0/15}
-    case "$_fp" in
-        198.18.0.0/15) printf '198\.1[89]\.' ;;
-        *) printf '%s\.' "$(echo "$_fp" | cut -d. -f1-2 | sed 's/\./\\./g')" ;;
-    esac
+    eff_pool | awk -F'[./]' '{
+        l = $5 + 0; o[1] = $1; o[2] = $2; o[3] = $3; o[4] = $4
+        full = int(l / 8); rem = l % 8; re = ""
+        for (i = 1; i <= full; i++) re = re o[i] "\\."
+        if (rem > 0) {
+            sz = 2 ^ (8 - rem); b = int(o[full + 1] / sz) * sz; alt = ""
+            for (v = b; v < b + sz; v++) alt = alt (alt == "" ? "" : "|") v
+            re = re "(" alt ")" (full == 3 ? "([^0-9]|$)" : "\\.")
+        }
+        printf "%s", re
+    }'
 }
 
 # Порт входа для собственного трафика роутера; пусто -- не заворачивать
@@ -1579,9 +1627,7 @@ gen_dns() {
     # даже без кавычек), входят в EXPORT_KEYS, и значением с `", ...` можно
     # было задать всю конфигурацию Xray, исполняемую от root; `run -test`
     # проверяет только синтаксис. Описка в порте расходила конфиг движка и nft.
-    POOL=$(val_or fakeip_pool "$(u fakeip_pool)" \
-           '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' 198.18.0.0/15 "$(_t 'конфига движка')")
-    pool_sane "$POOL" || POOL=198.18.0.0/15
+    POOL=$(eff_pool loud)
     DNS_UP=$(val_or dns_upstream "$(u dns_upstream)" \
              '^(https|tcp|udp|tls|quic)://[A-Za-z0-9._:/?=&%+-]+$' \
              https://8.8.8.8/dns-query "$(_t 'конфига движка')")
@@ -2764,7 +2810,7 @@ self_mark() {
     fi
     # Бит не должен пересекаться с mark: пакеты движка ушли бы в таблицу 100 на
     # петлю, а все проверки зелёные (проба отвечает от локального fakedns).
-    _smk=$(nft_val mark "$(u mark)" '^0x[0-9a-fA-F]{1,8}$' 0x100000)
+    _smk=$(eff_mark)
     if [ "$(( _sm & _smk ))" -ne 0 ]; then
         _sm=0x400000
         [ "$(( _sm & _smk ))" -ne 0 ] && _sm=0x800000
@@ -2783,7 +2829,7 @@ self_mark_dec() {
 # passwall, nikki) занимает ту же таблицу, и его правило принималось за своё.
 # Конец закреплён: «lookup 100» совпадает и с «lookup 1000».
 rule_re() {
-    _rm=$(u mark); _rm=${_rm:-0x100000}
+    _rm=$(eff_mark)
     printf 'fwmark %s(/%s)?[[:space:]]+lookup %s([[:space:]]|$)' "$_rm" "$_rm" "$RT_TABLE"
 }
 
@@ -2797,7 +2843,7 @@ route_up() {
             warnf "в таблице маршрутизации %s есть чужие маршруты -- byway их не трогает" "$RT_TABLE"
         fi
     fi
-    _mark=$(u mark); _mark=${_mark:-0x100000}
+    _mark=$(eff_mark)
     ip rule show 2>/dev/null | grep -qE "$(rule_re)" ||
         ip rule add fwmark "$_mark/$_mark" lookup "$RT_TABLE"
     # Отметка «маршрут наш»: формой от чужого не отличить; в памяти, как и
@@ -2819,7 +2865,7 @@ route_up() {
 }
 
 route_down() {
-    _mark=$(u mark); _mark=${_mark:-0x100000}
+    _mark=$(eff_mark)
     while ip rule show 2>/dev/null | grep -qE "$(rule_re)"; do
         ip rule del fwmark "$_mark/$_mark" lookup "$RT_TABLE" 2>/dev/null || break
     done
@@ -2968,12 +3014,10 @@ set_elements() {
 }
 
 nft_ruleset() {
-    _pool=$(nft_val fakeip_pool "$(u fakeip_pool)" \
-            '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' 198.18.0.0/15)
-    _mark=$(nft_val mark "$(u mark)" '^0x[0-9a-fA-F]{1,8}$' 0x100000)
+    _pool=$(eff_pool)
+    _mark=$(eff_mark loud)
     _port=$(nft_val tproxy_port "$(u tproxy_port)" '^[0-9]{1,5}$' 1602)
-    _ifs=$(nft_val interface "$(u interface)" \
-           '^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$' br-lan)
+    _ifs=$(eff_ifs loud)
     _iflist=$(echo "$_ifs" | awk '{for(i=1;i<=NF;i++) printf "%s\"%s\"", (i>1?", ":""), $i}')
     _nets=$(set_elements "$(merged_subnets)")
 
@@ -3415,12 +3459,15 @@ BLOCK_MARK=/tmp/byway-blocked
 
 block_on() {
     [ "$(u on_failure)" != "open" ] || return 0
-    _ifs=$(u interface); _ifs=${_ifs:-br-lan}
+    _ifs=$(eff_ifs)
     _ifl=$(echo "$_ifs" | awk '{for(i=1;i<=NF;i++) printf "%s\"%s\"", (i>1?", ":""), $i}')
     # Стоящий запрет пересобирается на месте, если сменились режим, сети, IPv6
     # или списки.
     _bsig=$( { u list_mode; echo "$_ifs"; v6on && echo v6; cat "$(merged_domains)" "$(merged_subnets)" 2>/dev/null; } | md5sum | cut -c1-32)
-    if [ -f "$BLOCK_MARK" ] && [ "$(cat "$BLOCK_MARK.sig" 2>/dev/null)" = "$_bsig" ]; then
+    # И стоит ли он в ядре: чужой `nft flush ruleset` снимал таблицу, а запрет
+    # по файлам в /tmp числился стоящим.
+    if [ -f "$BLOCK_MARK" ] && [ "$(cat "$BLOCK_MARK.sig" 2>/dev/null)" = "$_bsig" ] &&
+       block_intact; then
         return 0
     fi
     printf '%s\n' "$_bsig" > "$BLOCK_MARK.sig"
@@ -3462,6 +3509,7 @@ NFTA
             "$(printf '%s' "$_nfterr" | head -2 | tr '\n' ' ')"
         if nft list table inet "${TABLE}_block" >/dev/null 2>&1; then
             printf 'all\n' > "$BLOCK_MARK"
+            printf 'table\n' > "$BLOCK_MARK.parts"
             # Не «весь трафик»: цепочка отсекает сети вне byway.main.interface.
             warn "туннеля нет, и трафик перечисленных сетей мимо VPN закрыт: так велит настройка «не пускать мимо VPN». Сети вне byway.main.interface запрет не закрывает"
         else
@@ -3495,6 +3543,7 @@ NFTB
     # Строка про закрытый доступ -- только когда есть что закрывать.
     if [ "${_bl_dom:-0}" -gt 0 ] || [ "${_bl_net:-0}" = 1 ]; then
         printf 'lists\n' > "$BLOCK_MARK"
+        { [ "${_bl_dom:-0}" -gt 0 ] && echo conf; [ "${_bl_net:-0}" = 1 ] && echo table; } > "$BLOCK_MARK.parts"
         warnf "туннеля нет, и доступ к списку закрыт: доменов %s, подсети %s" \
               "$_bl_dom" "$([ "${_bl_net:-0}" = 1 ] && _t да || _t нет)"
     else
@@ -3586,7 +3635,21 @@ block_off() {
         /etc/init.d/dnsmasq restart >/dev/null 2>&1
     fi
     nft delete table inet "${TABLE}_block" 2>/dev/null || true
-    rm -f "$BLOCK_MARK" "$BLOCK_MARK.sig" 2>/dev/null || true
+    rm -f "$BLOCK_MARK" "$BLOCK_MARK.sig" "$BLOCK_MARK.parts" 2>/dev/null || true
+}
+
+# Стоит ли запрет в ядре и в dnsmasq -- по списку частей, записанному при
+# укладке. Списка нет (запрет от прежней версии) -- судить нечем, верим файлу.
+block_intact() {
+    [ -f "$BLOCK_MARK.parts" ] || return 0
+    for _bp in $(cat "$BLOCK_MARK.parts" 2>/dev/null); do
+        case "$_bp" in
+          table) nft list table inet "${TABLE}_block" >/dev/null 2>&1 || return 1 ;;
+          conf)  _bcd=$(dnsmasq_confdir)
+                 [ -n "$_bcd" ] && [ -f "$_bcd/byway-block.conf" ] || return 1 ;;
+        esac
+    done
+    return 0
 }
 
 # cmd_plumb on|off|close -- единственный вход для службы и сторожа, под замком.
@@ -3734,7 +3797,7 @@ plumb_fwrule() {
         # помеченный трафик, а doctor считает правила, не значение. Сверка --
         # до укладки своей таблицы: перезагрузка firewall сносит ruleset
         # целиком.
-        _fwm=$(nft_val mark "$(u mark)" '^0x[0-9a-fA-F]{1,8}$' 0x100000)
+        _fwm=$(eff_mark)
         _fwr=$(uci -q get firewall.bywaytproxy.mark 2>/dev/null || true)
         # Правила нет (удалили, сброс firewall) -- заводим как установщик: без
         # него гостевая зона теряет туннель.
@@ -3773,7 +3836,8 @@ plumb_wait() {
         _gone=0
         while [ $_i -lt 15 ]; do
             if [ -n "$_probe" ]; then
-                nslookup "$_probe" "$_l" 2>/dev/null | grep -qE "$(fakeip_re)" && break
+                nslookup "$_probe" "$_l" 2>/dev/null | awk '/^Address/{print $NF}' |
+                    grep -qE "^$(fakeip_re)" && break
             else
                 # Списка нет -- достаточно, что резолвер отвечает.
                 nslookup example.com "$_l" >/dev/null 2>&1 && break
@@ -3937,7 +4001,8 @@ watch_snapshot() {
         # dns_listen и fakeip_pool совпадают с podkop'овскими. Спрашиваем и
         # свою таблицу nft -- её ставит и снимает только byway.
         if nft list table inet "$TABLE" >/dev/null 2>&1 &&
-           nslookup "$_d" 127.0.0.1 2>/dev/null | grep -qE "$(fakeip_re)"; then
+           nslookup "$_d" 127.0.0.1 2>/dev/null | awk '/^Address/{print $NF}' |
+               grep -qE "^$(fakeip_re)"; then
             _fk=yes
         fi
     fi
