@@ -515,7 +515,6 @@ byway возьмёт другое значение сам; задать своё
 путь к движку не записался в настройки: uci set byway.main.xray_bin=%s && uci commit byway	the engine path was not saved to the settings: uci set byway.main.xray_bin=%s && uci commit byway
 нет unzip — поставить: %s unzip	unzip is missing — install it: %s unzip
 нет sha256sum — сверить архив нечем, замена не начата	sha256sum is missing — nothing to verify the archive with, replacement not started
-на этом процессоре сборки Xray-core с GitHub не запускаются — движок обновляется пакетом OpenWrt: apk upgrade xray-core либо opkg upgrade xray-core	Xray-core builds from GitHub do not run on this CPU — the engine is updated as an OpenWrt package: apk upgrade xray-core or opkg upgrade xray-core
 неизвестно, какой файл выпуска брать для %s	no known release file for %s
 ядро Xray не указано или не запускается (byway.main.xray_bin)	Xray core is not set or does not start (byway.main.xray_bin)
 стоит Xray %s; есть ли новее — неизвестно: GitHub не ответил	Xray %s is installed; whether there is a newer one is unknown: GitHub did not answer
@@ -564,7 +563,6 @@ GitHub не ответил — номер свежей версии неизве
 служба запущена с прежним движком — ничего не заменено	the service is started with the previous engine — nothing replaced
 возврат %s из архива	restoring %s from the archive
 возвращён %s	%s restored
-ни новое, ни прежнее ядро не легло на флеш — туннеля нет. Архив прежнего: %s (в памяти, до перезагрузки); поставить: unzip -p %s xray > %s && chmod 755 %s && /etc/init.d/byway start	neither the new nor the previous engine fit on flash — no tunnel. Archive of the previous one: %s (in memory, until reboot); install: unzip -p %s xray > %s && chmod 755 %s && /etc/init.d/byway start
 движок заменён: %s -> %s	engine replaced: %s -> %s
 движок: %s не поднялся, возвращён %s	engine: %s did not come up, %s restored
 движок: %s не встал, возвращён %s	engine: %s did not install, %s restored
@@ -723,3 +721,11 @@ vpn\twarn\tсерверы на UDP: задержка не меряется\n	vpn
 словарь не совпал с подписанным выпуском — язык не переключён	the dictionary does not match the signed release — language not switched
 BYWAY_NO_VERIFY=1: подпись выпуска не проверяется	BYWAY_NO_VERIFY=1: the release signature is not checked
 свой конфиг — не один JSON-объект аутбаунда: проверить скобки и кавычки	custom config is not a single outbound JSON object: check brackets and quotes
+идёт замена — прерывать нельзя	the replacement is in progress — do not interrupt
+автообновление выпуск %s больше не поставит	auto-update will not install release %s again
+нет модуля ядра %s — поставить: %s kmod-nft-tproxy kmod-nft-socket	kernel module %s is missing — install: %s kmod-nft-tproxy kmod-nft-socket
+на этом процессоре сборки Xray-core с GitHub не запускаются — движок ставится и обновляется пакетом OpenWrt: %s xray-core	Xray-core builds from GitHub do not run on this CPU — the core is installed and updated as an OpenWrt package: %s xray-core
+сборка Xray-core с GitHub на этом процессоре не запускалась — ядро ставится пакетом: %s xray-core	the Xray-core build from GitHub did not run on this CPU — install the core as a package: %s xray-core
+прежний движок — своя сборка (%s): копия для отката сжимается в память	the current core is a custom build (%s): a rollback copy is being compressed into memory
+копию своей сборки для отката не сделать — замена не начата	cannot make a rollback copy of the custom build — replacement not started
+ни новое, ни прежнее ядро не легло на флеш — туннеля нет. Архив прежнего: %s (в памяти, до перезагрузки); поставить: %s > %s && chmod 755 %s && /etc/init.d/byway start	neither the new nor the previous core fit on flash — no tunnel. Archive of the previous one: %s (in memory, until reboot); install: %s > %s && chmod 755 %s && /etc/init.d/byway start

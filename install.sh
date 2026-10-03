@@ -76,7 +76,6 @@ t() {
       "движок записан в настройки: %s") printf %s "the core is recorded in the settings: %s" ;;
       "движок не найден: byway установлен, но служба не поднимется") printf %s "core not found: byway is installed, but the service will not start" ;;
       "  указать путь: uci set byway.main.xray_bin=/путь/к/xray && uci commit byway") printf %s "  set the path: uci set byway.main.xray_bin=/path/to/xray && uci commit byway" ;;
-      "движок не поднялся — смотреть: logread -e byway") printf %s "the core did not come up — see: logread -e byway" ;;
       "движок уже указан в настройках: %s") printf %s "the core is already set in the settings: %s" ;;
       "не удалось записать %s — проверить место на флеше и права") printf %s "could not write %s — check free flash and permissions" ;;
       "файлы byway рядом со скриптом неполные, не хватает:%s") printf %s "byway files next to the script are INCOMPLETE, missing:%s" ;;
@@ -147,6 +146,9 @@ t() {
       "подпись выпуска проверить нечем — установка отменена; без проверки: BYWAY_NO_VERIFY=1 в начале команды установки") printf %s "nothing to check the release signature with — installation cancelled; without the check: BYWAY_NO_VERIFY=1 at the start of the install command" ;;
       "архив byway не совпал с подписанным выпуском — подменён или повреждён; установка отменена, повторить позже") printf %s "the byway archive does not match the signed release — tampered with or damaged; installation cancelled, try again later" ;;
       "архив не того выпуска: внутри не v%s") printf %s "the archive is from another release: it is not v%s inside" ;;
+      "движок не поднялся или перезапускается по кругу — смотреть: logread -e byway") printf %s "the core did not start or keeps restarting — see: logread -e byway" ;;
+      "  вернуть прежнюю версию: byway update --rollback") printf %s "  return to the previous version: byway update --rollback" ;;
+      "  движок от root вместо пользователя byway: uci set byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway restart") printf %s "  run the core as root instead of the byway user: uci set byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway restart" ;;
       "в архиве есть файлы вне подписанного списка") printf %s "the archive has files outside the signed list" ;;
       "нет usign — подпись выпуска проверить нечем") printf %s "no usign — nothing to check the release signature with" ;;
       "подпись выпуска не сошлась с ключом byway") printf %s "the release signature does not match the byway key" ;;
@@ -221,6 +223,30 @@ linux-riscv64=8c489f330f5155d335a31577780e94d98459425844f200d65a664edfe871a924"
 # продолжает работать по конфигу прежней версии.
 WAS_INSTALLED=0
 [ -f /usr/local/bin/byway ] && WAS_INSTALLED=1
+
+# Копия прежней версии для отката (byway update --rollback). Её делает
+# cmd_update новой версии; обновление с 0.2.4 идёт под СТАРЫМ cmd_update,
+# который целиком копию не делал, -- и первый запуск движка в ujail
+# оставался без отката. Свежая (30 минут) копия -- чужая работа, не
+# трогаем. Список -- как у upd_snapshot, править парой.
+if [ "$WAS_INSTALLED" = 1 ] && [ -z "$(find /etc/byway/prev.tgz -mmin -30 2>/dev/null)" ]; then
+    _us=""
+    for _uf in /usr/local/bin/byway /etc/init.d/byway /usr/local/bin/byway-uninstall \
+               /www/luci-static/resources/view/byway /www/luci-static/resources/byway \
+               /usr/share/luci/menu.d/luci-app-byway.json \
+               /usr/share/rpcd/acl.d/luci-app-byway.json /etc/byway/lang; do
+        [ -e "$_uf" ] && _us="$_us ${_uf#/}"
+    done
+    # shellcheck disable=SC2086
+    if tar czf /etc/byway/prev.tgz.new -C / $_us 2>/dev/null && [ -s /etc/byway/prev.tgz.new ] &&
+       mv /etc/byway/prev.tgz.new /etc/byway/prev.tgz; then
+        chmod 600 /etc/byway/prev.tgz
+    else
+        rm -f /etc/byway/prev.tgz.new 2>/dev/null || true
+    fi
+fi
+# Копия одного скрипта прежних версий: откатом теперь служит prev.tgz.
+rm -f /etc/byway/byway.prev 2>/dev/null || true
 
 # Свободное место на разделе, который переживает перезагрузку. Меряем
 # /overlay, а не корень: корень на OpenWrt -- squashfs, свободного места там
@@ -1365,6 +1391,11 @@ if [ "$WAS_INSTALLED" = 1 ] && [ -n "$_cfgd" ]; then
     # бы движок на нём же: новая программа на диске, работает старая сборка,
     # и человек считает, что обновление ничего не изменило.
     /usr/local/bin/byway gen || warn "конфиг не пересобрался — движок остаётся на прежнем"
+    # Журнал обращений 0.2.4 лежал в /tmp: теперь он в /var/run/byway. Файл,
+    # принадлежащий root, не давал движку от byway открыть свой журнал по
+    # конфигу прежней версии (падал по кругу), а после перехода на новый
+    # оставался бесхозным в памяти.
+    rm -f /tmp/byway-access.log /tmp/byway-access.log.n 2>/dev/null || true
     if [ "$(uci -q get byway.main.enabled)" = "1" ]; then
         # Предупреждаем ДО, а не отчитываемся после: на единственном шлюзе
         # дома перезапуск -- это несколько секунд без туннеля у всех.
@@ -1375,15 +1406,33 @@ if [ "$WAS_INSTALLED" = 1 ] && [ -n "$_cfgd" ]; then
         # rc.common при USE_PROCD=1 берёт его у service_started, а та
         # возвращает 0 на всех ветках. Ветка else не выполнялась никогда.
         /etc/init.d/byway restart || true
-        _rok=0
+        # Процесс самого движка, а не любой с config.json в строке: под ujail
+        # такая строка есть и у обёртки, которая живёт, пока движок падает
+        # и поднимается заново. Номер должен продержаться 10 секунд.
+        xray_pid_now() {
+            for _xp in $(pgrep -f '/etc/byway/config.json' 2>/dev/null); do
+                case "$(readlink "/proc/$_xp/exe" 2>/dev/null)" in
+                  */xray*) echo "$_xp"; return 0 ;;
+                esac
+            done
+            return 1
+        }
+        _rok=0; _xp1=""
         for _rw in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            if pgrep -f '/etc/byway/config.json' >/dev/null 2>&1; then _rok=1; break; fi
+            _xp1=$(xray_pid_now || true)
+            [ -n "$_xp1" ] && break
             sleep 1
         done
+        if [ -n "$_xp1" ]; then
+            sleep 10
+            [ "$(xray_pid_now || true)" = "$_xp1" ] && _rok=1
+        fi
         if [ "$_rok" = 1 ]; then
             say "служба перезапущена на новой версии"
         else
-            warn "движок не поднялся — смотреть: logread -e byway"
+            warn "движок не поднялся или перезапускается по кругу — смотреть: logread -e byway"
+            warn "  вернуть прежнюю версию: byway update --rollback"
+            warn "  движок от root вместо пользователя byway: uci set byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway restart"
         fi
     fi
     if [ "$PANEL" = 1 ]; then

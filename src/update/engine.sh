@@ -10,6 +10,12 @@
 
 # Сборки XTLS на MIPS без сопроцессора не запускаются (только hardfloat) --
 # та же функция в install.sh, править парой.
+# Ядро с GitHub на этом процессоре не запустилось: метка во флеше, чтобы
+# восстановление не качало 14 МБ и не писало 35 МБ на флеш каждые четверть
+# часа (ARM без VFP, x86 без SSE2). Снимается удачной установкой.
+ENG_NOEXEC=/etc/byway/.github-noexec
+eng_noexec_mark() { uname -m > "$ENG_NOEXEC" 2>/dev/null || true; }
+
 eng_mips_nofpu() {
     case "$(uname -m)" in mips*) ;; *) return 1 ;; esac
     # Содержимое, а не [ -s ]: procfs отдаёт нулевой размер.
@@ -168,7 +174,7 @@ cmd_engine() {
     command -v sha256sum >/dev/null 2>&1 ||
         die "нет sha256sum — сверить архив нечем, замена не начата"
     if eng_mips_nofpu; then
-        die "на этом процессоре сборки Xray-core с GitHub не запускаются — движок обновляется пакетом OpenWrt: apk upgrade xray-core либо opkg upgrade xray-core"
+        dief "на этом процессоре сборки Xray-core с GitHub не запускаются — движок ставится и обновляется пакетом OpenWrt: %s xray-core" "$PKG_FIX"
     fi
     ENG_ASSET=$(eng_asset) ||
         dief "неизвестно, какой файл выпуска брать для %s" "$(uname -m)"
@@ -222,6 +228,9 @@ cmd_engine() {
       # служба при старте и сторож.
       restore)
         [ -z "$_eov" ] || { sayf "ядро на месте: Xray %s" "$_eov"; return 0; }
+        # Сборка с GitHub здесь уже не запускалась: качать её снова нечего.
+        [ "$(cat "$ENG_NOEXEC" 2>/dev/null || true)" != "$(uname -m)" ] ||
+            dief "сборка Xray-core с GitHub на этом процессоре не запускалась — ядро ставится пакетом: %s xray-core" "$PKG_FIX"
         _erb=$(uci -q get byway.main.xray_bin 2>/dev/null || true)
         _env=${_erb##*/xray-}
         _env=${_env%%-*}
@@ -248,7 +257,11 @@ cmd_engine() {
     take_lock "$_elk" "$(_t 'замена движка')" || die "замена движка уже идёт"
     # mktemp: атомарно и права 700 (см. cmd_update).
     _ed=$(mktemp -d /tmp/byway-engine.XXXXXX) || { rm -rf "$_elk"; die "не создать рабочий каталог в /tmp"; }
-    trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT INT TERM
+    # INT/TERM -- выйти (EXIT снимет): ловушка без exit оставляла процесс
+    # идти дальше после Ctrl+C уже без рабочего каталога.
+    trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
 
     # Нужная версия уже лежит рядом -- переключение без загрузки.
     if [ -n "$_eov" ] && [ "$_enew" != "$_eold" ] && xray_ok "$_enew" &&
@@ -314,8 +327,10 @@ eng_fresh() {
     eng_put "$_epkg" "$_enew" || die "ядро не распаковалось на флеш — ничего не тронуто"
     if ! "$_enew" version >/dev/null 2>&1; then
         rm -f "$_enew" 2>/dev/null || true
+        eng_noexec_mark
         die "ядро не запускается на этом железе — удалено"
     fi
+    rm -f "$ENG_NOEXEC" 2>/dev/null || true
     eng_bin_set "$_enew"
     logf 'движок поставлен: %s (прежнего не было)' "$_env"
     if [ "$(u enabled)" = "1" ]; then
@@ -332,6 +347,7 @@ eng_side() {
     rm -f "$_epkg" 2>/dev/null || true
     if ! "$_enew" version >/dev/null 2>&1; then
         rm -f "$_enew" 2>/dev/null || true
+        eng_noexec_mark
         die "новое ядро не запускается на этом железе — удалено, работает прежнее"
     fi
     if eng_idle; then
@@ -381,10 +397,22 @@ eng_ram() {
     sayf "места на второе ядро нет (свободно %s МБ) — замена через память" "$(( ${_efree:-0} / 1024 ))"
     # Откат -- из архива прежней версии, он берётся СЕЙЧАС, пока туннель жив.
     # Нет архива -- замена не начинается.
-    sayf "загрузка прежней версии %s — для отката" "$_eov"
-    _erc=0; eng_fetch "$_eov" "$_ed/old.zip" || _erc=$?
-    [ "$_erc" = 0 ] ||
-        dief "архив прежней версии %s не получен — без копии для отката замена не начата" "$_eov"
+    case "$_eold" in
+      /usr/local/bin/xray-*-*)
+        # Своя сборка (xray-26.9.30-h2l, xray-local-*): архив выпуска дал бы
+        # откат на ОФИЦИАЛЬНЫЙ бинарник под именем своей сборки -- без её
+        # правок. Копия -- сам файл, сжатый в память.
+        _eorb=$_ed/old.gz
+        sayf "прежний движок — своя сборка (%s): копия для отката сжимается в память" "$_eold"
+        gzip -c "$_eold" > "$_eorb" 2>/dev/null && [ -s "$_eorb" ] ||
+            die "копию своей сборки для отката не сделать — замена не начата" ;;
+      *)
+        _eorb=$_ed/old.zip
+        sayf "загрузка прежней версии %s — для отката" "$_eov"
+        _erc=0; eng_fetch "$_eov" "$_eorb" || _erc=$?
+        [ "$_erc" = 0 ] ||
+            dief "архив прежней версии %s не получен — без копии для отката замена не начата" "$_eov" ;;
+    esac
 
     warn "остановка службы: туннель пропадёт примерно на минуту"
     # Обрыв ssh (HUP) посреди замены оставлял службу остановленной: старт в
@@ -396,6 +424,15 @@ eng_ram() {
     # снимает plumb on при запуске. Номер процесса в ней: умрёт замена --
     # сторож (plumb_down_held) метку не признает.
     echo $$ > "$PLUMB_DOWN" 2>/dev/null || true
+    # С этой минуты каталог $_ed хранит архив прежнего ядра -- единственное
+    # средство отката. Ctrl+C игнорируется; по TERM выходим, но каталог не
+    # стираем. Прежде ловушка стирала его и шла дальше: замена доходила до
+    # «ни новое, ни прежнее ядро не легло». Обработчик, а не игнор, у TERM:
+    # игнор унаследовал бы start службы (см. Н-1).
+    say "идёт замена — прерывать нельзя"
+    trap '' INT
+    trap 'rm -rf "$_elk" 2>/dev/null; exit 143' TERM
+    trap 'rm -rf "$_elk" 2>/dev/null' EXIT
     sleep 2
     _emk=$(eng_mem_kb || echo 0)
     if [ "$(( ${_emk:-0} * 1024 ))" -lt "$(( _esz + 20971520 ))" ]; then
@@ -429,7 +466,7 @@ eng_ram() {
     /etc/init.d/byway start >/dev/null 2>&1 || true
     say "проверка туннеля на новом движке (до 2,5 минуты)"
     if eng_wait; then
-        rm -f "$_ed/old.zip" 2>/dev/null || true
+        rm -rf "$_ed" 2>/dev/null || true
         logf 'движок заменён: %s -> %s' "$_eov" "$_env"
         sayf "готово: Xray %s, на флеше свободно %s МБ" "$_env" "$(( $(eng_free_kb || echo 0) / 1024 ))"
         return 0
@@ -443,17 +480,19 @@ eng_ram() {
 # Отказ ДО удаления прежнего ядра: оно на месте, достаточно запустить.
 eng_ram_back() {
     /etc/init.d/byway start >/dev/null 2>&1 || true
+    rm -rf "$_ed" 2>/dev/null || true
     die "служба запущена с прежним движком — ничего не заменено"
 }
 
 # Отказ ПОСЛЕ удаления: прежнее ядро -- из архива, скачанного до остановки.
 eng_ram_restore() {
     sayf "возврат %s из архива" "$_eov"
-    if eng_put "$_ed/old.zip" "$_eold"; then
+    if eng_put "$_eorb" "$_eold"; then
         eng_bin_set "$_eold"
         eng_gen "$_eold" || true
         /etc/init.d/byway start >/dev/null 2>&1 || true
         logf 'движок: %s не встал, возвращён %s' "$_env" "$_eov"
+        rm -rf "$_ed" 2>/dev/null || true
         dief "возвращён %s" "$_eov"
     fi
     # Флеш не принял и прежнее ядро. Службу всё равно запускаем: без движка
@@ -464,8 +503,9 @@ eng_ram_restore() {
     trap - EXIT INT TERM
     rm -rf "$_elk" 2>/dev/null || true
     logf 'движок: НИ НОВОЕ, НИ ПРЕЖНЕЕ ядро не легло на флеш -- туннеля нет'
-    dief "ни новое, ни прежнее ядро не легло на флеш — туннеля нет. Архив прежнего: %s (в памяти, до перезагрузки); поставить: unzip -p %s xray > %s && chmod 755 %s && /etc/init.d/byway start" \
-        "$_ed/old.zip" "$_ed/old.zip" "$_eold" "$_eold"
+    case "$_eorb" in *.gz) _eorx="gunzip -c $_eorb" ;; *) _eorx="unzip -p $_eorb xray" ;; esac
+    dief "ни новое, ни прежнее ядро не легло на флеш — туннеля нет. Архив прежнего: %s (в памяти, до перезагрузки); поставить: %s > %s && chmod 755 %s && /etc/init.d/byway start" \
+        "$_eorb" "$_eorx" "$_eold" "$_eold"
 }
 
 # Служба не работает (выключена или нет ключа): туннеля для проверки нет,
@@ -509,7 +549,11 @@ eng_local() {
     take_lock "$_elk" "$(_t 'замена движка')" || die "замена движка уже идёт"
     # mktemp: атомарно и права 700 (см. cmd_update).
     _ed=$(mktemp -d /tmp/byway-engine.XXXXXX) || { rm -rf "$_elk"; die "не создать рабочий каталог в /tmp"; }
-    trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT INT TERM
+    # INT/TERM -- выйти (EXIT снимет): ловушка без exit оставляла процесс
+    # идти дальше после Ctrl+C уже без рабочего каталога.
+    trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     _emk=$(eng_mem_kb || echo 0)
     [ "${_emk:-0}" -ge 40960 ] ||
         dief "памяти доступно %s МБ, для замены нужно не меньше 40 — ничего не тронуто" "$(( ${_emk:-0} / 1024 ))"

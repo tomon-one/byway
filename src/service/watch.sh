@@ -280,7 +280,8 @@ watch_upcheck() {
 watch_autoupdate() {
     # Выключено по умолчанию: включивший соглашается на ночной рестарт службы.
     # Ограничения ниже -- плата за отсутствие человека в цепочке.
-    if [ "$(u auto_update)" = "1" ] && [ -s "$NEWVER" ]; then
+    if [ "$(u auto_update)" = "1" ] && [ -s "$NEWVER" ] &&
+       ver_gt "$(cat "$NEWVER")" "$BYWAY_NUM"; then
         _au=$(cat "$NEWVER")
         # `|| true`: RELNOTE может не быть, под set -e cmd_watch оборвался бы
         # здесь, не дойдя до списков и подрезки журналов.

@@ -102,7 +102,11 @@ cmd_gen() {
     take_lock "$_lock" "$(_t 'сборка конфига')" || die "другая сборка конфига не закончилась за 30 секунд"
     # Ловушка -- подстраховка: замок снимается явно в конце каждой ветки (в
     # живом gen EXIT-ловушка его не снимала, и следующая сборка ждала 30 с).
-    trap 'rm -rf "$_lock" 2>/dev/null; true' EXIT INT TERM
+    # INT/TERM -- выйти (EXIT снимет): ловушка без exit оставляла процесс
+    # идти дальше после Ctrl+C уже без рабочего каталога.
+    trap 'rm -rf "$_lock" 2>/dev/null; true' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
 
     [ -f "$CONF" ] || dief "нет %s" "$CONF"
     [ -x "$XRAY" ] || die "xray не найден"

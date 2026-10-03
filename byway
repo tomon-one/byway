@@ -1476,7 +1476,11 @@ cmd_gen() {
     take_lock "$_lock" "$(_t 'сборка конфига')" || die "другая сборка конфига не закончилась за 30 секунд"
     # Ловушка -- подстраховка: замок снимается явно в конце каждой ветки (в
     # живом gen EXIT-ловушка его не снимала, и следующая сборка ждала 30 с).
-    trap 'rm -rf "$_lock" 2>/dev/null; true' EXIT INT TERM
+    # INT/TERM -- выйти (EXIT снимет): ловушка без exit оставляла процесс
+    # идти дальше после Ctrl+C уже без рабочего каталога.
+    trap 'rm -rf "$_lock" 2>/dev/null; true' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
 
     [ -f "$CONF" ] || dief "нет %s" "$CONF"
     [ -x "$XRAY" ] || die "xray не найден"
@@ -3710,6 +3714,19 @@ block_intact() {
 
 # cmd_plumb on|off|close -- единственный вход для службы и сторожа, под замком.
 
+# После обновления прошивки модулей tproxy нет (ставил их установщик, а
+# прошивка с сохранением настроек пакеты не переносит): ядро отвечает общим
+# «не принято», а причина -- в двух пакетах.
+plumb_mod_hint() {
+    for _pm in nft_tproxy nft_socket; do
+        grep -q "^$_pm " /proc/modules 2>/dev/null && continue
+        modprobe "$_pm" 2>/dev/null && continue
+        warnf "нет модуля ядра %s — поставить: %s kmod-nft-tproxy kmod-nft-socket" "$_pm" "$PKG_FIX"
+        return 0
+    done
+    return 0
+}
+
 cmd_plumb() {
     # Замок: у обвязки пять хозяев (старт службы, её фоновый цикл до 65 с,
     # reload, сторож из cron, консоль) и общая дельта UCI dhcp с правилами
@@ -3758,6 +3775,7 @@ cmd_plumb() {
             # ветках отказа. На пути stop --keep-dns dnsmasq остаётся на нас, и
             # без правил дом получал бы подставные адреса без перехвата.
             warn "правила не приняты ядром, перехват не включён"
+            plumb_mod_hint
             dns_down
             block_on
             rm -rf "$_plock" 2>/dev/null || true
@@ -3778,6 +3796,7 @@ cmd_plumb() {
         if [ -n "$_nfte" ]; then
             warnf "правила не легли в ядро — %s" \
                   "$(printf '%s' "$_nfte" | head -2 | tr '\n' ' ')"
+            plumb_mod_hint
             # Маршрут снимаем: без правил он остался бы висеть в таблице 100.
             route_down
             # nft -f -- одна транзакция: при отказе прежняя таблица остаётся и
@@ -4199,7 +4218,8 @@ watch_upcheck() {
 watch_autoupdate() {
     # Выключено по умолчанию: включивший соглашается на ночной рестарт службы.
     # Ограничения ниже -- плата за отсутствие человека в цепочке.
-    if [ "$(u auto_update)" = "1" ] && [ -s "$NEWVER" ]; then
+    if [ "$(u auto_update)" = "1" ] && [ -s "$NEWVER" ] &&
+       ver_gt "$(cat "$NEWVER")" "$BYWAY_NUM"; then
         _au=$(cat "$NEWVER")
         # `|| true`: RELNOTE может не быть, под set -e cmd_watch оборвался бы
         # здесь, не дойдя до списков и подрезки журналов.
@@ -4451,7 +4471,7 @@ cmd_status() {
     if [ -s "$AULOG" ]; then
         printf "$(_t 'ночью      %s\n')" "$(cat "$AULOG")"
     fi
-    if [ -s "$NEWVER" ]; then
+    if [ -s "$NEWVER" ] && ver_gt "$(cat "$NEWVER")" "$BYWAY_NUM"; then
         printf "$(_t 'обновление  %s доступно (у вас %s)\n')" "$(cat "$NEWVER")" "$BYWAY_NUM"
         _rn=$(cat "$RELNOTE" 2>/dev/null)
         [ -n "$_rn" ] && printf "            %s\n" "$_rn"
@@ -4944,7 +4964,7 @@ doctor_updates() {
             _d_ok "$(_f 'новее %s не найдено' "$BYWAY_NUM")"
         fi
     fi
-    if [ -s "$NEWVER" ]; then
+    if [ -s "$NEWVER" ] && ver_gt "$(cat "$NEWVER")" "$BYWAY_NUM"; then
         # Важность выпуска -- первым словом описания: красная строка вместо
         # жёлтой.
         case "$(cat "$RELNOTE" 2>/dev/null)" in
@@ -5501,6 +5521,10 @@ cmd_update() {
         case "$1" in
           --rollback)
             upd_restore || die "откатывать не на что: копия делается при byway update"
+            # Снятый вручную выпуск автообновление не вернёт: иначе первая же
+            # ночь ставила бы его заново, и откат отменялся без слова.
+            printf '%s\n' "$BYWAY_NUM" > "$AUFAIL" 2>/dev/null || true
+            sayf "автообновление выпуск %s больше не поставит" "$BYWAY_NUM"
             return 0 ;;
           --check|--force) _uf=$1 ;;
           --no-verify) _nov=1 ;;
@@ -5522,6 +5546,9 @@ cmd_update() {
         esac
     fi
 
+    # Метка «найдена новая» устаревает с самим обновлением: после ручной
+    # установки статус и панель до суток писали «доступно X (у вас X)».
+    ver_gt "$_new" "$BYWAY_NUM" || rm -f "$NEWVER" 2>/dev/null || true
     if ! ver_gt "$_new" "$BYWAY_NUM"; then
         # Тег могут пересобрать на новом коммите под тем же номером:
         # «новее нет» верно про номер, но не про файлы. Отсюда --force.
@@ -5543,7 +5570,11 @@ cmd_update() {
     # другим пользователем, mkdir -p принимал как свой, и в него подкладывали
     # исходник, который установщик от root разложит в /usr/local/bin.
     _d=$(mktemp -d /tmp/byway-update.XXXXXX) || die "не создать рабочий каталог в /tmp"
-    trap 'rm -rf "$_d" 2>/dev/null' EXIT INT TERM
+    # INT/TERM -- выйти (EXIT снимет): ловушка без exit оставляла процесс
+    # идти дальше после Ctrl+C уже без рабочего каталога.
+    trap 'rm -rf "$_d" 2>/dev/null' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     _px=$(u local_proxy_port); _px=${_px:-1603}
     _url="https://github.com/$BYWAY_REPO/archive/refs/tags/v$_new.tar.gz"
     say "загрузка"
@@ -5584,6 +5615,7 @@ cmd_update() {
         upd_restore || exit 4
         exit 3
     fi
+    rm -f "$NEWVER" "$RELNOTE" 2>/dev/null || true
     eng_idle && return 0
     say "проверка туннеля на новой версии (до 2,5 минуты)"
     if eng_wait; then
@@ -5694,6 +5726,12 @@ upd_verify() {   # 1 -- номер, 2 -- корень распакованног
 
 # Сборки XTLS на MIPS без сопроцессора не запускаются (только hardfloat) --
 # та же функция в install.sh, править парой.
+# Ядро с GitHub на этом процессоре не запустилось: метка во флеше, чтобы
+# восстановление не качало 14 МБ и не писало 35 МБ на флеш каждые четверть
+# часа (ARM без VFP, x86 без SSE2). Снимается удачной установкой.
+ENG_NOEXEC=/etc/byway/.github-noexec
+eng_noexec_mark() { uname -m > "$ENG_NOEXEC" 2>/dev/null || true; }
+
 eng_mips_nofpu() {
     case "$(uname -m)" in mips*) ;; *) return 1 ;; esac
     # Содержимое, а не [ -s ]: procfs отдаёт нулевой размер.
@@ -5852,7 +5890,7 @@ cmd_engine() {
     command -v sha256sum >/dev/null 2>&1 ||
         die "нет sha256sum — сверить архив нечем, замена не начата"
     if eng_mips_nofpu; then
-        die "на этом процессоре сборки Xray-core с GitHub не запускаются — движок обновляется пакетом OpenWrt: apk upgrade xray-core либо opkg upgrade xray-core"
+        dief "на этом процессоре сборки Xray-core с GitHub не запускаются — движок ставится и обновляется пакетом OpenWrt: %s xray-core" "$PKG_FIX"
     fi
     ENG_ASSET=$(eng_asset) ||
         dief "неизвестно, какой файл выпуска брать для %s" "$(uname -m)"
@@ -5906,6 +5944,9 @@ cmd_engine() {
       # служба при старте и сторож.
       restore)
         [ -z "$_eov" ] || { sayf "ядро на месте: Xray %s" "$_eov"; return 0; }
+        # Сборка с GitHub здесь уже не запускалась: качать её снова нечего.
+        [ "$(cat "$ENG_NOEXEC" 2>/dev/null || true)" != "$(uname -m)" ] ||
+            dief "сборка Xray-core с GitHub на этом процессоре не запускалась — ядро ставится пакетом: %s xray-core" "$PKG_FIX"
         _erb=$(uci -q get byway.main.xray_bin 2>/dev/null || true)
         _env=${_erb##*/xray-}
         _env=${_env%%-*}
@@ -5932,7 +5973,11 @@ cmd_engine() {
     take_lock "$_elk" "$(_t 'замена движка')" || die "замена движка уже идёт"
     # mktemp: атомарно и права 700 (см. cmd_update).
     _ed=$(mktemp -d /tmp/byway-engine.XXXXXX) || { rm -rf "$_elk"; die "не создать рабочий каталог в /tmp"; }
-    trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT INT TERM
+    # INT/TERM -- выйти (EXIT снимет): ловушка без exit оставляла процесс
+    # идти дальше после Ctrl+C уже без рабочего каталога.
+    trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
 
     # Нужная версия уже лежит рядом -- переключение без загрузки.
     if [ -n "$_eov" ] && [ "$_enew" != "$_eold" ] && xray_ok "$_enew" &&
@@ -5998,8 +6043,10 @@ eng_fresh() {
     eng_put "$_epkg" "$_enew" || die "ядро не распаковалось на флеш — ничего не тронуто"
     if ! "$_enew" version >/dev/null 2>&1; then
         rm -f "$_enew" 2>/dev/null || true
+        eng_noexec_mark
         die "ядро не запускается на этом железе — удалено"
     fi
+    rm -f "$ENG_NOEXEC" 2>/dev/null || true
     eng_bin_set "$_enew"
     logf 'движок поставлен: %s (прежнего не было)' "$_env"
     if [ "$(u enabled)" = "1" ]; then
@@ -6016,6 +6063,7 @@ eng_side() {
     rm -f "$_epkg" 2>/dev/null || true
     if ! "$_enew" version >/dev/null 2>&1; then
         rm -f "$_enew" 2>/dev/null || true
+        eng_noexec_mark
         die "новое ядро не запускается на этом железе — удалено, работает прежнее"
     fi
     if eng_idle; then
@@ -6065,10 +6113,22 @@ eng_ram() {
     sayf "места на второе ядро нет (свободно %s МБ) — замена через память" "$(( ${_efree:-0} / 1024 ))"
     # Откат -- из архива прежней версии, он берётся СЕЙЧАС, пока туннель жив.
     # Нет архива -- замена не начинается.
-    sayf "загрузка прежней версии %s — для отката" "$_eov"
-    _erc=0; eng_fetch "$_eov" "$_ed/old.zip" || _erc=$?
-    [ "$_erc" = 0 ] ||
-        dief "архив прежней версии %s не получен — без копии для отката замена не начата" "$_eov"
+    case "$_eold" in
+      /usr/local/bin/xray-*-*)
+        # Своя сборка (xray-26.9.30-h2l, xray-local-*): архив выпуска дал бы
+        # откат на ОФИЦИАЛЬНЫЙ бинарник под именем своей сборки -- без её
+        # правок. Копия -- сам файл, сжатый в память.
+        _eorb=$_ed/old.gz
+        sayf "прежний движок — своя сборка (%s): копия для отката сжимается в память" "$_eold"
+        gzip -c "$_eold" > "$_eorb" 2>/dev/null && [ -s "$_eorb" ] ||
+            die "копию своей сборки для отката не сделать — замена не начата" ;;
+      *)
+        _eorb=$_ed/old.zip
+        sayf "загрузка прежней версии %s — для отката" "$_eov"
+        _erc=0; eng_fetch "$_eov" "$_eorb" || _erc=$?
+        [ "$_erc" = 0 ] ||
+            dief "архив прежней версии %s не получен — без копии для отката замена не начата" "$_eov" ;;
+    esac
 
     warn "остановка службы: туннель пропадёт примерно на минуту"
     # Обрыв ssh (HUP) посреди замены оставлял службу остановленной: старт в
@@ -6080,6 +6140,15 @@ eng_ram() {
     # снимает plumb on при запуске. Номер процесса в ней: умрёт замена --
     # сторож (plumb_down_held) метку не признает.
     echo $$ > "$PLUMB_DOWN" 2>/dev/null || true
+    # С этой минуты каталог $_ed хранит архив прежнего ядра -- единственное
+    # средство отката. Ctrl+C игнорируется; по TERM выходим, но каталог не
+    # стираем. Прежде ловушка стирала его и шла дальше: замена доходила до
+    # «ни новое, ни прежнее ядро не легло». Обработчик, а не игнор, у TERM:
+    # игнор унаследовал бы start службы (см. Н-1).
+    say "идёт замена — прерывать нельзя"
+    trap '' INT
+    trap 'rm -rf "$_elk" 2>/dev/null; exit 143' TERM
+    trap 'rm -rf "$_elk" 2>/dev/null' EXIT
     sleep 2
     _emk=$(eng_mem_kb || echo 0)
     if [ "$(( ${_emk:-0} * 1024 ))" -lt "$(( _esz + 20971520 ))" ]; then
@@ -6113,7 +6182,7 @@ eng_ram() {
     /etc/init.d/byway start >/dev/null 2>&1 || true
     say "проверка туннеля на новом движке (до 2,5 минуты)"
     if eng_wait; then
-        rm -f "$_ed/old.zip" 2>/dev/null || true
+        rm -rf "$_ed" 2>/dev/null || true
         logf 'движок заменён: %s -> %s' "$_eov" "$_env"
         sayf "готово: Xray %s, на флеше свободно %s МБ" "$_env" "$(( $(eng_free_kb || echo 0) / 1024 ))"
         return 0
@@ -6127,17 +6196,19 @@ eng_ram() {
 # Отказ ДО удаления прежнего ядра: оно на месте, достаточно запустить.
 eng_ram_back() {
     /etc/init.d/byway start >/dev/null 2>&1 || true
+    rm -rf "$_ed" 2>/dev/null || true
     die "служба запущена с прежним движком — ничего не заменено"
 }
 
 # Отказ ПОСЛЕ удаления: прежнее ядро -- из архива, скачанного до остановки.
 eng_ram_restore() {
     sayf "возврат %s из архива" "$_eov"
-    if eng_put "$_ed/old.zip" "$_eold"; then
+    if eng_put "$_eorb" "$_eold"; then
         eng_bin_set "$_eold"
         eng_gen "$_eold" || true
         /etc/init.d/byway start >/dev/null 2>&1 || true
         logf 'движок: %s не встал, возвращён %s' "$_env" "$_eov"
+        rm -rf "$_ed" 2>/dev/null || true
         dief "возвращён %s" "$_eov"
     fi
     # Флеш не принял и прежнее ядро. Службу всё равно запускаем: без движка
@@ -6148,8 +6219,9 @@ eng_ram_restore() {
     trap - EXIT INT TERM
     rm -rf "$_elk" 2>/dev/null || true
     logf 'движок: НИ НОВОЕ, НИ ПРЕЖНЕЕ ядро не легло на флеш -- туннеля нет'
-    dief "ни новое, ни прежнее ядро не легло на флеш — туннеля нет. Архив прежнего: %s (в памяти, до перезагрузки); поставить: unzip -p %s xray > %s && chmod 755 %s && /etc/init.d/byway start" \
-        "$_ed/old.zip" "$_ed/old.zip" "$_eold" "$_eold"
+    case "$_eorb" in *.gz) _eorx="gunzip -c $_eorb" ;; *) _eorx="unzip -p $_eorb xray" ;; esac
+    dief "ни новое, ни прежнее ядро не легло на флеш — туннеля нет. Архив прежнего: %s (в памяти, до перезагрузки); поставить: %s > %s && chmod 755 %s && /etc/init.d/byway start" \
+        "$_eorb" "$_eorx" "$_eold" "$_eold"
 }
 
 # Служба не работает (выключена или нет ключа): туннеля для проверки нет,
@@ -6193,7 +6265,11 @@ eng_local() {
     take_lock "$_elk" "$(_t 'замена движка')" || die "замена движка уже идёт"
     # mktemp: атомарно и права 700 (см. cmd_update).
     _ed=$(mktemp -d /tmp/byway-engine.XXXXXX) || { rm -rf "$_elk"; die "не создать рабочий каталог в /tmp"; }
-    trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT INT TERM
+    # INT/TERM -- выйти (EXIT снимет): ловушка без exit оставляла процесс
+    # идти дальше после Ctrl+C уже без рабочего каталога.
+    trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     _emk=$(eng_mem_kb || echo 0)
     [ "${_emk:-0}" -ge 40960 ] ||
         dief "памяти доступно %s МБ, для замены нужно не меньше 40 — ничего не тронуто" "$(( ${_emk:-0} / 1024 ))"
@@ -6530,7 +6606,9 @@ cmd_import() {
     # по die, и по Ctrl+C. $_bak ловушка НЕ трогает: копию конфига (с ключом,
     # во флеше, права 700) заводят ради отката ПОСЛЕ удачного приёма, меню и
     # панель на неё ссылаются. Каталог один, следующий приём перезапишет.
-    trap 'rm -rf "$_tmp" 2>/dev/null' EXIT INT TERM
+    trap 'rm -rf "$_tmp" 2>/dev/null' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     chmod 700 "$_tmp" 2>/dev/null || true
     awk -v d="$_tmp" '
         function nm(str,   n) { n = substr(str, index(str, ":") + 1)

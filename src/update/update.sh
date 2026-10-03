@@ -74,6 +74,10 @@ cmd_update() {
         case "$1" in
           --rollback)
             upd_restore || die "откатывать не на что: копия делается при byway update"
+            # Снятый вручную выпуск автообновление не вернёт: иначе первая же
+            # ночь ставила бы его заново, и откат отменялся без слова.
+            printf '%s\n' "$BYWAY_NUM" > "$AUFAIL" 2>/dev/null || true
+            sayf "автообновление выпуск %s больше не поставит" "$BYWAY_NUM"
             return 0 ;;
           --check|--force) _uf=$1 ;;
           --no-verify) _nov=1 ;;
@@ -95,6 +99,9 @@ cmd_update() {
         esac
     fi
 
+    # Метка «найдена новая» устаревает с самим обновлением: после ручной
+    # установки статус и панель до суток писали «доступно X (у вас X)».
+    ver_gt "$_new" "$BYWAY_NUM" || rm -f "$NEWVER" 2>/dev/null || true
     if ! ver_gt "$_new" "$BYWAY_NUM"; then
         # Тег могут пересобрать на новом коммите под тем же номером:
         # «новее нет» верно про номер, но не про файлы. Отсюда --force.
@@ -116,7 +123,11 @@ cmd_update() {
     # другим пользователем, mkdir -p принимал как свой, и в него подкладывали
     # исходник, который установщик от root разложит в /usr/local/bin.
     _d=$(mktemp -d /tmp/byway-update.XXXXXX) || die "не создать рабочий каталог в /tmp"
-    trap 'rm -rf "$_d" 2>/dev/null' EXIT INT TERM
+    # INT/TERM -- выйти (EXIT снимет): ловушка без exit оставляла процесс
+    # идти дальше после Ctrl+C уже без рабочего каталога.
+    trap 'rm -rf "$_d" 2>/dev/null' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     _px=$(u local_proxy_port); _px=${_px:-1603}
     _url="https://github.com/$BYWAY_REPO/archive/refs/tags/v$_new.tar.gz"
     say "загрузка"
@@ -157,6 +168,7 @@ cmd_update() {
         upd_restore || exit 4
         exit 3
     fi
+    rm -f "$NEWVER" "$RELNOTE" 2>/dev/null || true
     eng_idle && return 0
     say "проверка туннеля на новой версии (до 2,5 минуты)"
     if eng_wait; then

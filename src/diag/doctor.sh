@@ -160,7 +160,7 @@ doctor_updates() {
             _d_ok "$(_f 'новее %s не найдено' "$BYWAY_NUM")"
         fi
     fi
-    if [ -s "$NEWVER" ]; then
+    if [ -s "$NEWVER" ] && ver_gt "$(cat "$NEWVER")" "$BYWAY_NUM"; then
         # Важность выпуска -- первым словом описания: красная строка вместо
         # жёлтой.
         case "$(cat "$RELNOTE" 2>/dev/null)" in

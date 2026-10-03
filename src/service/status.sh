@@ -21,7 +21,7 @@ cmd_status() {
     if [ -s "$AULOG" ]; then
         printf "$(_t 'ночью      %s\n')" "$(cat "$AULOG")"
     fi
-    if [ -s "$NEWVER" ]; then
+    if [ -s "$NEWVER" ] && ver_gt "$(cat "$NEWVER")" "$BYWAY_NUM"; then
         printf "$(_t 'обновление  %s доступно (у вас %s)\n')" "$(cat "$NEWVER")" "$BYWAY_NUM"
         _rn=$(cat "$RELNOTE" 2>/dev/null)
         [ -n "$_rn" ] && printf "            %s\n" "$_rn"

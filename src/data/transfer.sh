@@ -178,7 +178,9 @@ cmd_import() {
     # по die, и по Ctrl+C. $_bak ловушка НЕ трогает: копию конфига (с ключом,
     # во флеше, права 700) заводят ради отката ПОСЛЕ удачного приёма, меню и
     # панель на неё ссылаются. Каталог один, следующий приём перезапишет.
-    trap 'rm -rf "$_tmp" 2>/dev/null' EXIT INT TERM
+    trap 'rm -rf "$_tmp" 2>/dev/null' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     chmod 700 "$_tmp" 2>/dev/null || true
     awk -v d="$_tmp" '
         function nm(str,   n) { n = substr(str, index(str, ":") + 1)

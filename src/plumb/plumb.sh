@@ -1,5 +1,18 @@
 # cmd_plumb on|off|close -- единственный вход для службы и сторожа, под замком.
 
+# После обновления прошивки модулей tproxy нет (ставил их установщик, а
+# прошивка с сохранением настроек пакеты не переносит): ядро отвечает общим
+# «не принято», а причина -- в двух пакетах.
+plumb_mod_hint() {
+    for _pm in nft_tproxy nft_socket; do
+        grep -q "^$_pm " /proc/modules 2>/dev/null && continue
+        modprobe "$_pm" 2>/dev/null && continue
+        warnf "нет модуля ядра %s — поставить: %s kmod-nft-tproxy kmod-nft-socket" "$_pm" "$PKG_FIX"
+        return 0
+    done
+    return 0
+}
+
 cmd_plumb() {
     # Замок: у обвязки пять хозяев (старт службы, её фоновый цикл до 65 с,
     # reload, сторож из cron, консоль) и общая дельта UCI dhcp с правилами
@@ -48,6 +61,7 @@ cmd_plumb() {
             # ветках отказа. На пути stop --keep-dns dnsmasq остаётся на нас, и
             # без правил дом получал бы подставные адреса без перехвата.
             warn "правила не приняты ядром, перехват не включён"
+            plumb_mod_hint
             dns_down
             block_on
             rm -rf "$_plock" 2>/dev/null || true
@@ -68,6 +82,7 @@ cmd_plumb() {
         if [ -n "$_nfte" ]; then
             warnf "правила не легли в ядро — %s" \
                   "$(printf '%s' "$_nfte" | head -2 | tr '\n' ' ')"
+            plumb_mod_hint
             # Маршрут снимаем: без правил он остался бы висеть в таблице 100.
             route_down
             # nft -f -- одна транзакция: при отказе прежняя таблица остаётся и

@@ -304,7 +304,14 @@ start_service() {
 				: > /tmp/byway-engine-restore
 				echo "  движок ставится в фоне: byway engine restore (журнал: logread -e byway)"
 				# 1000>&- -- см. у цикла подъёма ниже.
-				( sleep 15; "$BYWAY" engine restore 2>&1 | sed "s/$(printf '\033')\[[0-9;]*m//g" | logger -t byway ) </dev/null >/dev/null 2>&1 1000>&- &
+				# Сперва маршрут по умолчанию (до двух минут): при загрузке WAN
+				# поднимается позже службы, и единственная попытка уходила в
+				# пустоту -- следующая через четверть часа.
+				( _w=0
+				  while [ "$_w" -lt 24 ] && [ -z "$(ip route show default 2>/dev/null)" ]; do
+				      sleep 5; _w=$((_w + 1))
+				  done
+				  sleep 10; "$BYWAY" engine restore 2>&1 | sed "s/$(printf '\033')\[[0-9;]*m//g" | logger -t byway ) </dev/null >/dev/null 2>&1 1000>&- &
 			fi
 			echo "  поставить руками: byway engine restore, либо $_pkgfix xray-core"
 			echo "  либо указать свой путь: uci set byway.main.xray_bin=/путь/к/xray"
