@@ -3010,6 +3010,7 @@ nft_ruleset() {
 	}"
         _v6pre="
 		ip6 daddr @fakeip6 meta l4proto { tcp, udp } counter tproxy ip6 to :$_port meta mark set meta mark or $_mark accept
+		ip6 daddr @fakeip6 counter drop
 		ip6 daddr @privnets6 return
 		meta nfproto ipv6 fib daddr . iif type { local, broadcast, multicast } return
 		meta nfproto ipv6 fib daddr oifname { $_iflist } return"
@@ -3047,6 +3048,26 @@ nft_ruleset() {
 		ip daddr @subnets meta l4proto { tcp, udp } counter tproxy ip to :$_port meta mark set meta mark or $_mark accept"
         if v6on; then _v6catch="
 		ip6 daddr @subnets6 meta l4proto { tcp, udp } counter tproxy ip6 to :$_port meta mark set meta mark or $_mark accept"; fi
+    fi
+    # Не завернулось -- брось. tproxy без слушающего сокета (движок упал, procd
+    # ждёт respawn) пакет не роняет, а пропускает дальше по цепочке, и тот
+    # уходил в WAN напрямую. Пул fakeip наружу не нужен никогда; подсети списка
+    # и «всё через VPN» -- только при «Не пускать». С живым движком сюда не
+    # доходит: tproxy кончается accept.
+    _miss="
+		ip daddr @fakeip counter drop"
+    if [ "$(u on_failure)" != "open" ]; then
+        if [ "$(u list_mode)" = "all" ]; then
+            _miss="$_miss
+		meta nfproto ipv4 meta l4proto { tcp, udp } counter drop"
+            if v6on; then _miss="$_miss
+		meta nfproto ipv6 meta l4proto { tcp, udp } counter drop"; fi
+        else
+            _miss="$_miss
+		ip daddr @subnets meta l4proto { tcp, udp } counter drop"
+            if v6on; then _miss="$_miss
+		ip6 daddr @subnets6 meta l4proto { tcp, udp } counter drop"; fi
+        fi
     fi
     # `elements = {  }` -- синтаксическая ошибка nft: пустой subnets.lst
     # обрушил бы всю таблицу. Набор без элементов nft принимает.
@@ -3134,7 +3155,7 @@ table inet $TABLE {
 		# после return выше, поэтому до адресов роутера не дотягивается.
 		meta l4proto { tcp, udp } socket transparent 1 meta mark set meta mark or $_mark accept
 
-		$_catch$_v6catch
+		$_catch$_v6catch$_miss
 	}
 
 	# Вход tproxy слушает 0.0.0.0 -- иначе он не работает вовсе: tproxy НЕ
@@ -3167,11 +3188,11 @@ cmd_nft() { nft_ruleset; }
 # раз на один `uci commit`, полная сборка списков не укладывалась в 20 с
 # панели.
 nft_sig() {
-    # block_quic обязателен: он живёт только в правилах nft, без него reload не
-    # видел смены.
-    printf '%s|%s|%s|%s|%s|%s|' \
+    # block_quic и on_failure обязательны: они живут только в правилах nft,
+    # без них reload не видел смены.
+    printf '%s|%s|%s|%s|%s|%s|%s|' \
         "$(u fakeip_pool)" "$(u mark)" "$(u tproxy_port)" \
-        "$(u interface)" "$(u list_mode)" "$(u block_quic)"
+        "$(u interface)" "$(u list_mode)" "$(u block_quic)" "$(u on_failure)"
     {
         md5sum "$LISTS/subnets.lst" 2>/dev/null | cut -d' ' -f1
         for _ns in $(u preset); do

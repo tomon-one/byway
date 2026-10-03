@@ -539,8 +539,12 @@ reload_service() {
 	else
 		if byway_running; then
 			logger -t byway "reload: выключено -- остановка"
-			stop
 		fi
+		# stop -- и при лежащем движке: запрет «Не пускать» и перехват стоят
+		# именно тогда, а снять их, кроме stop, некому (pulse и сторож при
+		# enabled=0 молчат), и procd в ожидании respawn поднял бы движок.
+		# Снимать нечего -- plumb off только сбрасывает кэш dnsmasq.
+		stop
 		return 0
 	fi
 
