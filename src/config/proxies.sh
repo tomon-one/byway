@@ -40,6 +40,29 @@ self_sockopt() {
     printf ', "sockopt": { "mark": %s }' "$(self_mark_dec)"
 }
 
+# Адреса серверов своего конфига (N_RAW): address у settings, vnext, servers,
+# endpoint у peers -- по строке на адрес. Через окружение, без fs: модуль есть
+# не во всех сборках ucode. Не разобралось или негодный знак в адресе --
+# адрес пропускается.
+raw_hosts() {
+    BW_RAW=$N_RAW ucode -e '
+        let o;
+        try { o = json(getenv("BW_RAW")); } catch (e) { exit(0); }
+        let seen = {};
+        function add(h) {
+            if (type(h) != "string" || match(h, /^\[/)) return;
+            h = replace(h, /:[0-9]+$/, "");
+            if (match(h, /^[A-Za-z0-9.-]+$/) && !seen[h]) { seen[h] = 1; print(h, "\n"); }
+        }
+        let s = (type(o) == "object") ? o.settings : null;
+        if (type(s) != "object") exit(0);
+        add(s.address);
+        for (let k in [ "vnext", "servers" ])
+            if (type(s[k]) == "array") for (let x in s[k]) if (type(x) == "object") add(x.address);
+        if (type(s.peers) == "array") for (let x in s.peers) if (type(x) == "object") add(x.endpoint);
+    ' 2>/dev/null || true
+}
+
 # Аутбаунды: обычные режимы дают один с тегом proxy; urltest -- по одному на
 # ключ (proxy-N) и балансировщик leastPing, куда идут правила. Схема проверена
 # на 26.7.11 (observatory, balancers, balancerTag).
@@ -63,7 +86,11 @@ build_proxies() {
         # Свой конфиг: адрес ноды внутри чужого JSON, N_HOST = «-»; в правило
         # он шёл как ip "-/32", и движок отвергал конфиг.
         if [ "$N_PROTO" = "raw" ]; then
-            VPN_HOSTS=""
+            # Адрес сервера -- из самого JSON: без него при DNS через туннель
+            # имя сервера разрешалось через ещё не поднятый туннель, а в
+            # режиме «всё через VPN» соединение к серверу уходило в перехват.
+            VPN_HOSTS=$(raw_hosts | tr '\n' ' ')
+            [ -n "$VPN_HOSTS" ] ||
             warn "свой конфиг: адрес сервера лежит внутри чужого JSON, byway его не знает и из перехвата не исключит — проверить, что адрес сервера не попал в списки, иначе туннель замкнётся сам на себя"
             # Метку для «VPN для программ на роутере» в чужой JSON не вписываем
             # (комментарии в нём ucode не разберёт) -- говорим, что дописать.
