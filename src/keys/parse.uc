@@ -124,7 +124,8 @@ if (!(scheme in [ 'vless', 'trojan', 'socks', 'vmess', 'ss', 'hysteria2', 'hy2',
 }
 let rest = after(URL, '://');
 // Метка после решётки -- имя, обычно с флагом; не секрет.
-put('N_LABEL', index(URL, '#') >= 0 ? pctd(after(URL, '#')) : '');
+// Без управляющих знаков: метка попадает в вывод терминала.
+put('N_LABEL', index(URL, '#') >= 0 ? replace(pctd(after(URL, '#')), /[\x01-\x1f\x7f]/g, '') : '');
 rest = before(rest, '#');
 
 // vmess://<base64 от JSON>: add, port, id, aid, net, type, host, path, tls,

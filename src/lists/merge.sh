@@ -13,7 +13,7 @@ plain_domains() {
     grep -vE '^[[:space:]]*(//|#|$)' "$1" 2>/dev/null | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |
       sed -e 's/^domain://' -e 's/^full://' |
       grep -E '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' |
-      grep -E '\.[A-Za-z][A-Za-z]+$' || true
+      grep -E '\.([A-Za-z][A-Za-z]+|xn--[A-Za-z0-9-]+)$' || true
     return 0
 }
 
@@ -49,7 +49,8 @@ merged_subnets() {
         done
         if [ "$_sold" = 0 ]; then printf '%s' "$_s"; return 0; fi
     fi
-    cat "$LISTS/subnets.lst" 2>/dev/null > "$_st"
+    # `|| :`: нет своего файла -- не отказ сборки (cat даёт 1 под set -e).
+    { cat "$LISTS/subnets.lst" 2>/dev/null || :; printf '\n'; } > "$_st"
     # Подсети включённых направлений тоже: иначе адресная половина не попадала
     # в набор nft, трафик шёл напрямую, а доменная работала («направление
     # работает через раз»).
@@ -59,7 +60,7 @@ merged_subnets() {
     done
     for _pn3 in $(u preset); do
         _pfs=$PRESETS_DIR/$_pn3.sub
-        [ -f "$_pfs" ] && cat "$_pfs" >> "$_st"
+        [ -f "$_pfs" ] && { cat "$_pfs"; printf '\n'; } >> "$_st"
     done
     # Пробел внутри строки не вырезается (см. fetch_list): проверки формы
     # дальше нет, склеенная запись ушла бы прямо в маршрутизацию.
@@ -98,7 +99,7 @@ merged_domains() {
         done
         if [ "$_mold" = 0 ]; then printf '%s' "$_m"; return 0; fi
     fi
-    cat "$LISTS/domains.lst" 2>/dev/null > "$_mt"
+    { cat "$LISTS/domains.lst" 2>/dev/null || :; printf '\n'; } > "$_mt"
     # Домены включённых направлений тоже: без подставного адреса их трафик не
     # попадёт в перехват. Только заведённые, не весь каталог: файл удалённого
     # направления продолжал бы уводить домены.
@@ -110,7 +111,7 @@ merged_domains() {
     # галочка не отключала скачанную копию.
     for _pn in $(u preset); do
         _pf=$PRESETS_DIR/$_pn.lst
-        [ -f "$_pf" ] && cat "$_pf" >> "$_mt"
+        [ -f "$_pf" ] && { cat "$_pf"; printf '\n'; } >> "$_mt"
     done
     grep -vE '^[[:space:]]*(//|#|$)' "$_mt" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |
       sort -u > "$_mt.s"

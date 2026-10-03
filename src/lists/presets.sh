@@ -336,7 +336,7 @@ cmd_presets() {
         for _pk in $(preset_names); do
             printf '    %-20s %s\n' "$_pk" "$(preset_about "$_pk")"
         done
-        say "  подключить: uci add_list byway.main.preset=ИМЯ && uci commit byway && byway presets"
+        say "  подключить: uci add_list byway.main.preset=ИМЯ && uci commit byway && byway presets && /etc/init.d/byway reload"
     else
         warn "ни один из подключённых списков не обновился — прежние копии остались на месте"
     fi

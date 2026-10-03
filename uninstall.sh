@@ -72,6 +72,7 @@ _warn() { printf '\033[1;33m[!]\033[0m %s\n' "$1"; }
 say()  { _say  "$(t "$1")"; }
 warn() { _warn "$(t "$1")"; }
 sayf()  { _f=$(t "$1"); shift; _say  "$(printf "$_f" "$@")"; }
+warnf() { _f=$(t "$1"); shift; _warn "$(printf "$_f" "$@")"; }
 
 DRY=${DRY_RUN:-0}
 

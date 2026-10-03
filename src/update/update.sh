@@ -73,7 +73,8 @@ cmd_update() {
     while [ $# -gt 0 ]; do
         case "$1" in
           --rollback)
-            upd_restore || die "откатывать не на что: копия делается при byway update"
+            [ -s "$PREVSET" ] || die "откатывать не на что: копия делается при byway update"
+            upd_restore || die "откат не завершён — освободить место на флеше и повторить: byway update --rollback"
             # Снятый вручную выпуск автообновление не вернёт: иначе первая же
             # ночь ставила бы его заново, и откат отменялся без слова.
             printf '%s\n' "$BYWAY_NUM" > "$AUFAIL" 2>/dev/null || true
@@ -169,6 +170,9 @@ cmd_update() {
         exit 3
     fi
     rm -f "$NEWVER" "$RELNOTE" 2>/dev/null || true
+    # Поставленный вручную выпуск, который раньше не поднимался, больше не
+    # «отвергнут»: doctor писал бы об этом вечно.
+    [ "$(cat "$AUFAIL" 2>/dev/null || true)" != "$_new" ] || rm -f "$AUFAIL" 2>/dev/null || true
     eng_idle && return 0
     say "проверка туннеля на новой версии (до 2,5 минуты)"
     if eng_wait; then

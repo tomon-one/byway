@@ -22,6 +22,10 @@ cmd_sub() {
     # до запроса. Имя разрешается здесь и проверяется результат (имя на
     # 127.0.0.1 прошло бы по букве). Редирект во внутренний диапазон не закрыт:
     # число редиректов ограничено, граница -- exec в acl.json.
+    # IPv6-литерал защита ниже не разбирает: [::1] прошёл бы как «имя».
+    case "$_u" in
+      *://\[*|*@\[*) die "адрес подписки с IPv6-литералом не поддерживается — нужно имя или IPv4" ;;
+    esac
     _sh=${_u#*://}; _sh=${_sh%%/*}; _sh=${_sh%%\?*}
     _sh=${_sh##*@}; _sh=${_sh%%:*}
     case "$_sh" in
@@ -38,10 +42,10 @@ cmd_sub() {
     esac
 
     _px=$(u local_proxy_port); _px=${_px:-1603}
-    _raw=$(curl -fsSL --max-time 25 --max-redirs 3 -A "Mozilla/5.0" \
+    _raw=$(curl -fsSL --max-time 25 --max-filesize 4194304 --max-redirs 3 -A "Mozilla/5.0" \
            --proxy "http://127.0.0.1:$_px" "$_u" 2>/dev/null || true)
     if [ -z "$_raw" ]; then
-        _raw=$(curl -fsSL --max-time 25 --max-redirs 3 -A "Mozilla/5.0" "$_u" 2>/dev/null || true)
+        _raw=$(curl -fsSL --max-time 25 --max-filesize 4194304 --max-redirs 3 -A "Mozilla/5.0" "$_u" 2>/dev/null || true)
     fi
     [ -n "$_raw" ] || die "подписка не скачалась: стоит проверить адрес и связь"
     # Подписка почти всегда в base64 (и base64url): раскодирует ucode. Не

@@ -58,7 +58,7 @@ list_to_json() {
             } else {
                 # domain:, full: и запись без префикса -- обычный домен.
                 if (v !~ /^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/ ||
-                    v !~ /\.[A-Za-z][A-Za-z]+$/ ||
+                    v !~ /\.([A-Za-z][A-Za-z]+|xn--[A-Za-z0-9-]+)$/ ||
                     v ~ /\.\./)            { print $0 >> bad; next }
                 if (pre == "") pre = pfx
             }
@@ -111,6 +111,9 @@ cmd_gen() {
     [ -f "$CONF" ] || dief "нет %s" "$CONF"
     [ -x "$XRAY" ] || die "xray не найден"
     mkdir -p "$LISTS"
+    # Список негодных строк -- до сборки списков и направлений: прежде его
+    # обнуляли после, и строки с пробелом из направлений терялись молча.
+    : > "$BADLIST" 2>/dev/null || true
 
     D=$LISTS/domains.lst
     S=$(merged_subnets)
@@ -468,7 +471,6 @@ gen_outbounds() {
               "$_dcount" "$POOL_SIZE"
     fi
 
-    : > "$BADLIST" 2>/dev/null || true
     build_proxies
     # Ноды направлений тоже в исключения: иначе петля.
     VPN_HOSTS="$VPN_HOSTS $ROUTE_HOSTS"

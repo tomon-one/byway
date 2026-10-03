@@ -142,7 +142,7 @@ byway import ФАЙЛ [--no-key] — файл от byway export	byway import FIL
 в выгрузке ключ ЕСТЬ, но принят не был -- так велит --no-key (в панели это галочка «Оставить нынешний ключ»)	the export DOES have a key, but it was not taken -- that is what --no-key says (in the web UI it is the "Keep the current key" checkbox)
 перезапуск службы — туннель прервётся на несколько секунд	restarting the service — the tunnel will drop for a few seconds
 применено, служба перезапущена	applied, the service is restarted
-применено. byway выключен настройкой -- включить: uci set byway.main.enabled=1 && uci commit byway	applied. byway is switched off in the settings -- turn it on: uci set byway.main.enabled=1 && uci commit byway
+применено. byway выключен настройкой -- включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart	applied. byway is switched off in the settings -- turn it on: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart
 конфиг не собрался — прежние настройки возвращаются на место	the config did not build — the previous settings are put back
 настройки из файла не приняты, прежние на месте	the settings from the file were not accepted, the previous ones are in place
 ссылка не задана: передать аргументом либо записать в byway.main.node_url	no link given: pass it as an argument or write it into byway.main.node_url
@@ -361,7 +361,7 @@ IPv6 поднят, а перехват только по IPv4	IPv6 is up, interc
   пинов из /etc/hosts внутри подсетей byway: %s	  /etc/hosts pins inside byway subnets: %s
   их адреса уйдут в туннель, хотя пин ставят затем, чтобы шли мимо	  those addresses will go through the tunnel, though a pin exists to keep them out of it
   что бывает:	  what exists:
-  подключить: uci add_list byway.main.preset=ИМЯ && uci commit byway && byway presets	  switch one on: uci add_list byway.main.preset=NAME && uci commit byway && byway presets
+  подключить: uci add_list byway.main.preset=ИМЯ && uci commit byway && byway presets && /etc/init.d/byway reload	  switch one on: uci add_list byway.main.preset=NAME && uci commit byway && byway presets && /etc/init.d/byway reload
 движка нет (%s) — ключ проверить нечем; сам ключ тут ни при чём	no engine (%s) — nothing to check the key with; the key itself is not at fault
 файрвол firewall4	firewall4
 firewall4 не найден — вероятно firewall3, 21.02 и старше	firewall4 not found — probably firewall3, 21.02 or older
@@ -485,7 +485,7 @@ dnsmasq отвечает по пину сам, подставного адрес
 адрес подписки указывает на сам роутер	the subscription address points at the router itself
 адрес подписки ведёт внутрь сети (%s) — byway туда не ходит	the subscription address leads inside the network (%s) - byway does not go there
 автообновление: копия для отката не сделалась -- установка ОТМЕНЕНА (место на /overlay?)	auto-update: the rollback copy was not made - installation CANCELLED (space on /overlay?)
-у вас это не ночь: в Москве это на три часа позже, во Владивостоке на десять — перезапуск службы среди дня. Лечится в LuCI (Система → Общие настройки → Часовой пояс) либо uci set system.@system[0].timezone=... (именно timezone: zonename часы не двигает)	that is not night where you are: three hours later in Moscow, ten in Vladivostok - the service restarts in the middle of the day. Fix it in LuCI (System - General Settings - Timezone) or uci set system.@system[0].timezone=... (specifically timezone: zonename does not change the clock)
+у вас это не ночь: в Москве это на три часа позже, во Владивостоке на десять — перезапуск службы среди дня. Лечится в LuCI (Система → Общие настройки → Часовой пояс) либо uci set system.@system[0].timezone=... && uci commit system && /etc/init.d/system reload (именно timezone: zonename часы не двигает)	that is not night where you are: three hours later in Moscow, ten in Vladivostok - the service restarts in the middle of the day. Fix it in LuCI (System - General Settings - Timezone) or uci set system.@system[0].timezone=... && uci commit system && /etc/init.d/system reload (specifically timezone: zonename does not change the clock)
 если причина устранена — поставить вручную: byway update --force	if the cause is gone - install it by hand: byway update --force
 без ярлыка	no label
 IPv6 поднят и заворачивается наравне с IPv4	IPv6 is up and goes through the tunnel alongside IPv4
@@ -683,7 +683,7 @@ Xray %s уже лежит рядом — переключение без заг�
 он тоже метит трафик и правит ip rule: его метки и таблицы не должны совпадать с меткой byway %s и таблицей %s	it also marks traffic and edits ip rules: its marks and tables must not match the byway mark %s and table %s
 адрес сервера сменился (%s) -- пересборка конфига	the server address changed (%s) -- rebuilding the config
 нет задачи cron byway pulse	the byway pulse cron job is missing
-без неё при отказе движка дом остаётся без DNS до 10 минут вместо 1–2: byway update либо завести вручную: * * * * * /usr/local/bin/byway pulse	without it, if the engine fails, the home stays without DNS for up to 10 minutes instead of 1–2: byway update, or add by hand: * * * * * /usr/local/bin/byway pulse
+без неё при отказе движка дом остаётся без DNS до 10 минут вместо 1–2: byway update --force либо завести вручную: * * * * * /usr/local/bin/byway pulse	without it, if the engine fails, the home stays without DNS for up to 10 minutes instead of 1–2: byway update --force, or add by hand: * * * * * /usr/local/bin/byway pulse
 откатывать не на что: копия делается при byway update	nothing to roll back to: the copy is made by byway update
 копия прежней версии для отката не сделалась (место на флеше?) -- ничего не тронуто	the rollback copy of the previous version was not made (flash space?) -- nothing touched
 установка оборвалась -- возврат прежней версии	the installation broke off -- restoring the previous version
@@ -729,3 +729,5 @@ BYWAY_NO_VERIFY=1: подпись выпуска не проверяется	BYW
 прежний движок — своя сборка (%s): копия для отката сжимается в память	the current core is a custom build (%s): a rollback copy is being compressed into memory
 копию своей сборки для отката не сделать — замена не начата	cannot make a rollback copy of the custom build — replacement not started
 ни новое, ни прежнее ядро не легло на флеш — туннеля нет. Архив прежнего: %s (в памяти, до перезагрузки); поставить: %s > %s && chmod 755 %s && /etc/init.d/byway start	neither the new nor the previous core fit on flash — no tunnel. Archive of the previous one: %s (in memory, until reboot); install: %s > %s && chmod 755 %s && /etc/init.d/byway start
+адрес подписки с IPv6-литералом не поддерживается — нужно имя или IPv4	subscription address with an IPv6 literal is not supported — use a name or IPv4
+откат не завершён — освободить место на флеше и повторить: byway update --rollback	rollback incomplete — free some flash space and retry: byway update --rollback

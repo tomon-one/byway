@@ -97,7 +97,7 @@ return view.extend({
 		var muxOff = !!tnow && !/mux=/.test(st);
 
 		o = s.option(form.Value, 'mux_concurrency', 'Mux',
-			_('Сколько потоков в одно соединение. 0 — выключено, разумно 4–8. Помогает WebSocket, HTTPUpgrade и HTTP/2, где каждое соединение обходится дорого. XHTTP, gRPC, Hysteria2 и xtls-rprx-vision мультиплексируют сами — им второй слой мешает, и byway отключает mux; у WireGuard потока нет вовсе.'));
+			_('Сколько потоков в одно соединение. 0 — выключено, разумно 4–8. Помогает WebSocket и HTTPUpgrade, где каждое соединение обходится дорого. XHTTP, gRPC, Hysteria2 и xtls-rprx-vision мультиплексируют сами — им второй слой мешает, и byway отключает mux; у WireGuard потока нет вовсе.'));
 		o.datatype = 'uinteger';
 		o.placeholder = '8';
 		/* Говорим прямо в поле, а не только в подсказке. Подсказку сворачивают

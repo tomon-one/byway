@@ -65,8 +65,8 @@ PROBE
     # скрипт (2026-09-03, novayagazeta.ru).
     R=$(curl -s --max-time 15 --socks5-hostname "127.0.0.1:$PORT"         -w '%{http_code} %{time_total}' -o /tmp/byway-probe.out         "${PROBE_URL:-https://api.ipify.org}" 2>/dev/null) || R=""
     IP=$(cat /tmp/byway-probe.out 2>/dev/null | head -c 40)
-    kill $XP 2>/dev/null
-    wait $XP 2>/dev/null
+    kill $XP 2>/dev/null || true
+    wait $XP 2>/dev/null || true
     CODE=${R%% *}; TIME=${R##* }
     # Любой трёхзначный код -- связь состоялась (302, 403 Cloudflare без
     # браузерного UA): успех проверки ноды.

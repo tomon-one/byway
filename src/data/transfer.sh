@@ -178,7 +178,8 @@ cmd_import() {
     # по die, и по Ctrl+C. $_bak ловушка НЕ трогает: копию конфига (с ключом,
     # во флеше, права 700) заводят ради отката ПОСЛЕ удачного приёма, меню и
     # панель на неё ссылаются. Каталог один, следующий приём перезапишет.
-    trap 'rm -rf "$_tmp" 2>/dev/null' EXIT
+    # Файл панели (/tmp/byway-import.txt) после приёма не нужен: в нём ключ.
+    trap 'rm -rf "$_tmp" 2>/dev/null; case "$_src" in /tmp/byway-import.txt) rm -f "$_src" ;; esac' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
     chmod 700 "$_tmp" 2>/dev/null || true
@@ -239,7 +240,7 @@ cmd_import() {
                 warn "применено, но движок не поднялся — смотреть: logread -e byway"
             fi
         else
-            say "применено. byway выключен настройкой -- включить: uci set byway.main.enabled=1 && uci commit byway"
+            say "применено. byway выключен настройкой -- включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart"
         fi
     else
         warn "конфиг не собрался — прежние настройки возвращаются на место"

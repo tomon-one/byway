@@ -100,7 +100,7 @@ doctor_needs() {
     fi
     crontab -l 2>/dev/null | grep -q "byway pulse" ||
         _d_warn "нет задачи cron byway pulse" \
-                "без неё при отказе движка дом остаётся без DNS до 10 минут вместо 1–2: byway update либо завести вручную: * * * * * /usr/local/bin/byway pulse"
+                "без неё при отказе движка дом остаётся без DNS до 10 минут вместо 1–2: byway update --force либо завести вручную: * * * * * /usr/local/bin/byway pulse"
     for _m in nft_tproxy nft_socket; do
         # lsmod не показывает модули, встроенные в ядро: смотреть ещё
         # /sys/module/<имя>.
@@ -204,7 +204,7 @@ doctor_updates() {
         case "${_tzo:-UTC}" in
           UTC|""|GMT0|GMT)
             _d_warn "$(_f 'часы роутера идут по UTC (timezone=%s) — окно обновления придётся на %s:00 UTC' "${_tzo:-$(_t 'не задан')}" "$_auhd")" \
-                    "у вас это не ночь: в Москве это на три часа позже, во Владивостоке на десять — перезапуск службы среди дня. Лечится в LuCI (Система → Общие настройки → Часовой пояс) либо uci set system.@system[0].timezone=... (именно timezone: zonename часы не двигает)" ;;
+                    "у вас это не ночь: в Москве это на три часа позже, во Владивостоке на десять — перезапуск службы среди дня. Лечится в LuCI (Система → Общие настройки → Часовой пояс) либо uci set system.@system[0].timezone=... && uci commit system && /etc/init.d/system reload (именно timezone: zonename часы не двигает)" ;;
           *)
             _d_ok "$(_f 'часы %s (%s, смещение %s), обновление в %s:00 по часам роутера — сейчас %s' \
                        "${_tzn:-$(_t 'без ярлыка')}" "$_tzo" "$(date '+%z' 2>/dev/null || echo '?')" \
@@ -441,7 +441,8 @@ doctor_rivals() {
             # при живом движке.
             _trace=0
             nft list tables 2>/dev/null | grep -qi "[ ]$_ni\$" && _trace=1
-            ip rule show 2>/dev/null | grep -q "lookup $RT_TABLE" &&
+            # Свои правила byway не считаются: при лежащем движке они остаются.
+            ip rule show 2>/dev/null | grep "lookup $RT_TABLE" | grep -vE "$(rule_re)" | grep -q . &&
                 [ -z "$(xray_pid)" ] && _trace=1
             if [ "$_trace" = 1 ]; then
                 _d_bad "$(_f 'рядом РАБОТАЕТ %s' "$_nn")" "$(_f 'след виден в ядре: своя таблица nft либо правило на таблицу маршрутизации %s. Оставить что-то одно: /etc/init.d/%s stop && /etc/init.d/%s disable' "$RT_TABLE" "$_ni" "$_ni")"
