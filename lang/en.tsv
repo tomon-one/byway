@@ -237,14 +237,14 @@ dnsmasq не направлен на byway	dnsmasq does not point at byway
 скачать подписку	download a subscription
 обновить готовые списки	update the ready-made lists
 чем реально пользуются	what is actually used
-принять настройки из выгрузки	import settings from an export
+принять настройки из выгрузки; --no-key — ключ не трогать	import settings from an export; --no-key — leave the key alone
 очистить журнал состояния, статистику или то и другое	clear the state log, the statistics, or both
 версия	version
 check [ссылка]	check [link]
 probe [ссылка|--all]	probe [link|--all]
 sub АДРЕС	sub ADDRESS
 export [файл] [--with-key]	export [file] [--with-key]
-import ФАЙЛ	import FILE
+import ФАЙЛ [--no-key]	import FILE [--no-key]
 рядом включён %s	%s is also enabled
 рядом РАБОТАЕТ %s	%s is RUNNING alongside byway
 %s установлен, но выключен	%s is installed but disabled
@@ -311,7 +311,7 @@ report [файл]	report [file]
 не распаковалось -- ничего не тронуто	unpacking failed -- nothing was touched
 в пакете нет install.sh -- ничего не тронуто	there is no install.sh in the package -- nothing was touched
 установка	installing
-проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же, --rollback — вернуть прежнюю	check whether a new byway version exists and install it; --check — only check, --force — reinstall the same one, --rollback — restore the previous one
+проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же, --rollback — вернуть прежнюю, --no-verify — без проверки подписи	check whether a new byway version exists and install it; --check — only check, --force — reinstall the same one, --rollback — restore the previous one, --no-verify — skip the signature check
 GitHub не ответил -- похоже, нет связи	GitHub did not answer -- looks like there is no connection
 на GitHub нет ни репозитория %s, ни его выпусков	GitHub has neither the %s repository nor its releases
 GitHub ответил «слишком часто спрашиваете» -- подождать час	GitHub answered "too many requests" -- wait an hour
@@ -751,16 +751,25 @@ reload: правила перехвата не легли -- туннеля не
 reload: правила перехвата не легли -- туннеля нет, доступ к списку закрыт (on_failure=closed)	reload: interception rules failed -- no tunnel, access to the list is closed (on_failure=closed)
 reload: конфиг не изменился, служба не тронута	reload: the config did not change, the service was left alone
 ВНИМАНИЕ    трафик перечисленных сетей мимо VPN ЗАКРЫТ: туннеля нет, так велит «не пускать мимо VPN»\n	WARNING     Traffic of the listed networks outside the VPN is BLOCKED: no tunnel, "no traffic outside the VPN" says so\n
-движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: трафик сетей byway закрыт	the core is not coming up -- interception removed, the "no leaks past the VPN" block STAYS: traffic of the byway networks is closed
-движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: сайты и подсети списка закрыты	the core is not coming up -- interception removed, the "no leaks past the VPN" block STAYS: the sites and subnets of the list are closed
-движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» включён, но закрывать нечего	the core is not coming up -- interception removed, the "no leaks past the VPN" block is on, but there is nothing to close
+движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: трафик сетей byway закрыт	the core is not coming up -- interception removed, the "no traffic outside the VPN" block STAYS: traffic of the byway networks is closed
+движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» ОСТАЁТСЯ: сайты и подсети списка закрыты	the core is not coming up -- interception removed, the "no traffic outside the VPN" block STAYS: the sites and subnets of the list are closed
+движок не поднимается -- перехват снят, запрет «не пускать мимо VPN» включён, но закрывать нечего	the core is not coming up -- interception removed, the "no traffic outside the VPN" block is on, but there is nothing to close
 перезапущена	restarted
 запущена	started
 \n  byway ВЫКЛЮЧЕН настройкой — служба не запускается\n	\n  byway is TURNED OFF by setting — the service does not start\n
 \n  движок не поднялся — смотреть: logread -e byway\n	\n  the core did not come up — see: logread -e byway\n
 сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)	statistics collection is off — turn on: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (panel: Maintenance → Statistics collection)
 byway возьмёт другое значение сам (его видно в byway nft, строка «meta mark … return»); закрепить: uci set byway.main.self_mark=ЗНАЧЕНИЕ && uci commit byway && /etc/init.d/byway reload	byway will pick another value itself (see byway nft, the "meta mark … return" line); to pin it: uci set byway.main.self_mark=VALUE && uci commit byway && /etc/init.d/byway reload
-их клиенты получат подставной адрес, до туннеля не дойдут и потеряют ВЕСЬ список. Лечится одним из двух: добавить устройство в byway.main.interface либо выдать ей свой DNS через dhcp_option '6,…'	their clients will get a placeholder address, never reach the tunnel and lose the WHOLE list. Two fixes: add the device to byway.main.interface, or give it its own DNS via dhcp_option '6,…'
+их клиенты получат подставной адрес, до туннеля не дойдут и потеряют ВЕСЬ список. Лечится одним из двух: добавить сеть в byway.main.interface либо выдать ей свой DNS через dhcp_option '6,…'	their clients will get a placeholder address, never reach the tunnel and lose the WHOLE list. Two fixes: add the device to byway.main.interface, or give it its own DNS via dhcp_option '6,…'
 в этом режиме byway.main.interface -- граница ВСЕЙ защиты, а не только списков: что вне его, то мимо туннеля и мимо запрета «не пускать мимо VPN». Добавить устройства в byway.main.interface	in this mode byway.main.interface is the boundary of ALL protection, not just of the lists: whatever is outside it bypasses both the tunnel and the "no traffic outside the VPN" block. Add the devices to byway.main.interface
 проверка новых версий не удалась (ответ GitHub: %s)	the version check failed (GitHub answer: %s)
 новые выпуски не видны: нет связи с GitHub либо он отвечает отказом. Проверить вручную: byway update --check	new releases are not visible: no connection to GitHub, or it answers with a refusal. Check by hand: byway update --check
+адрес %s из своего конфига не разрешился — пропущен	the address %s from your own config did not resolve -- skipped
+в режиме «всё через VPN» журнал обращений не ведётся — статистики нет	the access log is not kept in "all traffic through the VPN" mode -- there are no statistics
+ключ %s отвергнут движком — пропущен: %s	key %s was rejected by the core -- skipped: %s
+    … и ещё %s (весь список: sort -u %s)	    ... and %s more (full list: sort -u %s)
+dns_route=%s не понят — DNS идёт напрямую; допустимо direct или tunnel	dns_route=%s is not understood -- DNS goes direct; use direct or tunnel
+движок не найден или не исполняемый: %s	the core is missing or not executable: %s
+собранный конфиг движка без секретов: счётчики и правила	the built core config without secrets: counters and rules
+напечатать набор правил nft, не применяя его	print the nft ruleset without applying it
+то же в фоне, ход в журнале (так зовёт панель)	the same in the background, progress in the log (how the panel calls it)

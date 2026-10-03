@@ -194,7 +194,12 @@ _t() {
 
 # Отложенная жалоба из core/head.sh: теперь словарь есть.
 if [ -n "$XRAY_REJECTED" ]; then
-    warnf "путь к движку отклонён: %s" "$XRAY_REJECTED" >&2
+    # Файла нет или у него нет права запуска -- не «отклонён» (Ф-13).
+    if [ -f "$XRAY_REJECTED" ] && [ -x "$XRAY_REJECTED" ]; then
+        warnf "путь к движку отклонён: %s" "$XRAY_REJECTED" >&2
+    else
+        warnf "движок не найден или не исполняемый: %s" "$XRAY_REJECTED" >&2
+    fi
 fi
 
 # ── проверка окружения ─────────────────────────────────────────────────────
@@ -1360,8 +1365,13 @@ build_proxies() {
 
     PROXIES=""
     _n=0
+    _ki=-1
+    PROXY_KEYIDX=""             # номер ключа в списке для каждого proxy-N
     xray_ver_num >/dev/null     # версия -- один раз, подоболочки её наследуют
     for _k in $_keys; do
+        _ki=$((_ki + 1))
+        # Ключи, которые отверг уже сам движок (повтор сборки в cmd_gen, Ф-3).
+        case " ${SKIP_KEYS:-} " in *" $_ki "*) continue ;; esac
         # Подоболочка: parse_node на плохом ключе зовёт die (exit), и один
         # негодный ключ из десяти валил бы весь gen. build_stream там же:
         # отказы по версии ядра тоже через die. Настоящий разбор -- после, в
@@ -1373,6 +1383,7 @@ build_proxies() {
         parse_node "$_k"
         build_stream
         _b=$(proxy_block "proxy-$_n")
+        PROXY_KEYIDX="$PROXY_KEYIDX $_ki"
         VPN_HOSTS="$VPN_HOSTS $N_HOST"
         if [ -n "$PROXIES" ]; then PROXIES="$PROXIES,
     $_b"; else PROXIES="    $_b"; fi
@@ -1503,6 +1514,12 @@ cmd_gen() {
     [ -f "$CONF" ] || dief "нет %s" "$CONF"
     [ -x "$XRAY" ] || die "xray не найден"
     mkdir -p "$LISTS"
+    # Черновики частей конфига -- в каталоге root, не в общем /tmp: их пишет
+    # root, а потом вставляет в конфиг движка; движок не от root (ujail) мог
+    # занять имя в /tmp заранее и подменить содержимое (Д-7). Тот же каталог,
+    # что у журнала обращений и рабочих файлов stat.
+    GEN_WORK=/var/run/byway
+    [ -d "$GEN_WORK" ] || { mkdir -p "$GEN_WORK" && chmod 755 "$GEN_WORK"; } 2>/dev/null || true
     # Список негодных строк -- до сборки списков и направлений: прежде его
     # обнуляли после, и строки с пробелом из направлений терялись молча.
     : > "$BADLIST" 2>/dev/null || true
@@ -1519,6 +1536,7 @@ cmd_gen() {
     gen_inbounds
     gen_log
     gen_outbounds
+    _dsave=$DIRECT_SET
     gen_dns_route
 
     # Черновик в память, не во флеш (43.7 МБ): живёт секунды, а на неудачной
@@ -1542,6 +1560,28 @@ cmd_gen() {
     # ещё не стартовала и каталог не создавала). Права те же, что у init.
     [ -d /var/run/byway ] || { mkdir -p /var/run/byway && chmod 755 /var/run/byway; } 2>/dev/null || true
     _test=$("$XRAY" run -test -c "$TMP" 2>&1) && _testok=1 || _testok=0
+    # Автовыбор: ключ, который отвергает только сам движок (vless без TLS к
+    # публичному адресу на ядре 26.7.11+, byway такое пропускает), не должен
+    # валить сборку целиком -- как и тот, что отверг разбор (Ф-3). Движок
+    # называет outbound proxy-N: ключ снимается, сборка повторяется. Хотя бы
+    # один ключ остаётся.
+    _gtry=0
+    SKIP_KEYS=""
+    while [ "$_testok" = "0" ] && [ "$_gtry" -lt 6 ] && [ "$(u conn_mode)" = "urltest" ] && [ "${_n:-0}" -gt 1 ]; do
+        _bk=$(printf '%s' "$_test" | sed -n 's/.*proxy-\([0-9][0-9]*\).*/\1/p' | head -1)
+        [ -n "$_bk" ] || break
+        _bki=$(printf '%s' "$PROXY_KEYIDX" | awk -v n="$_bk" '{print $(n + 1)}')
+        [ -n "$_bki" ] || break
+        warnf "ключ %s отвергнут движком — пропущен: %s" "$(( _bki + 1 ))" "$(printf '%s\n' "$_test" | grep "proxy-$_bk" | head -1 | awk -F'> ' '{print $NF}' | cut -c1-120)"
+        SKIP_KEYS="$SKIP_KEYS $_bki"
+        build_proxies
+        VPN_HOSTS="$VPN_HOSTS $ROUTE_HOSTS"
+        DIRECT_SET=$_dsave
+        gen_dns_route
+        gen_json
+        _gtry=$((_gtry + 1))
+        _test=$("$XRAY" run -test -c "$TMP" 2>&1) && _testok=1 || _testok=0
+    done
     if [ "$_testok" = "1" ]; then
         # Предупреждения движка не глотать: Xray помечает транспорт устаревшим
         # за версию-другую до удаления, другого заблаговременного сигнала нет.
@@ -1559,7 +1599,11 @@ cmd_gen() {
         _bad=$(sort -u "$BADLIST" 2>/dev/null | grep -c . || true)
         if [ "${_bad:-0}" -gt 0 ]; then
             warnf "записей отброшено как неподходящие: %s" "$_bad"
-            sort -u "$BADLIST" 2>/dev/null | head -3 | sed 's/^/    /'
+            # Через warnf: панель показывает только строки с [!], а голые
+            # записи терялись (Д-5).
+            sort -u "$BADLIST" 2>/dev/null | head -10 |
+                while IFS= read -r _bw; do warnf "    %s" "$_bw"; done
+            [ "$_bad" -le 10 ] || warnf "    … и ещё %s (весь список: sort -u %s)" "$(( _bad - 10 ))" "$BADLIST"
             warn "  причина: не похоже ни на домен (буквы, цифры, дефис и точки; последняя часть — не короче двух букв), ни на подсеть IPv4, либо длиннее 253 знаков"
         fi
         # Не изменилось -- рабочий не трогаем: панель и procd зовут gen при
@@ -1925,6 +1969,10 @@ gen_dns_route() {
     DNSTAG=', "tag": "dns-query"'; DNSHOSTS=""
     DNSRULE='
       { "type": "field", "inboundTag": [ "dns-query" ], "outboundTag": "direct" },'
+    case "$(u dns_route)" in
+      ''|direct|tunnel) ;;
+      *) warnf "dns_route=%s не понят — DNS идёт напрямую; допустимо direct или tunnel" "$(u dns_route)" ;;
+    esac
     if [ "$(u dns_route)" = "tunnel" ]; then
         # Круг: чтобы открыть соединение к ноде, Xray узнаёт её адрес, а запрос
         # ушёл бы в ещё не существующий туннель. Поэтому адрес ноды разрешается
@@ -1944,7 +1992,15 @@ gen_dns_route() {
             # несобравшегося.
             [ -n "$_ip" ] || _ip=$(sed -n 's/.*"'"$_h"'"[[:space:]]*:[[:space:]]*"\([0-9.]*\)".*/\1/p' \
                                    "$OUT" 2>/dev/null | head -1)
-            [ -n "$_ip" ] || dief "адрес сервера %s не разрешился — без него DNS через туннель не собрать (запросы к серверу ушли бы в сам туннель); проверить интернет и DNS роутера" "$_h"
+            if [ -z "$_ip" ]; then
+                # Свой конфиг: в JSON бывают запасные и посторонние адреса
+                # (Д-4), пропуск лучше отказа сборки. Ключ byway -- как было.
+                if [ "$N_PROTO" = "raw" ]; then
+                    warnf "адрес %s из своего конфига не разрешился — пропущен" "$_h"
+                    continue
+                fi
+                dief "адрес сервера %s не разрешился — без него DNS через туннель не собрать (запросы к серверу ушли бы в сам туннель); проверить интернет и DNS роутера" "$_h"
+            fi
             _hh="$_hh${_hh:+, }\"$_h\": \"$_ip\""
         done
         [ -n "$_hh" ] && DNSHOSTS="\"hosts\": { $_hh },"
@@ -1975,7 +2031,7 @@ HEAD
       # Через файл: список в переменной ash -- 9,5 МБ на потолке пресета (200
       # 000 доменов), при подстановке вдвое больше, а на 240 МБ рядом работает
       # движок, и OOM убил бы его.
-      _fdf=/tmp/byway-fakedns.json
+      _fdf=$GEN_WORK/fakedns.json
       list_to_json "$MERGED" "domain:" > "$_fdf" 2>/dev/null || : > "$_fdf"
       # Запятая -- только если перед ней что-то есть: на пустом списке «[ ,
       # "full:…" ]» движок отвергал конфиг целиком.
@@ -2099,7 +2155,7 @@ MID
         # Через файл: список печатается дважды (fakedns и здесь), а в
         # переменной ash на потолке пресета это 9,5 МБ, при подстановке вдвое
         # больше -- на 240 МБ, где рядом работает движок.
-        _djf=/tmp/byway-dom.json
+        _djf=$GEN_WORK/dom.json
         list_to_json "$MAINDOM" "domain:" > "$_djf" 2>/dev/null || : > "$_djf"
         # Домен-проба -- всегда, даже при пустом списке: через него проверка
         # «трафик проходит» смотрит всю цепочку и не зависит от меняющегося
@@ -2112,7 +2168,7 @@ MID
         rm -f "$_djf" 2>/dev/null || true
         # Через файл, как домены: список из одних негодных строк давал бы
         # «"ip": [ ]», и движок отвергал весь конфиг без имени виновной строки.
-        _sjf=/tmp/byway-sub.json
+        _sjf=$GEN_WORK/sub.json
         if [ -f "$S" ]; then list_to_json "$S" "" > "$_sjf" 2>/dev/null || : > "$_sjf"; else : > "$_sjf"; fi
         if [ -s "$_sjf" ]; then
           printf '      { "type": "field", "ip": [\n'
@@ -3617,7 +3673,7 @@ NFTA
         else
             # Молчать здесь нельзя: человек включил запрет и вправе знать, что
             # его нет.
-            printf 'none\n' > "$BLOCK_MARK"
+            printf 'none\n' > "$BLOCK_MARK"; rm -f "$BLOCK_MARK.parts" 2>/dev/null
             warn "«не пускать мимо VPN»: ядро не приняло правило запрета — трафик идёт НАПРЯМУЮ"
         fi
         return 0
@@ -3649,7 +3705,7 @@ NFTB
         warnf "туннеля нет, и доступ к списку закрыт: доменов %s, подсети %s" \
               "$_bl_dom" "$([ "${_bl_net:-0}" = 1 ] && _t да || _t нет)"
     else
-        printf 'none\n' > "$BLOCK_MARK"
+        printf 'none\n' > "$BLOCK_MARK"; rm -f "$BLOCK_MARK.parts" 2>/dev/null
         warn "«не пускать мимо VPN» включено, но закрывать нечего: списки пусты — трафик идёт НАПРЯМУЮ"
     fi
 }
@@ -3762,6 +3818,8 @@ block_intact() {
 plumb_mod_hint() {
     for _pm in nft_tproxy nft_socket; do
         grep -q "^$_pm " /proc/modules 2>/dev/null && continue
+        # Встроенный в ядро модуль в /proc/modules не виден (П4).
+        [ -d "/sys/module/$_pm" ] && continue
         modprobe "$_pm" 2>/dev/null && continue
         warnf "нет модуля ядра %s — поставить: %s kmod-nft-tproxy kmod-nft-socket" "$_pm" "$PKG_FIX"
         return 0
@@ -4103,8 +4161,16 @@ cmd_watch() {
     fi
 }
 
+# Копия одного скрипта от автообновления 0.2.4: нужна ей полчаса, потом лишняя.
+watch_prevbin() {
+    [ -f "$PREVBIN" ] && [ -z "$(find "$PREVBIN" -mmin -60 2>/dev/null)" ] &&
+        rm -f "$PREVBIN" 2>/dev/null
+    return 0
+}
+
 # Возврат ядра, если файла движка нет.
 watch_restore() {
+    watch_prevbin
     # Повтор раз в 15 мин, в фоне: загрузка идёт минуты, сторож ходит раз в
     # пять. Запускаемое xray-* рядом -- не повод: его указывают руками.
     _xalt=""
@@ -4866,7 +4932,7 @@ node_udp() {
 # бы в 20 с панели); ответ -- сколько отвечают и лучшая задержка.
 health_urltest() {
     # mktemp: каталог с $$, заведённый заранее, подсовывал бы чужие замеры.
-    _hd=$(mktemp -d /tmp/byway-health.XXXXXX) || { _hfail vpn "$(_t 'не отвечает ни один ключ')"; return 0; }
+    _hd=$(mktemp -d /tmp/byway-health.XXXXXX) || { _hfail vpn "$(_t 'не создать рабочий каталог в /tmp')"; return 0; }
     _hn=0
     for _hk in $(uci -q get byway.main.node_urls 2>/dev/null); do
         _hn=$((_hn + 1))
@@ -5261,7 +5327,7 @@ doctor_dns() {
                "в этом режиме byway.main.interface -- граница ВСЕЙ защиты, а не только списков: что вне его, то мимо туннеля и мимо запрета «не пускать мимо VPN». Добавить устройства в byway.main.interface"
     elif [ -n "$_lost" ]; then
         _d_warn "$(_f 'сети с резолвером byway, но без перехвата:%s' "$_lost")" \
-                "их клиенты получат подставной адрес, до туннеля не дойдут и потеряют ВЕСЬ список. Лечится одним из двух: добавить устройство в byway.main.interface либо выдать ей свой DNS через dhcp_option '6,…'"
+                "их клиенты получат подставной адрес, до туннеля не дойдут и потеряют ВЕСЬ список. Лечится одним из двух: добавить сеть в byway.main.interface либо выдать ей свой DNS через dhcp_option '6,…'"
     else
         _d_ok "$(_t 'перехват и резолвер согласованы по сетям')"
     fi
@@ -6962,7 +7028,9 @@ MAPPOS=$STATDIR/fakemap.pos # докуда дошли, строя карту п�
 
 # Журнал обращений, из которого считается учёт, движок пишет только при
 # show_usage=1 (или уровне info/debug).
+stat_all() { [ "$(u list_mode)" = "all" ]; }
 stat_off() {
+    stat_all && return 0
     [ "$(u show_usage)" = "1" ] && return 1
     case "$(u log_level)" in info|debug) return 1 ;; esac
     return 0
@@ -6970,6 +7038,7 @@ stat_off() {
 
 cmd_stat() {
     mkdir -p "$STATDIR" 2>/dev/null || true
+    stat_all && { warn "в режиме «всё через VPN» журнал обращений не ведётся — статистики нет"; return 0; }
     stat_off && warn "сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)"
     _p=$(xray_pid)
     [ -n "$_p" ] || { warn "xray не запущен, считать нечего"; return 0; }
@@ -7110,6 +7179,7 @@ stat_count() {
 # Показать накопленное. Без аргумента — двадцать самых частых.
 cmd_top() {
     if [ ! -s "$STAT" ]; then
+        stat_all && die "в режиме «всё через VPN» журнал обращений не ведётся — статистики нет"
         stat_off && die "сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)"
         die "учёт пуст. Собирается задачей cron; вручную: byway stat"
     fi
@@ -7521,7 +7591,7 @@ case "${1:-}" in
   nftsig) cmd_nftsig ;;
   plumb)  shift; cmd_plumb "$@" ;;
   status) cmd_status "${2:-}" ;;
-  "")
+  ""|help|--help|-h)
     # Без аргументов -- состояние и список команд.
     printf "$(_t 'byway %s — раздельное туннелирование через VPN\n\n')" "$BYWAY_VERSION"
     cmd_status 2>/dev/null || true
@@ -7534,18 +7604,21 @@ case "${1:-}" in
     _help 'health' 'быстрая проверка: служба, VPN, трафик, DNS'
     _help 'doctor' 'проверка окружения: модули, утилиты, место, конфликты'
     _help 'gen' 'пересобрать конфиг из настроек и списков'
+    _help 'show' 'собранный конфиг движка без секретов: счётчики и правила'
+    _help 'nft' 'напечатать набор правил nft, не применяя его'
     _help 'plumb on | off' 'включить или снять перехват трафика (nft, маршрут, DNS)'
     _help 'check [ссылка]' 'разобрать ключ и проверить конфиг, без соединений'
     _help 'probe [ссылка|--all]' 'проверить ключ отдельно, не трогая работающий туннель'
     _help 'sub АДРЕС' 'скачать подписку'
     _help 'presets' 'обновить готовые списки'
     _help 'top [N]' 'чем реально пользуются'
-    _help 'update [--check|--force|--rollback]' 'проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же, --rollback — вернуть прежнюю'
+    _help 'update [--check|--force|--rollback|--no-verify]' 'проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же, --rollback — вернуть прежнюю, --no-verify — без проверки подписи'
     _help 'engine [ВЕРСИЯ|tested|newest|stable|restore|/tmp/ФАЙЛ]' 'есть ли обновление ядра Xray-core, и его замена; без аргумента — ещё и подробности'
     _help 'lang [ru|en]' 'язык вывода и панели; английский словарь докачивается при переключении'
     _help 'report [файл]' 'собрать отчёт для обращения, без ключа от VPN'
     _help 'export [файл] [--with-key]' 'выгрузить настройки без ключа от VPN; --with-key — с ключом'
-    _help 'import ФАЙЛ' 'принять настройки из выгрузки'
+    _help 'import ФАЙЛ [--no-key]' 'принять настройки из выгрузки; --no-key — ключ не трогать'
+    _help 'job update|engine|log' 'то же в фоне, ход в журнале (так зовёт панель)'
     _help 'clear log|stat|all' 'очистить журнал состояния, статистику или то и другое'
     _help 'version' 'версия'
     ;;

@@ -162,7 +162,7 @@ node_udp() {
 # бы в 20 с панели); ответ -- сколько отвечают и лучшая задержка.
 health_urltest() {
     # mktemp: каталог с $$, заведённый заранее, подсовывал бы чужие замеры.
-    _hd=$(mktemp -d /tmp/byway-health.XXXXXX) || { _hfail vpn "$(_t 'не отвечает ни один ключ')"; return 0; }
+    _hd=$(mktemp -d /tmp/byway-health.XXXXXX) || { _hfail vpn "$(_t 'не создать рабочий каталог в /tmp')"; return 0; }
     _hn=0
     for _hk in $(uci -q get byway.main.node_urls 2>/dev/null); do
         _hn=$((_hn + 1))

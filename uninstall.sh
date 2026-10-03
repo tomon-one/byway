@@ -54,8 +54,8 @@ t() {
       "    удалить вместе с ключом: byway-uninstall --purge") printf %s "    remove them together with the key: byway-uninstall --purge" ;;
       "это был сухой прогон — на роутере ничего не изменилось") printf %s "that was a dry run — nothing on the router changed" ;;
       "Готово. byway удалён, интернет идёт напрямую.") printf %s "Done. byway is removed, traffic goes direct." ;;
-      "Что НЕ трогалось: движок Xray-core, настройки сети.") printf %s "What was NOT touched: the Xray core, your network settings." ;;
-      "Что НЕ трогалось: настройки сети.") printf %s "What was NOT touched: your network settings." ;;
+      "Что НЕ трогалось: движок Xray-core, настройки сети, пакеты (curl, unzip, kmod-nft-tproxy, kmod-nft-socket).") printf %s "What was NOT touched: the Xray core, your network settings, packages (curl, unzip, kmod-nft-tproxy, kmod-nft-socket)." ;;
+      "Что НЕ трогалось: настройки сети, пакеты (curl, unzip, kmod-nft-tproxy, kmod-nft-socket).") printf %s "What was NOT touched: your network settings, packages (curl, unzip, kmod-nft-tproxy, kmod-nft-socket)." ;;
       "движок удалён: %s шт.") printf %s "the core is removed: %s file(s)" ;;
       "движок по пути, указанному вручную, оставлен: %s") printf %s "the core at the manually set path is kept: %s" ;;
       "движок из пакетов OpenWrt оставлен -- он мог стоять до byway и нужен не только ему") printf %s "the core from OpenWrt packages is kept -- it may predate byway and may be used by something else" ;;
@@ -164,7 +164,7 @@ else
     [ -n "$_mine" ] || _mine=127.0.0.42
     # Незакоммиченная дельта byway (dns_up) не должна уйти во флеш вместе с
     # нашим commit.
-    do_ uci -q revert dhcp
+    if [ "$_ours" = 1 ]; then do_ uci -q revert dhcp; fi
     if [ "$_ours" != 1 ]; then
         warn "следов byway в настройках DNS нет — dnsmasq не трогается"
     elif [ -f /etc/byway/dns-saved ]; then
@@ -284,7 +284,7 @@ say "DNS роутера больше не идёт через byway"
 echo
 say "── 2. Служба ──"
 # Служба может быть уже снята, а начатое ею в фоне (или сторожем) живёт.
-_bg=$(pgrep -f '/usr/local/bin/[b]yway (engine|update|job|watch)' 2>/dev/null || true)
+_bg=$(pgrep -f '/usr/(local/)?bin/[b]yway (engine|update|job|watch)' 2>/dev/null || true)
 if [ -n "$_bg" ]; then
     if [ "$DRY" = "1" ]; then
         do_ "$(t 'остановить фоновые процессы byway:') $_bg"
@@ -292,7 +292,7 @@ if [ -n "$_bg" ]; then
         # shellcheck disable=SC2086
         kill $_bg 2>/dev/null || true
         for _w in 1 2 3 4 5 6 7 8 9 10; do
-            pgrep -f '/usr/local/bin/[b]yway (engine|update|job|watch)' >/dev/null 2>&1 || break
+            pgrep -f '/usr/(local/)?bin/[b]yway (engine|update|job|watch)' >/dev/null 2>&1 || break
             sleep 1
         done
     fi
@@ -320,7 +320,7 @@ say "── 3. Задачи cron ──"
 # строки: ночную копию `tar czf /root/lists.tgz /etc/byway`, свой
 # byway-notify.sh. Хватился бы человек в тот день, когда копия понадобилась,
 # и связать пропажу с удалением byway месяцем раньше было бы нечем.
-# Установщик заводит ровно две задачи, и обе опознаются по вызову.
+# Установщик заводит три задачи (watch, stat, pulse), и все опознаются по вызову.
 CRON_RE='^[^#]*/byway[[:space:]]\{1,\}\(watch\|stat\|pulse\)\([[:space:]]\|$\)'
 if crontab -l 2>/dev/null | grep -q "$CRON_RE"; then
     # Показываем вслух ДО удаления, и в сухом прогоне тоже: иначе «задачи
@@ -462,8 +462,8 @@ if [ "$DRY" = "1" ]; then
 else
     say "Готово. byway удалён, интернет идёт напрямую."
     if [ "$PURGE" = "1" ]; then
-        say "Что НЕ трогалось: настройки сети."
+        say "Что НЕ трогалось: настройки сети, пакеты (curl, unzip, kmod-nft-tproxy, kmod-nft-socket)."
     else
-        say "Что НЕ трогалось: движок Xray-core, настройки сети."
+        say "Что НЕ трогалось: движок Xray-core, настройки сети, пакеты (curl, unzip, kmod-nft-tproxy, kmod-nft-socket)."
     fi
 fi

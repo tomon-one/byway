@@ -35,7 +35,9 @@ STOP=10
 BYWAY=/usr/local/bin/byway
 # Сообщение службы на языке byway (словарь lang/en.tsv); формат и доводы как у
 # printf. Нет программы или словаря -- русский текст как есть.
-_tr() { "$BYWAY" xlat "$@" 2>/dev/null || { _trf=$1; shift; printf "$_trf" "$@"; }; }
+# Вывод берётся только при коде 0: прежняя byway (откат автообновления) на
+# незнакомую команду печатает «неизвестная команда» в stdout (П2).
+_tr() { _tro=$("$BYWAY" xlat "$@" 2>/dev/null) && printf '%s' "$_tro" || { _trf=$1; shift; printf "$_trf" "$@"; }; }
 CONF=/etc/byway/config.json
 # Слепок того, что РЕАЛЬНО применено: md5 конфига, с которым запущен движок, и
 # md5 желаемого набора правил nft. Живёт в памяти, то есть до перезагрузки --
@@ -85,7 +87,11 @@ xray_ok() {
 
 XRAY=$(uci -q get byway.main.xray_bin || true)
 if [ -n "$XRAY" ] && ! xray_ok "$XRAY"; then
-    logger -t byway "$(_tr 'путь к движку отклонён: %s' "$XRAY")"
+    if [ -f "$XRAY" ] && [ -x "$XRAY" ]; then
+        logger -t byway "$(_tr 'путь к движку отклонён: %s' "$XRAY")"
+    else
+        logger -t byway "$(_tr 'движок не найден или не исполняемый: %s' "$XRAY")"
+    fi
     XRAY=""
 fi
 # Тот же порядок, что у самого byway: сперва PATH, потом /usr/bin/xray.

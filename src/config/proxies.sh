@@ -113,8 +113,13 @@ build_proxies() {
 
     PROXIES=""
     _n=0
+    _ki=-1
+    PROXY_KEYIDX=""             # номер ключа в списке для каждого proxy-N
     xray_ver_num >/dev/null     # версия -- один раз, подоболочки её наследуют
     for _k in $_keys; do
+        _ki=$((_ki + 1))
+        # Ключи, которые отверг уже сам движок (повтор сборки в cmd_gen, Ф-3).
+        case " ${SKIP_KEYS:-} " in *" $_ki "*) continue ;; esac
         # Подоболочка: parse_node на плохом ключе зовёт die (exit), и один
         # негодный ключ из десяти валил бы весь gen. build_stream там же:
         # отказы по версии ядра тоже через die. Настоящий разбор -- после, в
@@ -126,6 +131,7 @@ build_proxies() {
         parse_node "$_k"
         build_stream
         _b=$(proxy_block "proxy-$_n")
+        PROXY_KEYIDX="$PROXY_KEYIDX $_ki"
         VPN_HOSTS="$VPN_HOSTS $N_HOST"
         if [ -n "$PROXIES" ]; then PROXIES="$PROXIES,
     $_b"; else PROXIES="    $_b"; fi

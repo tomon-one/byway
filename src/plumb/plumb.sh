@@ -6,6 +6,8 @@
 plumb_mod_hint() {
     for _pm in nft_tproxy nft_socket; do
         grep -q "^$_pm " /proc/modules 2>/dev/null && continue
+        # Встроенный в ядро модуль в /proc/modules не виден (П4).
+        [ -d "/sys/module/$_pm" ] && continue
         modprobe "$_pm" 2>/dev/null && continue
         warnf "нет модуля ядра %s — поставить: %s kmod-nft-tproxy kmod-nft-socket" "$_pm" "$PKG_FIX"
         return 0

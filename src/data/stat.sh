@@ -22,7 +22,9 @@ MAPPOS=$STATDIR/fakemap.pos # докуда дошли, строя карту п�
 
 # Журнал обращений, из которого считается учёт, движок пишет только при
 # show_usage=1 (или уровне info/debug).
+stat_all() { [ "$(u list_mode)" = "all" ]; }
 stat_off() {
+    stat_all && return 0
     [ "$(u show_usage)" = "1" ] && return 1
     case "$(u log_level)" in info|debug) return 1 ;; esac
     return 0
@@ -30,6 +32,7 @@ stat_off() {
 
 cmd_stat() {
     mkdir -p "$STATDIR" 2>/dev/null || true
+    stat_all && { warn "в режиме «всё через VPN» журнал обращений не ведётся — статистики нет"; return 0; }
     stat_off && warn "сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)"
     _p=$(xray_pid)
     [ -n "$_p" ] || { warn "xray не запущен, считать нечего"; return 0; }
@@ -170,6 +173,7 @@ stat_count() {
 # Показать накопленное. Без аргумента — двадцать самых частых.
 cmd_top() {
     if [ ! -s "$STAT" ]; then
+        stat_all && die "в режиме «всё через VPN» журнал обращений не ведётся — статистики нет"
         stat_off && die "сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)"
         die "учёт пуст. Собирается задачей cron; вручную: byway stat"
     fi

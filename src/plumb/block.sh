@@ -72,7 +72,7 @@ NFTA
         else
             # Молчать здесь нельзя: человек включил запрет и вправе знать, что
             # его нет.
-            printf 'none\n' > "$BLOCK_MARK"
+            printf 'none\n' > "$BLOCK_MARK"; rm -f "$BLOCK_MARK.parts" 2>/dev/null
             warn "«не пускать мимо VPN»: ядро не приняло правило запрета — трафик идёт НАПРЯМУЮ"
         fi
         return 0
@@ -104,7 +104,7 @@ NFTB
         warnf "туннеля нет, и доступ к списку закрыт: доменов %s, подсети %s" \
               "$_bl_dom" "$([ "${_bl_net:-0}" = 1 ] && _t да || _t нет)"
     else
-        printf 'none\n' > "$BLOCK_MARK"
+        printf 'none\n' > "$BLOCK_MARK"; rm -f "$BLOCK_MARK.parts" 2>/dev/null
         warn "«не пускать мимо VPN» включено, но закрывать нечего: списки пусты — трафик идёт НАПРЯМУЮ"
     fi
 }

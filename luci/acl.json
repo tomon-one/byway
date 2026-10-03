@@ -62,10 +62,13 @@
 				"/usr/local/bin/byway presets": [
 					"exec"
 				],
-				"/usr/local/bin/byway top *": [
+				"/usr/local/bin/byway top 25": [
 					"exec"
 				],
-				"/usr/local/bin/byway lang *": [
+				"/usr/local/bin/byway lang ru": [
+					"exec"
+				],
+				"/usr/local/bin/byway lang en": [
 					"exec"
 				],
 				"/usr/local/bin/byway update --check": [
@@ -95,7 +98,10 @@
 				"/usr/local/bin/byway import /tmp/byway-import.txt --no-key": [
 					"exec"
 				],
-				"/usr/local/bin/byway clear *": [
+				"/usr/local/bin/byway clear log": [
+					"exec"
+				],
+				"/usr/local/bin/byway clear stat": [
 					"exec"
 				],
 				"/usr/local/bin/byway sub *": [

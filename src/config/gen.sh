@@ -111,6 +111,12 @@ cmd_gen() {
     [ -f "$CONF" ] || dief "нет %s" "$CONF"
     [ -x "$XRAY" ] || die "xray не найден"
     mkdir -p "$LISTS"
+    # Черновики частей конфига -- в каталоге root, не в общем /tmp: их пишет
+    # root, а потом вставляет в конфиг движка; движок не от root (ujail) мог
+    # занять имя в /tmp заранее и подменить содержимое (Д-7). Тот же каталог,
+    # что у журнала обращений и рабочих файлов stat.
+    GEN_WORK=/var/run/byway
+    [ -d "$GEN_WORK" ] || { mkdir -p "$GEN_WORK" && chmod 755 "$GEN_WORK"; } 2>/dev/null || true
     # Список негодных строк -- до сборки списков и направлений: прежде его
     # обнуляли после, и строки с пробелом из направлений терялись молча.
     : > "$BADLIST" 2>/dev/null || true
@@ -127,6 +133,7 @@ cmd_gen() {
     gen_inbounds
     gen_log
     gen_outbounds
+    _dsave=$DIRECT_SET
     gen_dns_route
 
     # Черновик в память, не во флеш (43.7 МБ): живёт секунды, а на неудачной
@@ -150,6 +157,28 @@ cmd_gen() {
     # ещё не стартовала и каталог не создавала). Права те же, что у init.
     [ -d /var/run/byway ] || { mkdir -p /var/run/byway && chmod 755 /var/run/byway; } 2>/dev/null || true
     _test=$("$XRAY" run -test -c "$TMP" 2>&1) && _testok=1 || _testok=0
+    # Автовыбор: ключ, который отвергает только сам движок (vless без TLS к
+    # публичному адресу на ядре 26.7.11+, byway такое пропускает), не должен
+    # валить сборку целиком -- как и тот, что отверг разбор (Ф-3). Движок
+    # называет outbound proxy-N: ключ снимается, сборка повторяется. Хотя бы
+    # один ключ остаётся.
+    _gtry=0
+    SKIP_KEYS=""
+    while [ "$_testok" = "0" ] && [ "$_gtry" -lt 6 ] && [ "$(u conn_mode)" = "urltest" ] && [ "${_n:-0}" -gt 1 ]; do
+        _bk=$(printf '%s' "$_test" | sed -n 's/.*proxy-\([0-9][0-9]*\).*/\1/p' | head -1)
+        [ -n "$_bk" ] || break
+        _bki=$(printf '%s' "$PROXY_KEYIDX" | awk -v n="$_bk" '{print $(n + 1)}')
+        [ -n "$_bki" ] || break
+        warnf "ключ %s отвергнут движком — пропущен: %s" "$(( _bki + 1 ))" "$(printf '%s\n' "$_test" | grep "proxy-$_bk" | head -1 | awk -F'> ' '{print $NF}' | cut -c1-120)"
+        SKIP_KEYS="$SKIP_KEYS $_bki"
+        build_proxies
+        VPN_HOSTS="$VPN_HOSTS $ROUTE_HOSTS"
+        DIRECT_SET=$_dsave
+        gen_dns_route
+        gen_json
+        _gtry=$((_gtry + 1))
+        _test=$("$XRAY" run -test -c "$TMP" 2>&1) && _testok=1 || _testok=0
+    done
     if [ "$_testok" = "1" ]; then
         # Предупреждения движка не глотать: Xray помечает транспорт устаревшим
         # за версию-другую до удаления, другого заблаговременного сигнала нет.
@@ -167,7 +196,11 @@ cmd_gen() {
         _bad=$(sort -u "$BADLIST" 2>/dev/null | grep -c . || true)
         if [ "${_bad:-0}" -gt 0 ]; then
             warnf "записей отброшено как неподходящие: %s" "$_bad"
-            sort -u "$BADLIST" 2>/dev/null | head -3 | sed 's/^/    /'
+            # Через warnf: панель показывает только строки с [!], а голые
+            # записи терялись (Д-5).
+            sort -u "$BADLIST" 2>/dev/null | head -10 |
+                while IFS= read -r _bw; do warnf "    %s" "$_bw"; done
+            [ "$_bad" -le 10 ] || warnf "    … и ещё %s (весь список: sort -u %s)" "$(( _bad - 10 ))" "$BADLIST"
             warn "  причина: не похоже ни на домен (буквы, цифры, дефис и точки; последняя часть — не короче двух букв), ни на подсеть IPv4, либо длиннее 253 знаков"
         fi
         # Не изменилось -- рабочий не трогаем: панель и procd зовут gen при
@@ -533,6 +566,10 @@ gen_dns_route() {
     DNSTAG=', "tag": "dns-query"'; DNSHOSTS=""
     DNSRULE='
       { "type": "field", "inboundTag": [ "dns-query" ], "outboundTag": "direct" },'
+    case "$(u dns_route)" in
+      ''|direct|tunnel) ;;
+      *) warnf "dns_route=%s не понят — DNS идёт напрямую; допустимо direct или tunnel" "$(u dns_route)" ;;
+    esac
     if [ "$(u dns_route)" = "tunnel" ]; then
         # Круг: чтобы открыть соединение к ноде, Xray узнаёт её адрес, а запрос
         # ушёл бы в ещё не существующий туннель. Поэтому адрес ноды разрешается
@@ -552,7 +589,15 @@ gen_dns_route() {
             # несобравшегося.
             [ -n "$_ip" ] || _ip=$(sed -n 's/.*"'"$_h"'"[[:space:]]*:[[:space:]]*"\([0-9.]*\)".*/\1/p' \
                                    "$OUT" 2>/dev/null | head -1)
-            [ -n "$_ip" ] || dief "адрес сервера %s не разрешился — без него DNS через туннель не собрать (запросы к серверу ушли бы в сам туннель); проверить интернет и DNS роутера" "$_h"
+            if [ -z "$_ip" ]; then
+                # Свой конфиг: в JSON бывают запасные и посторонние адреса
+                # (Д-4), пропуск лучше отказа сборки. Ключ byway -- как было.
+                if [ "$N_PROTO" = "raw" ]; then
+                    warnf "адрес %s из своего конфига не разрешился — пропущен" "$_h"
+                    continue
+                fi
+                dief "адрес сервера %s не разрешился — без него DNS через туннель не собрать (запросы к серверу ушли бы в сам туннель); проверить интернет и DNS роутера" "$_h"
+            fi
             _hh="$_hh${_hh:+, }\"$_h\": \"$_ip\""
         done
         [ -n "$_hh" ] && DNSHOSTS="\"hosts\": { $_hh },"
@@ -583,7 +628,7 @@ HEAD
       # Через файл: список в переменной ash -- 9,5 МБ на потолке пресета (200
       # 000 доменов), при подстановке вдвое больше, а на 240 МБ рядом работает
       # движок, и OOM убил бы его.
-      _fdf=/tmp/byway-fakedns.json
+      _fdf=$GEN_WORK/fakedns.json
       list_to_json "$MERGED" "domain:" > "$_fdf" 2>/dev/null || : > "$_fdf"
       # Запятая -- только если перед ней что-то есть: на пустом списке «[ ,
       # "full:…" ]» движок отвергал конфиг целиком.
@@ -707,7 +752,7 @@ MID
         # Через файл: список печатается дважды (fakedns и здесь), а в
         # переменной ash на потолке пресета это 9,5 МБ, при подстановке вдвое
         # больше -- на 240 МБ, где рядом работает движок.
-        _djf=/tmp/byway-dom.json
+        _djf=$GEN_WORK/dom.json
         list_to_json "$MAINDOM" "domain:" > "$_djf" 2>/dev/null || : > "$_djf"
         # Домен-проба -- всегда, даже при пустом списке: через него проверка
         # «трафик проходит» смотрит всю цепочку и не зависит от меняющегося
@@ -720,7 +765,7 @@ MID
         rm -f "$_djf" 2>/dev/null || true
         # Через файл, как домены: список из одних негодных строк давал бы
         # «"ip": [ ]», и движок отвергал весь конфиг без имени виновной строки.
-        _sjf=/tmp/byway-sub.json
+        _sjf=$GEN_WORK/sub.json
         if [ -f "$S" ]; then list_to_json "$S" "" > "$_sjf" 2>/dev/null || : > "$_sjf"; else : > "$_sjf"; fi
         if [ -s "$_sjf" ]; then
           printf '      { "type": "field", "ip": [\n'
