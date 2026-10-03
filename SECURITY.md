@@ -64,7 +64,7 @@ byway управляет с роутера от root файрволом и DNS �
 - **Ключ хранится в `/etc/config/byway`**, как и прочие настройки OpenWrt: его
   может прочитать root и пользователь LuCI с доступом к настройкам byway.
   `byway export` пишет выгрузку без ключа, с ключом — `byway export
-  --with-key` (в выпуске 0.2.4 выгрузка идёт с ключом, без него — `--no-key`). Выгрузка и отчёт создаются сразу с правами `600`.
+  --with-key` (до 0.3.0 выгрузка шла с ключом, без него — `--no-key`). Выгрузка и отчёт создаются сразу с правами `600`.
 - **Выпуски byway подписаны.** К каждому выпуску приложены `SHA256SUMS` и
   `SHA256SUMS.sig`, открытый ключ вшит в `byway` и установщик. `byway update`
   и установщик сверяют архив тега с подписанным списком, а список — с номером
@@ -150,7 +150,7 @@ These limitations are documented in the README and known:
 - **The key is stored in `/etc/config/byway`**, like other OpenWrt settings: it
   is readable by root and by a LuCI user with access to byway's settings.
   `byway export` writes an export without the key, with the key —
-  `byway export --with-key` (in release 0.2.4 the export includes the key,
+  `byway export --with-key` (before 0.3.0 the export included the key,
   without it — `--no-key`). Exports and reports are created with mode `600`
   from the start.
 - **byway releases are signed.** Every release carries `SHA256SUMS` and

@@ -20,8 +20,8 @@ set -e
 # 0.3 Ford, 0.4 Ice Road, 0.5 Trail, 0.6 Bypass, 0.7 Country Lane, 0.8 Old
 # Road.
 # Автообновление ходит только внутри минорной версии (cmd_watch).
-BYWAY_NUM="0.2.4"
-BYWAY_NAME="Causeway"
+BYWAY_NUM="0.3.0"
+BYWAY_NAME="Ford"
 BYWAY_VERSION="$BYWAY_NUM ($BYWAY_NAME)"
 # Откуда берутся обновления; чужая сборка меняет одно место.
 BYWAY_REPO="tomon-one/byway"

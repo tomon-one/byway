@@ -20,7 +20,7 @@ Xray-core](https://img.shields.io/badge/%D1%8F%D0%B4%D1%80%D0%BE-Xray--core-333)
 
 > ### ⚠️ Прочитайте до установки
 >
-> **Версия 0.2.4.** byway каждый день работает на
+> **Версия 0.3.0.** byway каждый день работает на
 > одном роутере: около 500 доменов, 300 подсетей, семья, которая сразу замечает
 > поломку. Но всё ещё на **одном** — другого железа у автора не было.
 >
@@ -183,7 +183,7 @@ OpenWrt уже с 22.03, а с GitHub byway ставит его на любую 
 **Способ 1 — одной строкой:**
 
 ```sh
-sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.2.4/install.sh)"
+sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.3.0/install.sh)"
 ```
 
 **Способ 2 — через зеркало,** если `raw.githubusercontent.com` недоступен.
@@ -194,7 +194,7 @@ sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.2.4/inst
 
 ```sh
 wget -T 10 -O /tmp/byway-install.sh \
-  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.2.4/install.sh" \
+  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.3.0/install.sh" \
   && sh /tmp/byway-install.sh
 ```
 
@@ -208,8 +208,8 @@ wget -T 10 -O /tmp/byway-install.sh \
 
 ```sh
 cd /tmp
-wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.2.4.tar.gz
-tar xzf byway.tar.gz && cd byway-0.2.4
+wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.3.0.tar.gz
+tar xzf byway.tar.gz && cd byway-0.3.0
 sh install.sh
 ```
 
@@ -429,7 +429,7 @@ uci commit byway
   `byway engine restore`.
 - **Меню в консоли** — `byway menu`, те же действия.
 - **Экспорт и импорт.** Настройки и списки одним текстом: `byway export` и
-  `byway import`. Экспорт по умолчанию без ключа (в выпуске 0.2.4 он с ключом, без ключа —
+  `byway import`. Экспорт по умолчанию без ключа (до 0.3.0 он был с ключом, без ключа —
   `--no-key`), с ключом — `--with-key`;
   `byway import --no-key` оставляет нынешний ключ. Путь к движку и предел
   памяти в выгрузку не входят — они свои у каждого роутера.
@@ -478,7 +478,7 @@ dnsmasq → DNS-вход Xray-core → подставной адрес для д
 `CAP_NET_BIND_SERVICE`; без `procd-ujail` — от root. Вернуть root:
 `uci set byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway restart`.
 
-**«Не пускать»** — умолчание для новых установок (в выпуске 0.2.4 умолчание
+**«Не пускать»** — умолчание для новых установок (до 0.3.0 умолчанием было
 «Пустить напрямую»); при обновлении byway
 настройка остаётся прежней. Закрывается то, что шло через VPN, и что именно —
 зависит от режима списков, разница большая:
@@ -603,7 +603,7 @@ permitted` — резолвер отдал подставной адрес, а �
 
 ```sh
 sh -c "$(curl -fsSL --proxy http://127.0.0.1:1603 \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.2.4/install.sh)"
+  https://raw.githubusercontent.com/tomon-one/byway/v0.3.0/install.sh)"
 ```
 
 **Проверка версии и установка — разные настройки,** но установка работает
@@ -790,7 +790,7 @@ DRY_RUN=1 byway-uninstall    # показать, что было бы сдела
 
 ```sh
 wget -O /tmp/byway-uninstall \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.2.4/uninstall.sh
+  https://raw.githubusercontent.com/tomon-one/byway/v0.3.0/uninstall.sh
 sh /tmp/byway-uninstall
 ```
 

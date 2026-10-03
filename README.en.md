@@ -20,7 +20,7 @@ your VPN, the rest goes direct. The engine is
 
 > ### ⚠️ Read this before installing
 >
-> **Version 0.2.4.** byway runs every day on one
+> **Version 0.3.0.** byway runs every day on one
 > router: about 500 domains, 300 subnets, and a family that notices breakage
 > immediately. But still just **one** — the author had no other hardware.
 >
@@ -194,7 +194,7 @@ Worth knowing before installing, not after.
 **Way 1 — one line:**
 
 ```sh
-sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.2.4/install.sh)"
+sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.3.0/install.sh)"
 ```
 
 **Way 2 — through a mirror,** if `raw.githubusercontent.com` is unreachable.
@@ -206,7 +206,7 @@ first.
 
 ```sh
 wget -T 10 -O /tmp/byway-install.sh \
-  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.2.4/install.sh" \
+  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.3.0/install.sh" \
   && sh /tmp/byway-install.sh
 ```
 
@@ -221,8 +221,8 @@ the OpenWrt packages.
 
 ```sh
 cd /tmp
-wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.2.4.tar.gz
-tar xzf byway.tar.gz && cd byway-0.2.4
+wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.3.0.tar.gz
+tar xzf byway.tar.gz && cd byway-0.3.0
 sh install.sh
 ```
 
@@ -456,7 +456,7 @@ work](docs/troubleshooting.en.md).
 - **A console menu** — `byway menu`, the same actions.
 - **Export and import.** Settings and lists as one piece of text:
   `byway export` and `byway import`. The export leaves the key out by default
-  (release 0.2.4 includes the key; without it, `--no-key`),
+  (before 0.3.0 it included the key; without it, `--no-key`),
   `--with-key` puts it in; `byway import --no-key` keeps the current key. The
   engine path and the memory limit are not exported — each router has its
   own.
@@ -507,8 +507,8 @@ service creates it on first start) inside a `procd-ujail` cage with
 `CAP_NET_BIND_SERVICE`; without `procd-ujail` — as root. To return to root:
 `uci set byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway restart`.
 
-**"Block"** is the default for new installs (release 0.2.4 defaulted
-to "Let it through directly"); updating byway leaves the
+**"Block"** is the default for new installs (before 0.3.0 the default was
+"Let it through directly"); updating byway leaves the
 setting as it was. What went through the VPN is closed, and what exactly that
 is depends on the list mode — the difference is large:
 
@@ -634,7 +634,7 @@ through a proxy):
 
 ```sh
 sh -c "$(curl -fsSL --proxy http://127.0.0.1:1603 \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.2.4/install.sh)"
+  https://raw.githubusercontent.com/tomon-one/byway/v0.3.0/install.sh)"
 ```
 
 **Checking for a version and installing one are separate settings,** but
@@ -833,7 +833,7 @@ installers from 0.1.4 on put it in place. Download it separately:
 
 ```sh
 wget -O /tmp/byway-uninstall \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.2.4/uninstall.sh
+  https://raw.githubusercontent.com/tomon-one/byway/v0.3.0/uninstall.sh
 sh /tmp/byway-uninstall
 ```
 
