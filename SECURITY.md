@@ -68,10 +68,11 @@ byway управляет с роутера от root файрволом и DNS �
 - **Выпуски byway подписаны.** К каждому выпуску приложены `SHA256SUMS` и
   `SHA256SUMS.sig`, открытый ключ вшит в `byway` и установщик. `byway update`
   и установщик сверяют архив тега с подписанным списком, а список — с номером
-  выпуска, поэтому зеркало подмены не пропустит. Не проверяются: сам
+  выпуска, поэтому зеркало подмены не пропустит. `byway lang en` так же
+  сверяет скачанные словари. Не проверяются: сам
   `install.sh`, который вы запускаете, установка из архива рядом и ветка
   `main`. Нет `usign` или подписи — отказ; обход (`byway update --no-verify`,
-  `BYWAY_NO_VERIFY=1`) уместен только тогда, когда подлинность не опровергнута.
+  `BYWAY_NO_VERIFY=1`, для языка — `BYWAY_NO_VERIFY=1 byway lang en`) уместен только тогда, когда подлинность не опровергнута.
   Если GitHub недоступен, установщик переходит на чужое зеркало gh-proxy и
   предупреждает об этом; запретить — `NO_MIRROR=1`.
 - **Архив Xray-core сверяется с суммой SHA2-256** из того же выпуска XTLS. Это
@@ -156,10 +157,11 @@ These limitations are documented in the README and known:
   `SHA256SUMS.sig`; the public key is built into `byway` and the installer.
   `byway update` and the installer check the tag archive against the signed
   list, and the list against the release number, so a mirror cannot slip in a
-  substitute. Not checked: the `install.sh` you run yourself, installation
+  substitute. `byway lang en` checks the downloaded dictionaries the same
+  way. Not checked: the `install.sh` you run yourself, installation
   from an archive next to the script, and the `main` branch. No `usign` or no
   signature means refusal; the bypass (`byway update --no-verify`,
-  `BYWAY_NO_VERIFY=1`) is appropriate only when authenticity has not been
+  `BYWAY_NO_VERIFY=1`, for the language `BYWAY_NO_VERIFY=1 byway lang en`) is appropriate only when authenticity has not been
   disproved. If GitHub is unreachable, the installer switches to the
   third-party gh-proxy mirror and warns about it; to forbid that — `NO_MIRROR=1`.
 - **The Xray-core archive is checked against the SHA2-256 sum** from the same

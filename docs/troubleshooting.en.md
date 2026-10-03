@@ -90,7 +90,7 @@ the logs. It contains no key, server address, subscription address or custom
 outbound config: settings are printed from an allow-list, everything else is
 `<hidden>`, and only errors are taken from the engine log, without
 connection lines and with addresses and names replaced by `x.x.x.x`, `x::x`
-and `ИМЯ`.
+and `NAME`.
 
 `byway report FILE` creates the file with mode 600 from the start. Paths like
 `/tmp/byway-…` are refused, byway keeps its working files there.
@@ -361,7 +361,7 @@ uci set byway.main.xray_memlimit=64MiB && uci commit byway && /etc/init.d/byway 
 
 `0` means no limit. A bare number means megabytes; `MB` and `M` become `MiB`,
 `GB` and `G` become `GiB`. A value that does not parse is noted in the system
-log (`logread -e byway`) and the automatic limit is used. reload compares the
+log (`logread -e byway`: `memory limit "…" not understood`) and the automatic limit is used. reload compares the
 limit of the running engine and restarts it when the limit has changed.
 
 Restarts. The state log shows `(restart)` and a new `pid`; `logread -e byway`
@@ -565,8 +565,8 @@ list's domains (dnsmasq answers NXDOMAIN to a query of any type for them) and
 subnets; in "Everything through the VPN" mode, all outbound traffic from the
 listed networks. Access to the router (LuCI, ssh) stays.
 
-`byway status` then shows `WARNING … the list is CLOSED` or `WARNING … ALL
-traffic outside the VPN is BLOCKED`, and the web UI shows it on the Overview
+`byway status` then shows `WARNING … the list is CLOSED` or `WARNING …
+Traffic of the listed networks outside the VPN is BLOCKED`, and the web UI shows it on the Overview
 tab. A third variant, `WARNING … there was nothing to block — traffic goes
 DIRECT`, means the block is on but the lists are empty. The block goes up on
 every service start, before interception is in place, and stays if the engine
@@ -576,7 +576,10 @@ the tunnel check goes around interception. A restart, an update or an engine
 replacement does not lift the block; a change of lists, mode or networks
 rebuilds it. `byway watch` picks up an engine that came back by itself, even
 with the watchdog off: it brings interception up, and a successful start lifts
-the block.
+the block. A service stopped by hand (`/etc/init.d/byway stop`) is not counted
+as an engine failure: the list is not closed. Switching to "Go direct" lifts a
+standing block even while the engine is down; with that setting an engine that
+comes back gets interception through `byway pulse` within a minute.
 
 To open access until the tunnel is fixed:
 

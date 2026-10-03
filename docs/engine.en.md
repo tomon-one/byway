@@ -86,7 +86,7 @@ XTLS builds MIPS binaries only for processors with a floating-point unit
 does not run there. The sign is a `mips*` architecture with no word `fpu` in
 `/proc/cpuinfo`. The installer checks this before downloading and offers only
 the engine from the OpenWrt packages. On such a CPU `byway engine` refuses at
-once and suggests `apk upgrade xray-core` or `opkg upgrade xray-core`. The
+once and prints the command `apk update && apk add xray-core` (`opkg update && opkg install xray-core` on opkg). The
 engine version there is whatever your branch packages.
 
 ---
@@ -229,7 +229,8 @@ nothing.
 
 By hand this is rarely needed. When the service finds neither the engine nor
 a runnable `/usr/local/bin/xray-*` next to it at start, it runs `byway engine
-restore` in the background after 15 seconds, once per boot (the marker
+restore` in the background, once the default route is up (waiting up to two
+minutes), 10 seconds after it, once per boot (the marker
 `/tmp/byway-engine-restore`). If a runnable file is there, it names the
 command to point at it instead of installing. If the install fails,
 `byway watch` retries every 15 minutes. Progress is
@@ -247,7 +248,13 @@ A rollback is the same replacement with an older number:
 `byway engine 26.3.27`. After a successful swap the previous GitHub engine is
 deleted, so going back to it means downloading it again.
 
-If two engines already sit side by side, you can switch without a download:
+If the engine you want is already there (`/usr/local/bin/xray-26.3.27`, and it
+runs), `byway engine 26.3.27` switches to it without a download: the config is
+checked with the new binary, the service restarts, the tunnel is awaited for up
+to two and a half minutes, and if it does not come up the previous engine is
+put back. Both files stay.
+
+A fallback, with no tunnel check and no rollback:
 
 ```sh
 uci set byway.main.xray_bin=/usr/local/bin/xray-26.3.27 && uci commit byway
@@ -319,7 +326,8 @@ byway engine /tmp/xray.gz
 byway prints the engine's sha256 (compare it with `sha256sum xray` on the
 computer before `gzip`) and swaps the engine the same way as a GitHub
 download: side by side or through memory, with a tunnel check and rollback.
-The file in `/tmp` is deleted after installation. The custom build is saved as
+The file in `/tmp` is deleted after the swap; when installing onto an empty
+spot, or after a refusal before the swap starts, it stays. The custom build is saved as
 `/usr/local/bin/xray-local-DATE`.
 
 What to know about a custom build:
@@ -495,7 +503,7 @@ The value comes from the `byway.main.xray_memlimit` option:
 | Go form: `B`, `KiB`, `MiB`, `GiB`, `TiB` | passed as is: `96MiB`, `128MiB` |
 | `MB` or `M`, `GB` or `G` | converted to `MiB` and `GiB`: `128MB` → `128MiB` |
 | a bare number | megabytes: `96` → `96MiB` |
-| anything else | a line in the system log that the limit could not be parsed; the limit is as when unset |
+| anything else | a line in the system log, `memory limit "…" not understood -- using auto`; the limit is as when unset |
 
 On a router with 256 MB (`MemTotal` about 234 MB) the automatic value is
 `93MiB`; Xray normally uses 30–50 MB. Without the conversion Go would refuse

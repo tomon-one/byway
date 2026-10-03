@@ -24,7 +24,7 @@ the port from its JSON.
 
 The server address is IPv4 or a name. An IPv6 literal (`[2001:db8::1]` in the
 link, an address with colons in the vmess `add` field) is refused: "IPv6
-address in the key is not supported: … — an IPv4 address or a name is needed".
+address in the key is not supported: … — use IPv4 or a name".
 
 ## Link types
 
@@ -52,7 +52,7 @@ trojan://PASSWORD@example.com:443?type=ws&security=tls&sni=example.com&path=/t#N
 Before the `@`: the user ID for vless, the password for trojan (fully
 percent-decoded). Parameters are listed under "Link parameters". `flow` and
 `encryption` exist only for vless. A `flow` on a trojan link is dropped with the
-warning "flow=… is not supported by Xray-core for trojan — dropped", and mux
+warning "Xray-core does not support flow=… for trojan — skipped", and mux
 stays on.
 
 Without `security=` the security is `none` for vless and `tls` for trojan:
@@ -383,7 +383,9 @@ lines with other schemes are not listed at all. All usable keys go into the
 "Keys" list, so switching to "Several, …" later needs no second download. The
 download goes through byway's local proxy inbound and, if that fails,
 directly; an address pointing at the router itself or into a private network
-is refused. A subscription over `http://` is not accepted: "a subscription
+is refused, and so is an address with `[…]` (IPv6). The response may be up to
+4 MB, with at most three redirects. A subscription over `http://` is not
+accepted: "a subscription
 over http:// is not accepted: anyone on the path can replace the keys in it —
 https:// is needed". byway does not refresh the subscription on its own: the
 list is taken when the button is pressed. In the console, `byway sub ADDRESS`
@@ -402,8 +404,10 @@ default; the format is a number followed by `s`, `m` or `h`. A key that byway
 refuses while parsing it or while building the transport and security
 (allowInsecure without a fingerprint, hysteria2 or pcs on an old engine, xhttp
 on a 1.x engine) is skipped with the warning "key skipped: reason", and the
-rest go into the config. If no key is usable, the build fails and the previous
-config keeps running.
+rest go into the config. A key that only the engine rejects (for example vless
+without TLS to a public address) is skipped the same way: "key N was rejected
+by the core -- skipped: …", and the build repeats without it, up to six times.
+If no key is usable, the build fails and the previous config keeps running.
 
 **Custom config.** For what byway cannot parse from a link: HTTP(S) proxies,
 MASQUE, XDRIVE, non-standard settings. The field takes a whole Xray-core

@@ -97,7 +97,7 @@ off, see [Updating](#updating)).
 | **`kmod-nft-tproxy`, `kmod-nft-socket`** | the installer fetches them |
 | **`curl`** | the installer fetches it |
 | **`unzip`** | the installer fetches it when the engine comes from GitHub |
-| **Flash space** | byway itself is under a megabyte; the Xray-core engine takes ~18 MB, and a GitHub download needs 25 MB free |
+| **Flash space** | byway itself is under a megabyte; the Xray-core engine takes ~18 MB on a compressing file system and 35–38 MB without compression, and a GitHub download needs 25 MB free |
 
 **Why 22.03 is a boundary and not a preference.** From 22.03 the firewall is
 firewall4 on nftables, and byway stands entirely on it. On 21.02 and older it is
@@ -278,7 +278,8 @@ Outside its own settings the installer adds a `byway-tproxy` firewall rule for
 guest zones, three cron jobs (`watch` every 5 minutes, `stat` hourly, `pulse`
 every minute), lines in `/etc/sysupgrade.conf`, links in `/usr/bin` and
 service autostart; the service creates the `byway` user and group on its first
-start. Removal takes all of it away.
+start. Removal takes all of it away; without `--purge` the settings, the lists,
+their lines in `/etc/sysupgrade.conf` and `byway-uninstall` itself stay.
 
 ---
 
@@ -447,9 +448,11 @@ work](docs/troubleshooting.en.md).
 - **The LuCI web UI:** key, mode, lists, state and connection check, export
   and import, the environment check and the report, checking for and
   installing byway updates, replacing the engine with the tested one or with a
-  version by number. Console only: your own engine as a file
-  (`byway engine /tmp/FILE.gz`), the key check (`byway probe`) and
-  experimental IPv6.
+  version by number. Console only, for
+  example: your own engine as a file (`byway engine /tmp/FILE.gz`), the key
+  check (`byway probe`), `xray_memlimit`, `xray_root`, `allow_insecure`,
+  `self_mark`, experimental IPv6 (`fakeip6_pool`), `byway update --rollback`,
+  `byway engine restore`.
 - **A console menu** — `byway menu`, the same actions.
 - **Export and import.** Settings and lists as one piece of text:
   `byway export` and `byway import`. The export leaves the key out by default
@@ -563,7 +566,7 @@ a failure — [how byway works](docs/architecture.en.md).
 
 | command | what it does |
 |---|---|
-| `byway` | state and the list of commands |
+| `byway`, `byway --help` | state and the list of commands |
 | `byway menu` | console menu |
 | `byway status [--short]` | what is working right now |
 | `byway health` | service, VPN link, traffic, DNS |
@@ -577,7 +580,7 @@ a failure — [how byway works](docs/architecture.en.md).
 | `byway top [N]` | which list entries are actually used; needs statistics collection on (`show_usage`) |
 | `byway stat` | collect statistics now, without waiting for the schedule; also only with `show_usage` |
 | `byway update [--check\|--force\|--rollback\|--no-verify]` | whether a new byway version exists, and installing it; `--force` installs the latest GitHub release even if it is not newer than the installed one; `--rollback` returns the previous version from the copy; `--no-verify` skips the release signature check (when there is nothing to check with) |
-| `byway engine [VERSION\|tested\|newest\|stable\|restore]` | whether an Xray-core update exists, and replacing the engine; `restore` installs a missing engine |
+| `byway engine [--check\|VERSION\|tested\|newest\|stable\|restore\|/tmp/FILE]` | whether an Xray-core update exists, and replacing the engine; `--check` only finds out; `VERSION` of an engine already next to it switches without a download; `restore` installs a missing engine; `/tmp/FILE` is your own build (a `.gz` with the binary or the release `.zip`) |
 | `byway job update\|engine [VERSION]\|log` | internal, for the web UI: an update or an engine swap in the background; `log` shows progress, exit code 3 means still running |
 | `byway lang ru\|en` | output and web UI language |
 | `byway report [file]` | a report for a bug thread: state and diagnostics, no key |
@@ -589,7 +592,9 @@ a failure — [how byway works](docs/architecture.en.md).
 | `byway version` | version |
 
 **Language.** `byway lang en` downloads the English dictionary for the
-installed version; `byway lang ru` removes it. In the web UI it is the same
+installed version and checks it against the signed release sums: without
+`usign` or a signature the language does not switch, and the bypass is
+`BYWAY_NO_VERIFY=1 byway lang en`. `byway lang ru` removes it. In the web UI it is the same
 thing — "Advanced → Language".
 
 ---
@@ -746,6 +751,11 @@ byway engine stable       # the newest stable one
 byway engine restore      # no engine: version from xray_bin or tested
 ```
 
+If the engine of the version you want is already next to the current one in
+`/usr/local/bin/xray-VERSION`, `byway engine VERSION` switches to it without a
+download: config check, restart, waiting for the tunnel and a return on
+failure; both files stay.
+
 The archive is checked against the SHA2-256 sum from the release. If there is
 room for a second engine, the new one goes next to it, and the previous one is
 removed only after the tunnel is up on the new one. If there is not (routine
@@ -813,7 +823,7 @@ The installer puts an uninstall script in place along with the program, so
 there is nothing to download:
 
 ```sh
-byway-uninstall              # settings and lists stay
+byway-uninstall              # settings, lists and byway-uninstall itself stay
 byway-uninstall --purge      # remove everything, including the key and the engine downloaded from GitHub
 DRY_RUN=1 byway-uninstall    # show what would be done, change nothing
 ```
@@ -835,7 +845,9 @@ to what it was before byway, rules are removed, the service is unregistered.
 The network settings are not touched. The engine stays unless the removal is
 run with `--purge`: then every `/usr/local/bin/xray-*` file is removed,
 including ones put there by hand. An engine from the OpenWrt packages and an
-engine at any other path always stay.
+engine at any other path always stay. The packages installed for byway (`curl`,
+`unzip`, `kmod-nft-tproxy`, `kmod-nft-socket`) stay too, and the output names
+them.
 
 ---
 
@@ -878,7 +890,11 @@ have one.
 "Removal verified" here is meant literally: a snapshot of the system is taken
 BEFORE the install and AFTER `uninstall.sh --purge`, and they match byte for
 byte — including dnsmasq and firewall settings, cron jobs, nft tables, routing
-rules and the list of files kept across firmware upgrades. The dry run is
+rules and the list of files kept across firmware upgrades. On 22.03.7 that
+does not hold: the packages (`curl`, `unzip`, `kmod-nft-tproxy`,
+`kmod-nft-socket` with their dependencies) and an empty `/etc/crontabs/root`
+remain; there are no byway traces in nft, routes, dnsmasq, cron or
+`sysupgrade.conf`. The dry run is
 separately verified to change not a single byte.
 
 **What the bench does not verify, and it matters.** It is x86-64, so the choice
