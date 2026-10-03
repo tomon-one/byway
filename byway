@@ -3580,7 +3580,10 @@ cmd_plumb() {
         warn "перехват уже настраивается другим запуском -- пропущено"
         return 1
     }
-    trap 'rm -rf "$_plock" 2>/dev/null; true' EXIT INT TERM
+    # По INT/TERM -- выйти, а не продолжить: stop_service убивает идущий
+    # подъём, чтобы тот не ставил перехват поверх снятого.
+    trap 'rm -rf "$_plock" 2>/dev/null; true' EXIT
+    trap 'rm -rf "$_plock" 2>/dev/null; exit 143' INT TERM
     case "${1:-}" in
       on)
         plumb_fwrule

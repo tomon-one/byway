@@ -202,6 +202,10 @@ restart() {
 	BYWAY_KEEP_DNS=1
 	stop "$@" 2>/dev/null
 	BYWAY_KEEP_DNS=0
+	# Игнор TERM -- только на время stop, как в rc.common. Иначе его
+	# наследовал фоновый цикл подъёма из start: следующий stop не мог его
+	# убить, и цикл ставил перехват или запрет поверх остановленной службы.
+	trap - TERM
 	start "$@"
 }
 
@@ -299,7 +303,8 @@ start_service() {
 			if [ ! -f /tmp/byway-engine-restore ]; then
 				: > /tmp/byway-engine-restore
 				echo "  движок ставится в фоне: byway engine restore (журнал: logread -e byway)"
-				( sleep 15; "$BYWAY" engine restore 2>&1 | sed "s/$(printf '\033')\[[0-9;]*m//g" | logger -t byway ) </dev/null >/dev/null 2>&1 &
+				# 1000>&- -- см. у цикла подъёма ниже.
+				( sleep 15; "$BYWAY" engine restore 2>&1 | sed "s/$(printf '\033')\[[0-9;]*m//g" | logger -t byway ) </dev/null >/dev/null 2>&1 1000>&- &
 			fi
 			echo "  поставить руками: byway engine restore, либо $_pkgfix xray-core"
 			echo "  либо указать свой путь: uci set byway.main.xray_bin=/путь/к/xray"
@@ -401,7 +406,15 @@ service_started() {
 	# это время спокойно шёл. В фоне start возвращается сразу, а попытки
 	# продолжаются -- и остаются в системном журнале.
 	(
+		read _me _rest < /proc/self/stat 2>/dev/null || _me=""
 		for _try in 1 2 3; do
+			# Перед повтором -- жив ли ещё этот цикл для службы: stop стирает
+			# номер. Перед первой попыткой не сверять -- родитель мог ещё не
+			# записать файл.
+			if [ "$_try" != 1 ] && [ -n "$_me" ] &&
+			   [ "$(cat /var/run/byway-plumb.pid 2>/dev/null)" != "$_me" ]; then
+				exit 0
+			fi
 			if "$BYWAY" plumb on; then
 				# ⚠️ Файл убираем ЗДЕСЬ, а не только в stop. Цикл кончается
 				# обычно через секунду, а номер лежал в файле до следующей
@@ -411,7 +424,6 @@ service_started() {
 				# Свой номер берём из /proc/self: $$ в подоболочке -- это
 				# номер РОДИТЕЛЯ, не наш. Сверяем перед удалением, иначе
 				# затрём чужую запись, если родитель ещё не успел писать.
-				read _me _rest < /proc/self/stat 2>/dev/null || _me=""
 				if [ -n "$_me" ] &&
 				   [ "$(cat /var/run/byway-plumb.pid 2>/dev/null)" = "$_me" ]; then
 					rm -f /var/run/byway-plumb.pid 2>/dev/null
@@ -423,7 +435,11 @@ service_started() {
 			sleep 10
 		done
 		logger -t byway "правила перехвата не легли за три попытки -- туннеля нет, интернет работает напрямую"
-	) >/dev/null 2>&1 &
+	) >/dev/null 2>&1 1000>&- &
+	# 1000>&- -- закрыть унаследованный замок procd (procd_lock, flock на
+	# дескрипторе 1000). Держа его, цикл не пускал stop и restart дальше
+	# procd_lock, пока сам не кончится, -- до 65 с, -- и stop_service
+	# находил его уже отработавшим.
 	# Номер фоновой подоболочки -- чтобы stop мог её убить. procd о ней не
 	# знает: это не его инстанс, а отцепленный процесс, и он живёт до 65
 	# секунд. Не убив его, получаем двух хозяев обвязки разом -- цикл
@@ -456,8 +472,11 @@ stop_service() {
 		# успехе. Вероятность росла с временем непрерывной работы.
 		# Найдено четвёртым аудитом, заход 3.
 		if tr '\0' ' ' < "/proc/$_pp/cmdline" 2>/dev/null | grep -q byway; then
+			# Детей -- ДО kill: умерший родитель отдаёт их init, и pgrep -P
+			# после него не находил `byway plumb on`, державший замок.
+			_kids=$(pgrep -P "$_pp" 2>/dev/null || true)
 			kill "$_pp" 2>/dev/null || true
-			for _cp in $(pgrep -P "$_pp" 2>/dev/null || true); do
+			for _cp in $_kids; do
 				kill "$_cp" 2>/dev/null || true
 			done
 		fi
