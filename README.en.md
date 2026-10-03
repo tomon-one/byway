@@ -233,14 +233,19 @@ not touch the network otherwise:
   version, not what the author published a minute ago;
 - it is one readable file: `wget -O - …` without `| sh` shows all of it;
 - it names every step it takes and does nothing silently;
+- the release archive is checked against the signature (`SHA256SUMS.sig`, the
+  key is built into the installer); no `usign` or no signature means refusal,
+  the bypass is `BYWAY_NO_VERIFY=1`;
 - all of it is one `{ … }` group, which the shell parses in full before running
   it: a download cut short during the one-line install gives a syntax error,
   not half a script executed.
 
 **The first two ways download twice.** The one-liner puts only `install.sh` on
 the router; it downloads the rest of byway's files with a second request — the
-same version (tag) that is written into it. If that tag does not exist, it says
-it took the `main` branch, rather than pretending it installed a tagged version.
+same version (tag) that is written into it. If that tag does not exist, it
+stops rather than pretending it installed a tagged version: the unsigned
+`main` branch is installed only with `BYWAY_ALLOW_MAIN=1` at the start of the
+command.
 The third way fetches byway once, entirely in front of you.
 
 **The installer asks up to three questions.** Mandatory pieces are installed
@@ -270,8 +275,10 @@ config is rebuilt and the service, if enabled, restarted — the tunnel drops fo
 a few seconds.
 
 Outside its own settings the installer adds a `byway-tproxy` firewall rule for
-guest zones, two cron jobs, lines in `/etc/sysupgrade.conf`, links in
-`/usr/bin` and service autostart; removal takes all of it away.
+guest zones, three cron jobs (`watch` every 5 minutes, `stat` hourly, `pulse`
+every minute), lines in `/etc/sysupgrade.conf`, links in `/usr/bin` and
+service autostart; the service creates the `byway` user and group on its first
+start. Removal takes all of it away.
 
 ---
 
@@ -367,10 +374,11 @@ cure for every fault.
 
 - **Keys:** `vless`, `vmess`, `trojan`, `shadowsocks`, `socks`, `hysteria2`
   (`hy2://`), `wireguard` (`wireguard://` and `wg://`). **Transports:**
-  `tcp/raw`, `ws` (WebSocket), `grpc`, `httpupgrade`, `xhttp`, `kcp` (recent
-  Xray-core versions dropped the `header` and `seed` parameters from `kcp`;
-  byway puts them into the config only if your link has them, and warns you
-  about it), `hysteria` (with `salamander` obfuscation). **Security:** `tls`
+  `tcp/raw`, `ws` (WebSocket), `grpc`, `httpupgrade`, `xhttp`, `kcp` (Xray-core
+  since 26.1.31 dropped the `header` and `seed` parameters from `kcp`: on such
+  an engine byway does not write them to the config and warns that a server
+  with mKCP masking will not answer — the replacement is finalmask; on an older
+  engine the fields are written as in the link), `hysteria` (with `salamander` obfuscation). **Security:** `tls`
   (including certificate checks by fingerprint — `pcs=`, for hysteria2
   `pinSHA256=` — or by name — `vcn=`), `reality`; VLESS encryption
   `mlkem768x25519plus`. Each kind needs its own Xray-core version: hysteria2
@@ -416,7 +424,9 @@ understands and why byway refuses — [keys and connection](docs/keys.en.md).
   auto-restore" setting on the "Advanced" tab; an engine that comes back while
   the block is in place is picked up even then: byway brings interception up,
   and the block is lifted. A missing engine (after a firmware upgrade) the
-  watchdog installs again every 15 minutes — `byway engine restore`.
+  watchdog installs again every 15 minutes — `byway engine restore`. Every
+  minute `byway pulse` checks one thing only — whether the engine is alive: a
+  fall and a return are noticed within one or two minutes rather than five.
 - **Failure behaviour** is a choice — see [How it works](#how-it-works).
 - **Checks:** `byway doctor` for the environment, `byway health` for whether it
   works right now, `byway probe` to test a key in isolation without touching the
@@ -436,12 +446,14 @@ work](docs/troubleshooting.en.md).
 
 - **The LuCI web UI:** key, mode, lists, state and connection check, export
   and import, the environment check and the report, checking for and
-  installing byway updates, replacing the engine with the tested one. Console
-  only: an engine of another version (`byway engine VERSION`), the key check
-  (`byway probe`) and experimental IPv6.
+  installing byway updates, replacing the engine with the tested one or with a
+  version by number. Console only: your own engine as a file
+  (`byway engine /tmp/FILE.gz`), the key check (`byway probe`) and
+  experimental IPv6.
 - **A console menu** — `byway menu`, the same actions.
 - **Export and import.** Settings and lists as one piece of text:
-  `byway export` and `byway import`. The export leaves the key out by default,
+  `byway export` and `byway import`. The export leaves the key out by default
+  (release 0.2.4 includes the key; without it, `--no-key`),
   `--with-key` puts it in; `byway import --no-key` keeps the current key. The
   engine path and the memory limit are not exported — each router has its
   own.
@@ -479,14 +491,21 @@ Where things go:
 | removal | `/usr/local/bin/byway-uninstall`, link `/usr/bin/byway-uninstall` |
 | the web UI (installed if LuCI is present and you agreed in the installer) | `/www/luci-static/resources/byway/` and `.../view/byway/` |
 | the English dictionary | `/etc/byway/lang/en.tsv`, only if English is chosen; the panel's `lang.js` always comes with the web UI, without the translation lines when Russian is chosen |
-| besides files | two cron jobs, the `byway-tproxy` firewall rule, paths in `/etc/sysupgrade.conf` |
+| besides files | three cron jobs, the `byway-tproxy` firewall rule, paths in `/etc/sysupgrade.conf`, the `byway` user and group |
 
 **If Xray-core did not come up, interception is not enabled either,** and the
 home's DNS goes back to the ISP rather than being left without a resolver.
 What happens next is decided by the "If the VPN does not come up" setting on
 the "Overview" tab (`on_failure`).
 
-**"Block"** is the default for new installs; updating byway leaves the
+**What the engine runs as.** Xray-core starts as the `byway` system user (the
+service creates it on first start) inside a `procd-ujail` cage with
+`CAP_NET_RAW` (`CAP_NET_ADMIN` on kernels before 5.17) and
+`CAP_NET_BIND_SERVICE`; without `procd-ujail` — as root. To return to root:
+`uci set byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway restart`.
+
+**"Block"** is the default for new installs (release 0.2.4 defaulted
+to "Let it through directly"); updating byway leaves the
 setting as it was. What went through the VPN is closed, and what exactly that
 is depends on the list mode — the difference is large:
 
@@ -524,7 +543,7 @@ a failure — [how byway works](docs/architecture.en.md).
 | **Overview** | whether it works, through what, and how to change that: state, key, connection mode, failure behaviour |
 | **Routes** | what goes through the VPN: mode, your lists, ready-made lists, per-key routes |
 | **Network** | whose traffic to divert, DNS, interception ports and addresses, Mux, QUIC rejection, VPN for programs on the router |
-| **Maintenance** | full state, environment check, report for a support request, state log, byway update and swapping the Xray core for the tested one (in the background, progress on the page), byway auto-update, settings transfer, statistics |
+| **Maintenance** | full state, environment check, report for a support request, state log, byway update and swapping the Xray core for the tested one or a version by number (in the background, progress on the page), byway auto-update, settings transfer, statistics |
 | **Advanced** | language and values you change once in a lifetime |
 
 > ⚠️ **Clear the browser cache after updating byway.** LuCI appends the
@@ -557,7 +576,7 @@ a failure — [how byway works](docs/architecture.en.md).
 | `byway presets` | download the ready-made lists; they take effect after `/etc/init.d/byway reload` |
 | `byway top [N]` | which list entries are actually used; needs statistics collection on (`show_usage`) |
 | `byway stat` | collect statistics now, without waiting for the schedule; also only with `show_usage` |
-| `byway update [--check\|--force]` | whether a new byway version exists, and installing it; `--force` installs the latest GitHub release even if it is not newer than the installed one |
+| `byway update [--check\|--force\|--rollback\|--no-verify]` | whether a new byway version exists, and installing it; `--force` installs the latest GitHub release even if it is not newer than the installed one; `--rollback` returns the previous version from the copy; `--no-verify` skips the release signature check (when there is nothing to check with) |
 | `byway engine [VERSION\|tested\|newest\|stable\|restore]` | whether an Xray-core update exists, and replacing the engine; `restore` installs a missing engine |
 | `byway job update\|engine [VERSION]\|log` | internal, for the web UI: an update or an engine swap in the background; `log` shows progress, exit code 3 means still running |
 | `byway lang ru\|en` | output and web UI language |
@@ -657,9 +676,11 @@ first sees it (important ones immediately), and only if the first two numbers
 of the version match: `0.1.1` to `0.1.4` yes, `0.1.4` to `0.2.1` no. It leaves
 a hand-edited byway file alone. If within two and a half minutes
 interception does not come up, or the connection through the server that
-worked before the update is gone, byway puts the previous program file back
-(the service and the web UI stay from the new release) and will not install
-that release by itself again; by hand — `byway update`.
+worked before the update is gone, byway puts the whole previous version back
+— program, service, web UI and dictionaries (the copy is
+`/etc/byway/prev.tgz`) — and will not install that release by itself again.
+A manual `byway update` checks the tunnel the same way and rolls back by
+itself on failure; to go back by hand — `byway update --rollback`.
 
 **After a firmware upgrade** byway's settings, lists, service and web UI are
 kept, but the Xray-core engine is not: its 35 MB are left out of the list of
@@ -735,8 +756,8 @@ come up on the new engine (the process is alive, the rules are in place, the
 resolver hands out placeholder addresses) or the connection through the
 server that worked before the replacement is gone, the previous one comes back
 by itself. On a router where the service is off or there is no key, the
-tunnel check is skipped; without a key a replacement through memory still
-fails, since it needs a built config. Any replacement needs at least 40 MB of
+tunnel check and the config check are skipped: the engine is replaced without
+them, through memory as well. Any replacement needs at least 40 MB of
 free RAM, a replacement through memory about 55.
 
 A previous engine from the OpenWrt packages is not removed — uninstall it with
@@ -747,8 +768,7 @@ not install. In that case stop the service (`/etc/init.d/byway stop` — a
 running engine keeps its flash space even after the file is deleted), remove
 the package and install an engine with `byway engine tested` (or a version
 number): with no previous engine it is simply installed, the path is recorded
-and the service starts. That needs the engine's uncompressed size plus 5 MB
-free on flash, about 40; the install line makes do with 25. Until there is an
+and the service starts. That needs 25 MB free on flash — as at installation. Until there is an
 engine, there is no tunnel.
 
 `byway update` does not touch the engine: it updates byway only.
@@ -756,8 +776,8 @@ engine, there is no tunnel.
 In the web UI, the "Xray core" block on the "Maintenance" tab: "Check for a
 core update" answers whether a newer version than the installed one exists,
 "Install the tested core" installs the version tested with byway in the
-background, with progress on the page. Another version — `byway engine
-VERSION` from the console.
+background, with progress on the page. Another version — the "Another version" field there, or `byway engine
+VERSION`; your own engine as a file — console only.
 
 **If the config stopped building after an engine update.** byway verifies
 every build with the engine itself, so an incompatibility does not pass

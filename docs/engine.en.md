@@ -36,8 +36,8 @@ every byway call. If a check fails, byway prints
 such as `/mnt/sda1/xray` is therefore not accepted, but a symlink
 `/usr/local/bin/xray-…` to that file is; for USB, see "Flash".
 
-If `xray_bin` is empty, the `byway` command looks for `xray` in `PATH`, then
-`/usr/bin/xray`; the service goes straight to `/usr/bin/xray`.
+If `xray_bin` is empty, both the `byway` command and the service look for
+`xray` in `PATH`, then in `/usr/bin/xray`.
 `/usr/local/bin` is not in `PATH` on OpenWrt, so an engine from GitHub is
 always set explicitly — the installer writes the path itself. `byway status`
 shows the engine in use on its `engine` line.
@@ -110,7 +110,8 @@ is not the verified one, the next line names the verified one. Without
 XTLS, free flash and available memory. The "Check for a core update" button
 on the "Maintenance" tab of the web UI calls `byway engine --check`, the
 "Install the tested core" button runs `byway engine tested` in the background
-(`byway job engine`), with progress on the page. Another version — from the
+(`byway job engine`), with progress on the page. Another version — the
+"Another version" field there (or the console); your own engine as a file —
 console only.
 
 The version number is digits and dots, without a `v`.
@@ -127,9 +128,9 @@ The release archive (about 14 MB) is downloaded to `/tmp`, that is, into
 memory, and checked against the SHA2-256 sum from the `.dgst` file of the same
 release. If it did not download, there is no `.dgst`, the sum does not match,
 or the archive has no `xray` file, the archive is discarded and nothing is
-touched. The check guards against a broken download, not against tampering:
-through the mirror `.dgst` comes from the same mirror, and directly HTTPS to
-GitHub already stops a middleman. XTLS publishes no signatures.
+touched. The check guards against a broken download; through the mirror
+`.dgst` comes from the same mirror. The tested version is also checked against
+a sum built into the signed byway. XTLS publishes no signatures.
 
 The version number and the archive are fetched through byway's local proxy
 inbound first (`local_proxy_port`, 1603 by default), then directly. If GitHub
@@ -207,10 +208,9 @@ In a side-by-side swap byway makes sure the new engine runs on this hardware,
 switches `xray_bin`, deletes the previous `/usr/local/bin/xray-*` and prints
 `the service is not running (disabled or no key) — the core was replaced
 without a tunnel check`; the service is not restarted. A swap through memory
-still builds the config for the new engine, so without a key it stops with
-`the new engine rejected the config` (the reason is one line above: `no key
-is set`), and the service starts with the previous engine. With a key and the
-service off, the wait for the tunnel is skipped.
+without a key, or with the service off, does the same: no config is built for
+the new engine (there is nothing to check), the tunnel is not awaited, and the
+engine is replaced without a check.
 
 ### No engine
 
@@ -218,7 +218,7 @@ This happens after a firmware upgrade (the engine is not on the keep list)
 and after the `xray-core` package is removed. `byway engine VERSION` (and
 `tested`, `newest`, `stable`) then installs rather than replaces: there is
 nothing to roll back to, so there is no archive of the previous version and
-no wait for the tunnel. It needs as much flash as a side-by-side swap. The
+no wait for the tunnel. It needs 25 MB free on flash, as the installer does. The
 engine is unpacked to `/usr/local/bin/xray-VERSION`, checked by running it,
 its path goes into `xray_bin`, and an enabled service is restarted.
 
@@ -232,7 +232,7 @@ a runnable `/usr/local/bin/xray-*` next to it at start, it runs `byway engine
 restore` in the background after 15 seconds, once per boot (the marker
 `/tmp/byway-engine-restore`). If a runnable file is there, it names the
 command to point at it instead of installing. If the install fails,
-`byway watch` retries once the marker is more than an hour old. Progress is
+`byway watch` retries every 15 minutes. Progress is
 in `logread -e byway`.
 
 `byway update` and byway's auto-update do not touch the engine, and
@@ -382,9 +382,11 @@ itself catches them in `xray run -test`, and byway explains the reason:
 - `h2` (`http`) and `quic` are removed from the engine. byway warns and hands
   the config to the engine, which rejects it and names the replacement —
   `xhttp`.
-- `header` and `seed` on `kcp` were removed in recent versions; the transport
-  itself stays. byway writes these fields only if the key has them, and warns.
-  On `26.3.27` they still work; on newer engines the config is rejected.
+- `header` and `seed` on `kcp` were removed in Xray-core `26.1.31`; the
+  transport itself stays. On such an engine byway does not write these fields
+  and warns: a server with mKCP masking will not answer, the replacement is
+  finalmask (`mkcp-original`, `mkcp-aes128gcm`) on the server and in the key.
+  On an older engine the fields are written as in the link.
 - byway always runs wireguard inside the engine process (`noKernelTun`).
   Recent versions bring up a network interface through `/dev/net/tun` by
   default and reject the config without `kmod-tun`. Older versions do not know
@@ -404,7 +406,7 @@ engine. If the engine rejects it, the working `/etc/byway/config.json` is not
 changed. `byway gen` then prints `the engine rejected the config, the draft is
 left in /tmp/byway-config.new.json:`, the last lines of the engine's answer
 and, when the reason is known, what to do about it. After "Save & Apply" in
-the web UI or `uci commit byway`, the system log shows the same: the config
+the web UI or `/etc/init.d/byway reload`, the system log shows the same: the config
 did not build, the previous one keeps working. `byway engine` does not keep
 such an engine: the new one is removed, the previous one stays.
 
@@ -437,10 +439,11 @@ compresses files, it takes about 18 MB. During installation and replacement
 the release archive sits in memory, not on flash.
 
 The installer needs 25 MB free on `/overlay`, otherwise the engine comes from
-the OpenWrt packages. A side-by-side swap and an install with no previous
-engine (`byway engine` after a firmware upgrade, `restore`) need the
-uncompressed engine size plus 5 MB, about 40 MB: how much ubifs will compress
-cannot be known in advance, so byway counts uncompressed. A swap through
+the OpenWrt packages. An install with no previous engine
+(`byway engine` after a firmware upgrade, `restore`) needs the same 25 MB. A
+side-by-side swap needs the uncompressed engine size plus 5 MB, about 40 MB:
+how much ubifs will compress cannot be known in advance, so byway counts
+uncompressed. A swap through
 memory uses the space the previous engine frees.
 
 On a router with about 40 MB for your own files, one engine takes almost half

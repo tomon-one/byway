@@ -19,7 +19,7 @@ stated.
 | nft table `inet byway` | intercepts traffic from the trusted bridges |
 | `ip rule` + routing table 100 | delivers marked packets to a local socket |
 | dnsmasq | forwards every query to the Xray-core DNS inbound |
-| cron | `byway watch` every 5 minutes, `byway stat` hourly |
+| cron | `byway watch` every 5 minutes, `byway stat` hourly, `byway pulse` every minute |
 
 "Interception rules" below means everything `byway plumb on` sets up: the nft
 table, the `ip rule`, the route in table 100 and the dnsmasq redirection.
@@ -170,9 +170,10 @@ in the same rule closes the "inbound connects to itself" loop.
 Rule 2 also sends into the tunnel the queries the engine uses to resolve the
 server names from the keys, and without those addresses the tunnel cannot come
 up. So with `dns_route tunnel`, `byway gen` resolves the server names itself
-(through dnsmasq, then 8.8.8.8, then the address from the previous
-`config.json`) and puts them in `dns.hosts`. If a server changes its address,
-run `byway gen`.
+(the pin from `/etc/hosts`, then 8.8.8.8, then 1.1.1.1, then the local
+resolver, then the address from the previous `config.json`) and puts them in
+`dns.hosts`. If a server changes its address, `byway watch` notices once an
+hour; by hand — `/etc/init.d/byway reload`.
 
 `example.com` (constant `PROBE_DOMAIN`) always goes through the tunnel, so
 `byway health` can test the whole chain regardless of what the lists contain.
@@ -224,7 +225,7 @@ the engine itself gets for that name from its own resolver, not the address
 the client was connecting to. A different CDN node, and the connection goes
 `direct`. So a service gets both a domain (for the engine's decision) and a
 subnet (for clients with their own DNS). To check: `grep NAME
-/tmp/byway-access.log` should show `-> proxy`; the log is written with
+/var/run/byway/access.log` should show `-> proxy`; the log is written with
 `show_usage 1` (except in `list_mode all`) or `log_level` `info`/`debug`.
 
 ## The router's own traffic
@@ -448,7 +449,15 @@ kept them until the TTL ran out. The installer calls `disable` before
 `enable` to remove the old `S90byway`, and drops it from
 `/etc/sysupgrade.conf`. Instance: `$XRAY run -c /etc/byway/config.json`,
 `stdout` and `stderr` to syslog (Xray-core logs to stdout), pidfile
-`/var/run/byway.pid`, `respawn 3600 5 0`.
+`/var/run/byway.pid`, `respawn 3600 5 0`. The engine runs as the `byway` system
+user in a `procd-ujail` cage (`procd_add_jail byway`, capabilities from
+`/var/run/byway-caps.json`: `CAP_NET_RAW`, or `CAP_NET_ADMIN` on kernels before
+5.17, plus `CAP_NET_BIND_SERVICE`, `no_new_privs`); the pid file holds the
+wrapper, the engine is its child. The config is read by the group (`640
+root:byway`), the access log lives in `/var/run/byway/` (root 755). Without
+`/sbin/ujail`, or with `xray_root 1`, the engine runs as root. `reload` notices
+a change of `xray_root` and of the engine: it checks who the process runs as
+and restarts it.
 
 Parameters: threshold 3600 s, 5 s pause before restarting, 0 retries meaning
 unlimited. procd's threshold is not "this many crashes per hour": the counter
@@ -520,7 +529,13 @@ nft rules must be added to `nft_sig`**, or reload will not notice it.
 ```
 */5 * * * * /usr/local/bin/byway watch >/dev/null 2>&1
 7 * * * *   /usr/local/bin/byway stat  >/dev/null 2>&1
+* * * * *   /usr/local/bin/byway pulse >/dev/null 2>&1
 ```
+
+`byway pulse` does one thing: it looks whether the engine is alive and calls
+the same `engine_gone` and `engine_back` as `watch`. It stays silent on minutes
+divisible by five — `watch` runs then. So the engine's fall and return are
+noticed within one or two minutes rather than five.
 
 List updates and version checks have no jobs of their own; `byway watch` does
 them.
@@ -549,8 +564,11 @@ in order:
    `dhcp.@dnsmasq[0].server` is missing: `plumb on`, logged as `(healed)` or
    `(failed)`. The address is checked in UCI, not in the running dnsmasq.
    This repairs a foreign `nft flush ruleset` or a firewall reload.
-5. Ready-made lists, version check, auto-update (below).
-6. `/tmp/byway-access.log` over 4 MB: truncated to zero, which means `byway
+5. Ready-made lists, version check, auto-update (below), and hourly
+   `watch_hosts`: with `dns_route tunnel` the server addresses in `dns.hosts`
+   are compared with DNS; if an address changed (the old one is not among the
+   answers), `byway gen` and `reload` (marker `/tmp/byway-hostcheck`).
+6. `/var/run/byway/access.log` over 4 MB: truncated to zero, which means `byway
    stat` is not running.
 7. A state line is appended to `/etc/byway/health.log` (last 200 lines) only
    when something changed or was repaired. Engine PID changed and the
@@ -570,13 +588,13 @@ the address of every connection in the home.
 
 Xray-core logs a line when it accepts a connection, before sniffing, so the
 line holds the pool address, not the name. `byway stat` therefore builds a
-reverse address-to-name table (`/tmp/byway-fakemap`) by asking the DNS inbound
+reverse address-to-name table (`/var/run/byway/fakemap`) by asking the DNS inbound
 about listed names, at most 200 per run, with the resume point in `.pos`. The
 table is tied to the engine PID. From the log it takes `tproxy-in -> proxy`
-lines newer than the cut-off (`/tmp/byway-statmark`) and adds the counts to
-`/etc/byway/usage.tsv`; addresses without a name (subnets) are counted as `(по
-IP)`. Per-route connections (`route-NAME`) and the router's own traffic are
-not counted. The file is written to flash only when it changes. The log is
+and `-> route-NAME` lines newer than the cut-off (`/var/run/byway/statmark`)
+and adds the counts to `/etc/byway/usage.tsv`; addresses without a name
+(subnets) are counted as `(по IP)`. Only the router's own traffic is not
+counted. The file is written to flash only when it changes. The log is
 trimmed to its last 50 lines by writing over it, not with `mv`: the engine
 keeps the file open with `O_APPEND`, and a replaced file would send writes
 into a deleted one. To view: `byway top [N]`.
@@ -617,16 +635,17 @@ nothing to install. All of these must hold:
 - this version has not been rolled back before (`/etc/byway/.au-failed`), and
   there was no attempt in the last 24 hours (`/etc/byway/.au-try`).
 
-Sequence: copy the script to `/etc/byway/byway.prev` (if that fails, abort),
-`byway update` (the tag archive from GitHub and its `install.sh`), then up to
+Sequence: copy the whole previous version to `/etc/byway/prev.tgz` (if that
+fails, abort), `byway update` (the tag archive from GitHub, the signature check
+and its `install.sh`), then up to
 150 seconds of `alive_ok` checks: engine process, `inet byway` table, fake
 address from the resolver (skipped when the list is empty). If `tunnel_ok`
 passed before the update — a `curl` request through the proxy inbound
 (`local_proxy_port`, 1603) to `example.com`, any HTTP answer will do — it has
-to pass after it too. If it does not come up, `byway.prev` is copied back
-to `/usr/local/bin/byway`, the service restarts, and the version is recorded
-in `.au-failed`. **Rollback restores only the script:** the init script, panel
-and dictionaries stay at the new version. The outcome goes to
+to pass after it too. If it does not come up, `prev.tgz` is unpacked back
+(`byway update --rollback` does the same), the service restarts, and the version
+is recorded in `.au-failed`. **Rollback restores the whole version:** program,
+init script, panel and dictionaries. The outcome goes to
 `/tmp/byway-autoupdate` and syslog.
 
 ### Replacing the engine
@@ -652,13 +671,13 @@ is set so that `byway watch` stays out of the way; the stop runs with
 `BYWAY_KEEP_BLOCK=1`, so under `closed` the block holds for the whole minute.
 Either way `alive_ok` checks the result and, if the connection through the
 server worked before the replacement, `tunnel_ok` too; on failure the old
-engine is put back. With the service off or without a key the check is
-skipped, and on the side-by-side path the service restart too; without a key
-the path through RAM stops at the config build. Lock:
+engine is put back. With the service off or without a key the tunnel check and
+the config check are skipped, and on the side-by-side path the service restart
+too; without a key the engine is replaced through RAM as well. Lock:
 `/var/run/byway-engine.lock`.
 
-No previous engine (not found or does not run) — `eng_fresh`: the same flash
-space as the side-by-side path, unpacking to `/usr/local/bin/xray-VERSION`, a
+No previous engine (not found or does not run) — `eng_fresh`: 25 MB free flash
+(as for the installer), unpacking to `/usr/local/bin/xray-VERSION`, a
 run check, `xray_bin`, a service restart with `enabled 1`. No rollback archive
 and no wait for the tunnel: there is nothing to roll back to.
 
@@ -742,12 +761,12 @@ the interception rules.
 | `/etc/byway/domains.lst`, `subnets.lst` | your lists; domains accept `full:`, `keyword:`, `regexp:` |
 | `/etc/byway/presets/NAME.lst`, `NAME.sub` | downloaded ready-made lists: domains and subnets |
 | `/etc/byway/routes/NAME.lst` | per-route list |
-| `/etc/byway/config.json` | built Xray-core config, mode 600 |
+| `/etc/byway/config.json` | built Xray-core config, mode 640 root:byway (600 with a root engine) |
 | `/etc/byway/lang/en.tsv` | "key⇥translation" dictionary, English only |
 | `/etc/byway/dns-saved` | dnsmasq's previous state, while the rules are up |
 | `/etc/byway/health.log`, `usage.tsv` | `byway watch` log, `byway stat` counts |
-| `/etc/byway/byway.prev`, `.binmd5`, `.au-try`, `.au-failed`, `.newver-seen` | auto-update |
-| `/tmp/byway-access.log` | Xray-core access log |
+| `/etc/byway/prev.tgz`, `.binmd5`, `.au-try`, `.au-failed`, `.newver-seen` | auto-update; `prev.tgz` is the whole previous version for rollback |
+| `/var/run/byway/access.log` | Xray-core access log |
 | `/tmp/byway-config.new.json` | draft config; kept if the engine rejected it |
 | `/tmp/byway-domains-all.lst`, `byway-subnets-all.lst` (+ `.sig`) | merged lists |
 | `/tmp/byway-bad-entries` | dropped list lines |
@@ -755,11 +774,13 @@ the interception rules.
 | `/tmp/byway-plumb-down` | rules removed by hand |
 | `/tmp/byway-route-mine`, `byway-route-mine6` | the route in table 100 was created by byway |
 | `/tmp/byway-watch.last`, `byway-nopid` | previous state and miss counter of `byway watch` |
-| `/tmp/byway-fakemap`, `.pos`, `byway-statmark` | `byway stat` accounting |
+| `/var/run/byway/fakemap`, `fakemap.pos`, `statmark` | `byway stat` accounting |
 | `/tmp/byway-upcheck`, `-newver`, `-relnote`, `-autoupdate` | version check, auto-update outcome |
 | `/tmp/byway-engine-restore` | marker of an attempt to install a missing engine: the service once per boot, `byway watch` when it is over 15 minutes old |
 | `/tmp/byway-job.log`, `/var/run/byway-job.pid` | progress and PID of the panel's background job (`byway job`) |
-| `/var/run/byway.pid`, `byway.applied` | engine PID; applied-state snapshot for reload |
+| `/var/run/byway.pid`, `byway.applied` | PID of the ujail wrapper (the engine is its child); applied-state snapshot for reload |
+| `/var/run/byway-caps.json` | engine capabilities for procd-ujail |
+| `/tmp/byway-hostcheck` | marker of the hourly server-address check (`watch_hosts`) |
 | `/var/run/byway-plumb.pid`, `byway-nostart` | background start loop; "start failed, skip the loop" |
 | `<dnsmasq conf-dir>/byway-block.conf` | name block under `closed` |
 | `/www/luci-static/resources/view/byway/`, `.../resources/byway/` | panel; the installer writes the version number into `ui.js` (`BUILT`), and if it differs from `byway version` the panel warns that the browser shows it from cache |
@@ -783,7 +804,7 @@ a sysupgrade the service installs it itself with `byway engine restore` (see
 | rule and route | `ip rule`, `ip route show table 100` |
 | where dnsmasq points | `uci get dhcp.@dnsmasq[0].server` |
 | does the resolver return a fake address | `nslookup NAME 127.0.0.42` |
-| where a connection went | `grep NAME /tmp/byway-access.log` |
+| where a connection went | `grep NAME /var/run/byway/access.log` |
 | what the service and `byway watch` did | `logread -e byway`, `/etc/byway/health.log` |
 | what the engine logs | `logread -e xray` |
 | what is in the built config: domain and subnet counts, tags, protocols, addresses (no uuid) | `byway show` |

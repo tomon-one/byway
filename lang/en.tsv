@@ -62,7 +62,7 @@ byway: неизвестная команда «%s». Список: byway\n	byway
 транспорт   %s / %s%s\n	transport   %s / %s%s\n
 ключ        %s\n	key         %s\n
 свой конфиг	custom config
-ВНИМАНИЕ    конфиг собран для другого режима, пересобрать: byway gen\n	WARNING     config was built for another mode, rebuild it: byway gen\n
+ВНИМАНИЕ    конфиг собран для другого режима, применить: /etc/init.d/byway reload\n	WARNING     config was built for another mode, apply it: /etc/init.d/byway reload\n
 движок      %s\n	engine      %s\n
 в tproxy    %s пакетов\n	in tproxy   %s packets\n
 последний раз	last seen
@@ -253,7 +253,7 @@ import ФАЙЛ	import FILE
 %s (порт %s) занят: %s	%s (port %s) is taken: %s
 сменить порт в настройках byway либо убрать чужую службу	change the port in byway settings, or remove the other service
 правил ip rule на таблицу %s: %s	ip rule entries for table %s: %s
-лишние копятся при перезапусках — снять: byway plumb off && byway plumb on	spares pile up across restarts — clear them: byway plumb off && byway plumb on
+лишние копятся при перезапусках — снять: byway plumb on	spares pile up across restarts — clear them: byway plumb on
 порт в ссылке недопустим: %s	the port in the key is not valid: %s
 на флеше свободно %s КБ, для конфига нужно %s -- рабочий не тронут	%s KB free on flash, the config needs %s -- the working one is untouched
 vpn\twarn\tсвой конфиг: адрес сервера неизвестен\n	vpn\twarn\tcustom config: server address unknown\n
@@ -408,7 +408,7 @@ byway не поднимется ни сейчас, ни после переза�
 порт %s занят другим входом byway — свой трафик роутер в туннель не пошлёт	port %s is taken by another byway inbound — the router will not send its own traffic into the tunnel
 роутер ходит к сайтам из списка сам	the router reaches the sites on the list on its own
 VPN для программ на роутере (router_via_vpn) включён, но цепочки в ядре нет	sending the router’s own traffic through the tunnel is on, but the kernel chain is missing
-переложить правила: byway plumb off && byway plumb on	reapply the rules: byway plumb off && byway plumb on
+переложить правила: byway plumb on	reapply the rules: byway plumb on
 уровень журнала «%s» не годится, взят warning	log level "%s" is not usable, falling back to warning
 клиент со своим DNS проходит мимо туннеля	a client with its own DNS bypasses the tunnel
 замок «%s» поставлен не byway -- снят принудительно	lock "%s" was not set by byway -- taken over

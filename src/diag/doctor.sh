@@ -292,7 +292,7 @@ doctor_config() {
                 _d_ok "$(_t 'IPv6 поднят и заворачивается наравне с IPv4')"
             else
                 _d_bad "$(_t 'IPv6 включён в настройках, но правила для него в ядре нет')" \
-                       "переложить правила: byway plumb off && byway plumb on"
+                       "переложить правила: byway plumb on"
             fi
         elif [ "$(u list_mode)" = "all" ]; then
             _d_warn "IPv6 поднят, а перехват только по IPv4" "в режиме «всё через VPN» соединения по IPv6 идут мимо туннеля: выключить IPv6 на WAN либо вернуться к режиму по спискам"
@@ -503,7 +503,7 @@ doctor_ports() {
             fi
         else
             _d_warn "$(_t 'VPN для программ на роутере (router_via_vpn) включён, но цепочки в ядре нет')" \
-                    "переложить правила: byway plumb off && byway plumb on"
+                    "переложить правила: byway plumb on"
         fi
     elif [ "$(u router_via_vpn)" != "1" ]; then
         # Без заворота свой трафик роутера перехват не ловит: резолвер отдаёт
@@ -519,12 +519,12 @@ doctor_ports() {
     if nft list table inet "$TABLE" >/dev/null 2>&1 &&
        ! ip route show table "$RT_TABLE" 2>/dev/null | grep -q '^local default'; then
         _d_bad "$(_f 'в таблице маршрутизации %s нет маршрута local default' "$RT_TABLE")" \
-               "переложить правила: byway plumb off && byway plumb on"
+               "переложить правила: byway plumb on"
     fi
 
     _rules=$(ip rule show 2>/dev/null | grep -cE "$(rule_re)" || true)
     if [ "${_rules:-0}" -gt 1 ]; then
-        _d_warn "$(_f 'правил ip rule на таблицу %s: %s' "$RT_TABLE" "$_rules")" "лишние копятся при перезапусках — снять: byway plumb off && byway plumb on"
+        _d_warn "$(_f 'правил ip rule на таблицу %s: %s' "$RT_TABLE" "$_rules")" "лишние копятся при перезапусках — снять: byway plumb on"
     fi
     return 0
 }

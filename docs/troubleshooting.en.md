@@ -32,7 +32,8 @@ is built, what is running and what is in the kernel.
 | `update` | a new byway version is out; its description and the install command follow |
 
 `WARNING` lines matter more than the rest. "Config was built for another mode"
-is fixed by `byway gen`; the lines about blocked access are covered in
+is fixed by `/etc/init.d/byway reload` (it rebuilds the config itself and
+restarts the service if it changed); the lines about blocked access are covered in
 ["Block" shut off the internet](#block-shut-off-the-internet). The web UI
 shows them on the Overview tab; the full output is under Maintenance → Full
 status. `byway status --short` prints only the top part, up to the `engine`
@@ -52,7 +53,9 @@ the Overview tab.
 | `dns` | whether `example.com` gets an address from the placeholder pool | the byway resolver does not answer |
 
 byway always sends `example.com` through the VPN, whatever the lists say;
-the checks rely on it. In auto-select mode `vpn` measures the first key; in
+the checks rely on it. In auto-select mode `vpn` measures all keys at once: how many answer and the
+best latency, `warn` means not all answer; for UDP keys (hysteria2, wireguard,
+mKCP) latency is not measured; in
 custom config mode byway does not know the server address and `vpn` shows
 `warn`.
 
@@ -117,8 +120,9 @@ points, `fakeip` is whether the resolver hands out placeholder addresses.
 Marks: `(start)` the first entry after a reboot or `byway clear log`,
 `(restart)` the engine restarted, `(healed)` someone removed the
 rules and they were put back, `(failed)` putting them back failed, `(nodns)`
-the engine has not come up for over five minutes and interception was
-removed.
+there was no engine on two checks in a row (one to two minutes) and
+interception was removed; if `byway pulse` removed it, the log has a line with
+`pid=none` and no mark.
 
 ---
 
@@ -137,7 +141,11 @@ retries every 15 minutes; by hand — `byway engine restore`. If the config did 
 build, `byway gen` shows the engine's answer and, for known causes, what to
 do; the draft stays in `/tmp/byway-config.new.json`. If the new config fails
 but the engine accepts the previous one, the service starts on the previous
-one, and the latest settings changes do not take effect.
+one, and the latest settings changes do not take effect. The engine runs as the
+`byway` user in a `procd-ujail` cage; if it fails to start only there
+(`doctor`: the engine runs not as root and crashes in a loop), return to root:
+`uci set byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway
+restart`.
 
 `vpn fail`: the router cannot open a connection to the server. The server
 is down, changed its address or port, or the address is unreachable from
@@ -166,8 +174,9 @@ address or `ISP` while the engine runs means the interception rules are gone:
 `byway plumb on`.
 
 All four `ok`, yet devices bypass the VPN: look at `byway status`. `NO` in
-the `nft table`, `ip rule` or `route` line is fixed with
-`byway plumb off && byway plumb on`.
+the `nft table`, `ip rule` or `route` line is fixed with `byway plumb on`: it
+re-lays the table in one transaction, restores the rule and the route, and
+lifts the block only after success.
 
 If everything is in place but `in tproxy` does not grow while a device opens
 a site on the list, its traffic does not reach interception: the device has
@@ -207,12 +216,12 @@ Host). If the name is not on the list, the engine resolves it again and
 compares the result with the subnets. The DNS answer may differ from the
 address the device used, and then the connection goes direct.
 
-Where the engine sent a connection is written to `/tmp/byway-access.log` when
+Where the engine sent a connection is written to `/var/run/byway/access.log` when
 Statistics collection is on or Advanced → Log detail is set to "every
 connection":
 
 ```sh
-grep 'tproxy-in -> ' /tmp/byway-access.log | tail -20
+grep 'tproxy-in -> ' /var/run/byway/access.log | tail -20
 ```
 
 `-> proxy` went into the VPN, `-> direct` was intercepted and let out
@@ -386,16 +395,19 @@ browser cache: LuCI does not tell the browser that the UI files changed. The
 web UI warns about it with the line "The byway panel was updated to …, but the
 browser shows the previous one (…) from its cache", but only until its shared
 module is re-fetched. Ctrl+Shift+R (Ctrl+F5) on each tab of the UI, or F12 →
-Network → "Disable cache" → F5. A manual update keeps no copy of the previous
-version; to go back, run the previous version's installer, by the install line
-or the archive with its number in the tag (see
-[Installing](../README.en.md#installing)).
+Network → "Disable cache" → F5. A manual `byway update` makes a copy of the whole previous
+version (`/etc/byway/prev.tgz`), waits up to two and a half minutes for the
+tunnel and rolls back by itself on failure; to go back by hand —
+`byway update --rollback`. The release signature (`SHA256SUMS.sig`) is checked
+with `usign`: no `usign` or no signature is a refusal, a signature that does
+not match is a refusal with no bypass suggested; when there is nothing to
+check with, the bypass is `byway update --no-verify`.
 
 Automatic updates are off by default. When on, they install only releases
 with the same first two version numbers, at the set hour by the router's
 clock; a regular release no earlier than three days after the router first
-saw it, an important one at once. The current file is copied to
-`/etc/byway/byway.prev` first. Then byway waits up to two and a half minutes
+saw it, an important one at once. The whole current version is copied to
+`/etc/byway/prev.tgz` first. Then byway waits up to two and a half minutes
 for the engine to run, the interception rules to be in place, the resolver
 to hand out placeholder addresses and, if the connection through the server
 worked before the update, for it to work after. If that does not happen, it
@@ -406,17 +418,16 @@ The result shows in the `overnight` line of `byway status` (`updated to …`
 or `ROLLBACK from … to …`) and in `logread -e byway`; `byway doctor` reminds
 of a release that did not come up. Once the cause is fixed, `byway update`
 installs it. If the rollback itself failed (`ROLLBACK FAILED`), restore by
-hand:
+hand with one command:
 
 ```sh
-cp /etc/byway/byway.prev /usr/local/bin/byway
-md5sum /usr/local/bin/byway | cut -d' ' -f1 > /etc/byway/.binmd5
-/etc/init.d/byway restart
+byway update --rollback
 ```
 
-Without the second line automatic updates take the file for a hand-edited
-one and stop touching it: `.binmd5` still holds the checksum of the release
-that failed.
+It unpacks `/etc/byway/prev.tgz`, recomputes the sum in `.binmd5` (otherwise
+automatic updates would take the file for a hand-edited one) and restarts the
+service.
+
 
 Automatic updates leave alone a file edited by hand or not placed by the
 installer, and `byway doctor` says so.
@@ -440,8 +451,8 @@ config with the new engine and waits up to two and a half minutes for the
 tunnel, and, if the connection through the server worked before the
 replacement, for that too; if it does not come up, the previous engine is
 restored automatically. With the service off or without a key the tunnel
-check is skipped (without a key only in a side-by-side swap, see
-[engine](engine.en.md#without-a-key)). If a package manager updated the
+check and the config check are skipped — the swap goes without them, side by
+side and through memory (see [engine](engine.en.md#without-a-key)). If a package manager updated the
 engine, go back to the version that worked:
 
 ```sh
@@ -506,7 +517,7 @@ uci set byway.main.ipv6=1 && uci commit byway && /etc/init.d/byway restart
 ```
 
 If IPv6 is on but the kernel has no rule for it, doctor suggests
-`byway plumb off && byway plumb on`.
+`byway plumb on`.
 
 ---
 
@@ -529,7 +540,7 @@ and disable it. doctor also checks for extra firewall rules with byway's
 mark, taken ports, whether dnsmasq points at byway, the `local default`
 route in table 100 and extra `ip rule` entries for it.
 
-pbr, zapret and your own scripts are not known to doctor by name. Check by
+doctor names pbr when it is enabled; zapret and your own scripts it does not. Check by
 hand: `nft list tables`, `ip rule show`, `ip route show table 100`,
 `uci get dhcp.@dnsmasq[0].server`, `uci show firewall | grep mark`.
 
@@ -570,12 +581,15 @@ the block.
 To open access until the tunnel is fixed:
 
 ```sh
-uci set byway.main.on_failure=open && uci commit byway && byway plumb off
+byway plumb off
 ```
 
-`byway plumb off` removes the block and interception and returns dnsmasq to
-its previous servers. Without changing the setting the block comes back on
-the next service start. Once the VPN works: `/etc/init.d/byway restart`.
+The command removes the block and interception and returns dnsmasq to its
+previous servers: the list then goes direct. No need to change the setting —
+the block comes back on the next service start. If you did set
+`on_failure=open` (`uci set byway.main.on_failure=open && uci commit byway`),
+restore the default once fixed: `uci set byway.main.on_failure=closed && uci
+commit byway && /etc/init.d/byway restart`.
 
 If the `byway` command itself does not work, remove the block by hand (the
 directory is in the `conf-dir=` line of `/var/etc/dnsmasq.conf.*`):

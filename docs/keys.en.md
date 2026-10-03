@@ -76,7 +76,7 @@ refused with "vmess aid is not a number"), `net` (transport, default tcp),
 anything else is refused), `alpn` and `fp`. With `net=grpc` the service name is
 taken from `path` — that is where clients put it; without `path` it is empty.
 
-Other fields are not read, and there is no warning about them.
+For other fields byway warns with the same line as for other keys.
 
 ### Shadowsocks
 
@@ -92,8 +92,8 @@ old form, with the whole link wrapped in base64
 address is split off at the last `@`, so an `@`
 in the password is fine. The transport is always tcp, the security `none`.
 
-Parameters after `?` other than `plugin` are not carried over, and there is no
-warning about them.
+Parameters after `?` other than `plugin` are not carried over; byway warns about
+them with the same line as for other keys.
 
 Xray-core does not run plugins (`obfs-local`, `v2ray-plugin`). A link with
 `plugin=` parses, the plugin is dropped, and byway warns: a server that expects
@@ -211,7 +211,7 @@ and the braces and quotes `%7B %7D %22 %5B %5D` are decoded in it.
 | `grpc` | `serviceName`, `multiMode` with `mode=multi`, `authority` | — |
 | `httpupgrade` | path and Host | warning |
 | `xhttp` | path, Host, `mode`, `extra` | refused |
-| `kcp` | `header` and `seed`, only if present in the link | — |
+| `kcp` | `header` and `seed` are written on an engine older than 26.1.31; not on 26.1.31 and newer | warning |
 | `hysteria` | version 2, password, salamander | — |
 
 Any other `type` except h2, http and quic (see below) is rejected: "transport
@@ -225,10 +225,11 @@ this, `extra` could close `xhttpSettings` early and rewrite neighbouring
 fields, up to the server address and the security, and `run -test` would
 accept the result. The syntax inside the object is checked by the engine.
 
-**kcp.** Recent Xray-core releases removed the `header` and `seed` fields from
-kcp (the replacement is `finalmask`). byway writes them only if they are in the
-link, and warns. If the engine rejects them, the config is not replaced.
-Without these fields kcp builds on a recent engine too. byway also warns that
+**kcp.** Xray-core since 26.1.31 removed the `header` and `seed` fields from
+kcp (the replacement is `finalmask`). On such an engine byway does not write
+them and warns: a server with mKCP masking will not answer. On an older engine
+the fields are written as in the link. Without these fields kcp builds on a
+recent engine too. byway also warns that
 kcp runs over UDP.
 
 **h2/http and quic** have been removed from Xray-core entirely. byway warns,
@@ -320,7 +321,7 @@ cannot be parsed, the engine is treated as recent.
 | `allowInsecure`, `insecure` | 26.3.27 | refused without `allow_insecure 1`, written with it; from this version refused without `pcs`/`vcn` |
 | `obfs=salamander` | 26.7.11 | refused |
 | vless, trojan without TLS to a public address | 26.7.11 | byway refuses without `allow_insecure 1`; from this version the engine refuses |
-| kcp `header`, `seed` | recent versions | written as in the link, the engine decides |
+| kcp `header`, `seed` | 26.1.31 | not written, warning (the replacement is finalmask) |
 | h2/http, quic | removed | the engine refuses |
 
 When it refuses, byway names the installed version. For VLESS encryption,
@@ -386,7 +387,7 @@ is refused. A subscription over `http://` is not accepted: "a subscription
 over http:// is not accepted: anyone on the path can replace the keys in it —
 https:// is needed". byway does not refresh the subscription on its own: the
 list is taken when the button is pressed. In the console, `byway sub ADDRESS`
-prints the subscription response as is, without decoding.
+prints the keys line by line; it decodes the subscription's base64 itself.
 
 **Several, manual.** Only the active key is in use; switching is done in the
 panel. The other keys in the list do not go into the config unless a route

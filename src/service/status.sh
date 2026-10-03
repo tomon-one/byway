@@ -78,7 +78,7 @@ status_config() {
         if [ "$(u conn_mode)" = "urltest" ]; then _want=много; else _want=один; fi
         if [ "${_np:-1}" -gt 1 ]; then _have=много; else _have=один; fi
         if [ "$_want" != "$_have" ]; then
-            printf "$(_t "ВНИМАНИЕ    конфиг собран для другого режима, пересобрать: byway gen\n")"
+            printf "$(_t "ВНИМАНИЕ    конфиг собран для другого режима, применить: /etc/init.d/byway reload\n")"
         fi
     fi
     return 0
