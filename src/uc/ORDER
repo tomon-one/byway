@@ -1,4 +1,6 @@
 # Порядок части byway на ucode: core первым, main (разбор команды) последним.
 core.uc
 lists.uc
+keys.uc
+outbound.uc
 main.uc

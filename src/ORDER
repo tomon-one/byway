@@ -8,9 +8,7 @@ core/ucode.sh
 core/util.sh
 core/net.sh
 keys/parse.sh
-keys/outbound.sh
 config/addr.sh
-config/stream.sh
 config/proxies.sh
 config/gen.sh
 config/probe.sh

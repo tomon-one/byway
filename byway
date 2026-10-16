@@ -431,7 +431,7 @@ net_get() {   # аргументы curl как есть
 }
 
 # Разбор ключа (vless, vmess, trojan, ss, socks, hysteria2, wireguard) в
-# переменные N_*. Сам разборщик -- keys/parse.uc, сборка вставляет его в parse_uc.
+# переменные N_*. Сам разборщик -- uc/keys.uc (parse_key), вызов -- bw_uc parse.
 
 # Раскодирование процентов; эмодзи -- те же байты UTF-8. Для меток ключей;
 # сам ключ раскодирует parse_uc.
@@ -490,414 +490,7 @@ parse_node() {
 # Подстановка $(...) в прежнем разборе срезала хвостовые переводы строки --
 # nl() повторяет это, чтобы поведение не разошлось.
 parse_uc() {
-    ucode -S - <<'UC'
-let out = [];
-function q(s) { return "'" + replace('' + s, "'", "'\\''") + "'"; }
-function put(n, v) { push(out, n + '=' + q(v)); }
-function stop() { print(join('\n', out), '\n'); exit(0); }
-function warn(m) { push(out, 'warn ' + q(m)); }
-function warnf(m, a) { push(out, 'warnf ' + q(m) + ' ' + q(a)); }
-function die(m) { push(out, 'die ' + q(m)); stop(); }
-function dief(m, a) { push(out, 'dief ' + q(m) + ' ' + q(a)); stop(); }
-
-function nl(s) { return rtrim(s, '\n'); }
-// Как `printf %b` над «%» -> «\x»: «%» без цифры остаётся «\x», NUL пропадает.
-function pctd(s) {
-    return nl(replace(s, /%([0-9a-fA-F]{1,2})?/g,
-        (m, h) => h ? (hex(h) ? chr(hex(h)) : '') : '\\x'));
-}
-// base64 и base64url без «=» (SIP002), как `base64 -d` после добивки.
-function b64d(s) {
-    s = replace(replace(replace(s, /[\r\n]/g, ''), '_', '/'), '-', '+');
-    if (length(s) % 4 == 2) s += '==';
-    else if (length(s) % 4 == 3) s += '=';
-    let r = b64dec(s);
-    return r == null ? '' : nl(replace(r, '\0', ''));
-}
-function before(s, c) { let i = index(s, c); return i < 0 ? s : substr(s, 0, i); }
-function after(s, c) { let i = index(s, c); return i < 0 ? s : substr(s, i + length(c)); }
-function lastafter(s, c) { let i = rindex(s, c); return i < 0 ? s : substr(s, i + length(c)); }
-// grep -Eq: совпала хоть одна строка.
-function grepq(re, s) {
-    if (s == '') return false;
-    for (let l in split(s, '\n')) if (match(l, re)) return true;
-    return false;
-}
-
-let URL = getenv('BW_URL') ?? '';
-let N = {
-    UUID: '', PASS: '', USER: '', METHOD: '', AID: '0',
-    TYPE: 'tcp', SEC: 'none', PATH: '/', FP: 'chrome',
-    PBK: '', SID: '', FLOW: '', MODE: '', ALPN: '',
-    HDR: '', SEED: '', SVC: '', AUTH: '', SPX: '', PQV: '',
-    ENC: '', QSEC: '', QKEY: '', EXTRA: '', INSEC: '',
-    OBFS: '', OBFSPW: '', PIN: '', VCN: '',
-    WGKEY: '', WGPUB: '', WGPSK: '', WGADDR: '', WGMTU: '', WGRES: '', WGKA: ''
-};
-// sni и host ss не задаёт: в sh остаются прежние, их и проверяем.
-let PREV_SNI = getenv('BW_SNI') ?? '', PREV_WSHOST = getenv('BW_WSHOST') ?? '';
-// Строка JSON: пароль и логин уходят в конфиг строкой JSON, кавычка и
-// обратная косая в них законны и экранируются (J_*), а не запрещаются.
-function jstr(s) {
-    return '"' + replace(s, /[\\"\x01-\x1f]/g,
-        (c) => (c == '\\' || c == '"') ? '\\' + c : sprintf('\\u%04x', ord(c))) + '"';
-}
-function flush() {
-    for (let k in N) put('N_' + k, N[k]);
-    for (let k in [ 'PASS', 'USER', 'OBFSPW' ]) put('J_' + k, jstr(N[k] ?? ''));
-}
-
-// Поля, уходящие в конфиг строками. Пароли и логин экранирует jstr --
-// кавычка в них не отказ; управляющий знак -- отказ везде.
-function node_json_ok() {
-    for (let p in [ ['адрес', N.HOST], ['id', N.UUID], ['пароль', N.PASS],
-                    ['user', N.USER], ['method', N.METHOD], ['type', N.TYPE],
-                    ['security', N.SEC], ['sni', N.SNI ?? PREV_SNI], ['fp', N.FP],
-                    ['path', N.PATH], ['host', N.WSHOST ?? PREV_WSHOST], ['pbk', N.PBK],
-                    ['sid', N.SID], ['flow', N.FLOW], ['mode', N.MODE],
-                    ['alpn', N.ALPN], ['headerType', N.HDR], ['seed', N.SEED],
-                    ['serviceName', N.SVC], ['authority', N.AUTH], ['spx', N.SPX],
-                    ['pqv', N.PQV], ['quicSecurity', N.QSEC], ['key', N.QKEY],
-                    ['encryption', N.ENC], ['obfs-password', N.OBFSPW],
-                    ['pcs', N.PIN], ['vcn', N.VCN], ['obfs', N.OBFS],
-                    ['privatekey', N.WGKEY], ['publickey', N.WGPUB],
-                    ['presharedkey', N.WGPSK], ['address', N.WGADDR],
-                    ['mtu', N.WGMTU], ['reserved', N.WGRES], ['keepalive', N.WGKA] ]) {
-        if (match(p[1], /[\x01-\x1f\x7f]/)) {
-            flush();
-            dief("в поле «%s» ссылки управляющий знак (перевод строки, табуляция): такая ссылка подменяет поля конфига", p[0]);
-        }
-        if (p[0] in [ 'пароль', 'user', 'obfs-password' ]) continue;
-        if (index(p[1], '"') >= 0 || index(p[1], '\\') >= 0) {
-            flush();
-            dief("в поле «%s» ссылки кавычка или обратная косая: значения уходят в конфиг как есть, и такая ссылка подменяет его поля", p[0]);
-        }
-    }
-}
-
-// extra подставляется в конфиг объектом, мимо node_json_ok: ровно один
-// объект и ничего вокруг. `{} } }, "settings": {…}` закрыл бы
-// xhttpSettings и streamSettings и дописал свой settings (Xray берёт
-// последний из повторных ключей). Вид скобок не различаем -- ядро отвергнет.
-function json_obj_ok(s) {
-    let d = 0, instr = false, esc = false, started = false, closed = false;
-    for (let c in split(s + '\n', '')) {
-        if (instr) {
-            if (esc) esc = false;
-            else if (c == '\\') esc = true;
-            else if (c == '"') instr = false;
-            continue;
-        }
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (!started) {
-            if (c != '{') return false;
-            started = true; d = 1; continue;
-        }
-        if (closed) return false;
-        if (c == '"') { instr = true; continue; }
-        if (c == '{' || c == '[') { d++; continue; }
-        if (c == '}' || c == ']') {
-            d--;
-            if (d < 0) return false;
-            if (d == 0) closed = true;
-            continue;
-        }
-    }
-    return !instr && started && closed && d == 0;
-}
-
-let scheme = before(URL, '://');
-put('N_SCHEME', scheme);
-if (!(scheme in [ 'vless', 'trojan', 'socks', 'vmess', 'ss', 'hysteria2', 'hy2', 'wireguard', 'wg' ])) {
-    // В Xray-core нет исходящего tuic, а hysteria -- только вторая версия
-    // (сверено по исходникам 26.9.30).
-    if (scheme == 'hysteria' || scheme == 'tuic')
-        dief("%s в Xray-core нет; из похожего есть hysteria2", scheme);
-    dief("неизвестный вид ссылки: %s", scheme);
-}
-let rest = after(URL, '://');
-// Метка после решётки -- имя, обычно с флагом; не секрет.
-// Без управляющих знаков: метка попадает в вывод терминала.
-put('N_LABEL', index(URL, '#') >= 0 ? replace(pctd(after(URL, '#')), /[\x01-\x1f\x7f]/g, '') : '');
-rest = before(rest, '#');
-
-// vmess://<base64 от JSON>: add, port, id, aid, net, type, host, path, tls,
-// sni, scy, alpn, fp.
-if (scheme == 'vmess') {
-    let j = b64d(rest);
-    if (j == '') { flush(); die("vmess-ссылка не раскодировалась"); }
-    // Битый JSON бросает исключение: ucode выходил с трассой вместо отказа.
-    let o = null;
-    try { o = json(j); } catch (e) { o = null; }
-    if (type(o) != 'object') { flush(); die("vmess-ссылка не раскодировалась"); }
-    let jf = (k) => (o[k] == null) ? '' : '' + o[k];
-    N.HOST = jf('add'); N.PORT = jf('port'); N.UUID = jf('id');
-    if (index(N.HOST, ':') >= 0) { flush(); dief("адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя", N.HOST); }
-    // aid уходит в конфиг без кавычек -- только число.
-    N.AID = jf('aid') || '0';
-    if (!match(N.AID, /^[0-9]+$/)) { flush(); dief("aid у vmess — не число: %s", N.AID); }
-    N.TYPE = jf('net') || 'tcp';
-    N.PATH = jf('path') || '/';
-    N.WSHOST = jf('host');
-    // type=none клиенты пишут почти всегда; свежее ядро отвергает его как
-    // заголовок mkcp, поэтому «нет заголовка» -- пусто.
-    N.HDR = jf('type'); if (N.HDR == 'none') N.HDR = '';
-    if (jf('tls') == 'tls') N.SEC = 'tls';
-    N.SNI = jf('sni') || N.WSHOST || N.HOST;
-    if (N.WSHOST == '') N.WSHOST = N.HOST;
-    N.METHOD = jf('scy');
-    if (!(N.METHOD in [ '', 'auto', 'aes-128-gcm', 'chacha20-poly1305', 'none', 'zero' ])) {
-        flush();
-        dief("scy=%s у vmess Xray-core не знает: есть auto, aes-128-gcm, chacha20-poly1305, none, zero", N.METHOD);
-    }
-    N.ALPN = jf('alpn');
-    if (jf('fp') != '') N.FP = jf('fp');
-    // У vmess имя сервиса gRPC лежит в path (v2rayN и др.); сырой path, не
-    // N.PATH, где пустой заменён на «/».
-    if (N.TYPE == 'grpc') N.SVC = jf('path');
-    N.PROTO = 'vmess';
-    // Прочие поля JSON (allowInsecure и т. п.) не переносятся -- называем.
-    for (let k in keys(o))
-        if (!(k in [ 'v', 'ps', 'add', 'port', 'id', 'aid', 'scy', 'net', 'type', 'host',
-                     'path', 'tls', 'sni', 'alpn', 'fp' ]))
-            warnf("параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он", k);
-    node_json_ok();
-    flush(); stop();
-}
-
-// ss://<base64 метод:пароль>@host:port и ss://метод:пароль@host:port; в
-// старой форме в base64 вся ссылка.
-if (scheme == 'ss') {
-    if (index(rest, '@') < 0) {
-        rest = b64d(before(rest, '?'));
-        if (index(rest, '@') < 0) { flush(); die("ss-ссылка не разобралась"); }
-    }
-    // Делим по последней «@»: в открытом пароле она законна.
-    let ui = substr(rest, 0, rindex(rest, '@'));
-    let hp = lastafter(rest, '@');
-    // Плагин (obfs-local, v2ray-plugin) Xray-core не запускает; прочие
-    // параметры не переносятся -- называем.
-    if (index(hp, 'plugin=') >= 0)
-        warn("plugin у shadowsocks не переносится: Xray-core плагины не запускает, сервер с плагином не ответит");
-    if (index(hp, '?') >= 0)
-        for (let l in split(after(hp, '?'), '&')) {
-            let pn = before(l, '=');
-            if (pn != '' && pn != 'plugin')
-                warnf("параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он", pn);
-        }
-    hp = before(before(hp, '?'), '/');
-    let plain = index(ui, ':') >= 0 ? pctd(ui) : b64d(ui);
-    if (substr(hp, 0, 1) == '[') { flush(); dief("адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя", hp); }
-    N.METHOD = before(plain, ':');
-    N.PASS = after(plain, ':');
-    N.HOST = before(hp, ':');
-    N.PORT = lastafter(hp, ':');
-    // Без порта взялся бы сам адрес: "port": example.com.
-    if (N.PORT == N.HOST) N.PORT = '443';
-    N.PROTO = 'shadowsocks';
-    node_json_ok();
-    flush(); stop();
-}
-
-// Остальные схемы -- всё в адресе открытым текстом. Без «@» части до неё
-// нет: wg-ссылки Hiddify и hysteria2 без пароля несут всё в параметрах.
-let ui = index(rest, '@') >= 0 ? before(rest, '@') : '';
-let rest2 = after(rest, '@');
-// hysteria2 пишет «host:port/?sni=…» -- косая перед вопросом не порт.
-let hostport = before(before(rest2, '?'), '/');
-// IPv6 не поддержан: [2001:db8::1]:443 резался бы по первому двоеточию.
-if (substr(hostport, 0, 1) == '[') { flush(); dief("адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя", hostport); }
-N.HOST = before(hostport, ':');
-N.PORT = lastafter(hostport, ':');
-if (N.PORT == N.HOST) N.PORT = '443';
-let query = index(rest2, '?') >= 0 ? after(rest2, '?') : '';
-
-if (scheme == 'vless') { N.UUID = ui; N.PROTO = 'vless'; }
-else if (scheme == 'trojan') { N.PASS = pctd(ui); N.PROTO = 'trojan'; }
-else if (scheme == 'hysteria2' || scheme == 'hy2') { N.PASS = pctd(ui); N.PROTO = 'hysteria'; }
-else if (scheme == 'wireguard' || scheme == 'wg') { N.WGKEY = pctd(ui); N.PROTO = 'wireguard'; }
-else if (scheme == 'socks') {
-    let su = pctd(ui);
-    // Часть клиентов кладёт «логин:пароль» в base64 (socks://dXNlcjpwYXNz@…).
-    if (su != '' && index(su, ':') < 0) {
-        let sd = b64d(su);
-        if (index(sd, ':') >= 0) su = sd;
-    }
-    N.USER = before(su, ':'); N.PASS = after(su, ':');
-    if (N.USER == su) { N.USER = ''; N.PASS = ''; }
-    N.PROTO = 'socks';
-}
-
-function qraw(name) {
-    for (let l in split(query, '&'))
-        if (substr(l, 0, length(name) + 1) == name + '=')
-            return substr(l, length(name) + 1);
-    return null;
-}
-// Раскодируем целиком: кавычку, косую и управляющие знаки отсекает
-// node_json_ok. Частичное раскодирование превращало путь v2rayN
-// `%2F%3Fed%3D2048` в `/%3Fed=2048`: Xray не находил ed, ответ 404.
-function qp(name) { let v = qraw(name); return v == null ? '' : pctd(v); }
-// Первый непустой из нескольких имён (v2rayN -- publickey, Hiddify -- peer_pk).
-function qpa(names) { for (let n in names) { let v = qp(n); if (v != '') return v; } return ''; }
-// extra -- объект JSON: раскодируются только знаки, законные в нём; объект
-// проверяет json_obj_ok.
-function qp_json(name) {
-    let v = qraw(name);
-    if (v == null) return '';
-    for (let p in [ ['%2F', '/'], ['%3A', ':'], ['%2C', ','], ['%20', ' '], ['%3D', '='],
-                    ['%26', '&'], ['%7B', '{'], ['%7D', '}'], ['%22', '"'], ['%5B', '['],
-                    ['%5D', ']'] ])
-        v = replace(v, p[0], p[1]);
-    return nl(v);
-}
-
-let v = qp('type'); if (v != '') N.TYPE = v;
-// trojan без TLS не бывает, а клиенты security часто опускают.
-if (N.PROTO == 'trojan') N.SEC = 'tls';
-v = qp('security'); if (v != '') N.SEC = v;
-N.SNI = qp('sni') || N.HOST;
-v = qp('fp'); if (v != '') N.FP = v;
-v = qp('path'); if (v != '') N.PATH = v;
-N.WSHOST = qp('host') || N.HOST;
-N.PBK = qp('pbk'); N.SID = qp('sid'); N.FLOW = qp('flow');
-// flow у trojan в конфиг не пишется, а mux при нём отключался.
-if (N.PROTO == 'trojan' && N.FLOW != '') {
-    warnf("flow=%s у trojan Xray-core не поддерживает — пропущен", N.FLOW); N.FLOW = '';
-}
-N.MODE = qp('mode'); N.ALPN = qp('alpn'); N.HDR = qp('headerType');
-N.SEED = qp('seed'); N.SVC = qp('serviceName'); N.AUTH = qp('authority');
-N.SPX = qp('spx'); N.PQV = qp('pqv'); N.ENC = qp('encryption');
-N.QSEC = qp('quicSecurity'); N.QKEY = qp('key'); N.EXTRA = qp_json('extra');
-N.INSEC = qp('allowInsecure') || qp('insecure');
-// pcs -- имя у v2rayN, pinSHA256 -- у hysteria2; значение одно и то же.
-N.PIN = qp('pcs') || qp('pinSHA256');
-N.VCN = qp('vcn');
-
-if (N.PROTO == 'hysteria') {
-    // Транспорт hysteria всегда под TLS («tls config is nil» без него); у
-    // QUIC нет uTLS-отпечатка.
-    N.TYPE = 'hysteria'; N.SEC = 'tls'; N.FP = '';
-    if (N.ALPN == '') N.ALPN = 'h3';
-    // Диапазон портов Xray-core через hysteriaSettings не берёт.
-    if (match(N.PORT, /[,-]/)) {
-        let p1 = match(N.PORT, /^[^,-]*/)[0];
-        warnf("диапазон портов в ключе не переносится: соединение идёт на порт %s", p1);
-        N.PORT = p1;
-    }
-    v = qp('obfs');
-    if (v == 'salamander') {
-        N.OBFS = 'salamander'; N.OBFSPW = qp('obfs-password');
-        if (N.OBFSPW == '') { flush(); die("obfs=salamander без obfs-password: пароль обфускации обязателен"); }
-    }
-    else if (v != '' && v != 'none') {
-        flush(); dief("obfs=%s у hysteria2 не поддержан: в Xray-core есть только salamander", v);
-    }
-    if (qp('mport') != '')
-        warn("mport (смена портов) не переносится: соединение идёт на основной порт из ключа");
-}
-
-if (N.PROTO == 'wireguard') {
-    N.TYPE = 'wireguard'; N.SEC = 'none';
-    if (N.WGKEY == '') N.WGKEY = qpa([ 'privatekey', 'secretkey', 'pk' ]);
-    N.WGPUB = qpa([ 'publickey', 'peer_pk' ]);
-    N.WGPSK = qpa([ 'presharedkey', 'pre_shared_key', 'psk' ]);
-    N.WGADDR = nl(replace(qpa([ 'address', 'local_address' ]), ' ', ''));
-    N.WGMTU = qp('mtu'); N.WGRES = nl(replace(qp('reserved'), ' ', '')); N.WGKA = qp('keepalive');
-    // Ключи -- base64 на 32 байта либо hex (ParseWireGuardKey); образец
-    // строгий: значение уходит в конфиг.
-    let key = /^([A-Za-z0-9+\/]{43}=|[0-9a-fA-F]{64})$/;
-    if (!grepq(key, N.WGKEY)) { flush(); die("в ключе wireguard нет закрытого ключа либо он не той формы (base64 на 44 знака либо 64 шестнадцатеричных)"); }
-    if (!grepq(key, N.WGPUB)) { flush(); die("в ключе wireguard нет публичного ключа сервера (publickey) либо он не той формы"); }
-    if (N.WGPSK != '' && !grepq(key, N.WGPSK)) { flush(); die("presharedkey в ключе wireguard не той формы"); }
-    // Без своего адреса в туннеле ядро ставит 10.0.0.1, сервер такого
-    // клиента не узнаёт, и соединение молча не идёт.
-    if (N.WGADDR == '') { flush(); die("в ключе wireguard нет address -- адреса этого клиента в туннеле"); }
-    if (!grepq(/^[0-9a-fA-F.:]+(\/[0-9]{1,3})?(,[0-9a-fA-F.:]+(\/[0-9]{1,3})?)*$/, N.WGADDR)) {
-        flush(); dief("address в ключе wireguard не похож на список адресов: %s", N.WGADDR);
-    }
-    if (N.WGMTU != '' && !grepq(/^[0-9]{3,4}$/, N.WGMTU)) { flush(); dief("mtu в ключе wireguard -- не число: %s", N.WGMTU); }
-    if (N.WGRES != '' && !grepq(/^[0-9]{1,3},[0-9]{1,3},[0-9]{1,3}$/, N.WGRES)) {
-        flush(); dief("reserved в ключе wireguard -- не три числа через запятую: %s", N.WGRES);
-    }
-    if (N.WGKA != '' && !grepq(/^[0-9]{1,5}$/, N.WGKA)) { flush(); dief("keepalive в ключе wireguard -- не число: %s", N.WGKA); }
-}
-if (N.PIN != '' && !grepq(/^[0-9a-fA-F:,]+$/, N.PIN)) {
-    flush(); dief("отпечаток сертификата (pcs, pinSHA256) -- не шестнадцатеричный: %s", N.PIN);
-}
-if (N.VCN != '' && !grepq(/^[A-Za-z0-9.,*-]+$/, N.VCN)) {
-    flush(); dief("имя для проверки сертификата (vcn) -- не имя хоста: %s", N.VCN);
-}
-node_json_ok();
-if (N.EXTRA != '' && !json_obj_ok(N.EXTRA)) {
-    flush();
-    die("параметр extra в ссылке -- не один объект JSON: он подставляется в конфиг как есть, и такая ссылка переписывает соседние поля, включая адрес сервера и защиту");
-}
-
-// Имена параметров В ССЫЛКЕ -- соглашение клиентов; незнакомые называем,
-// чтобы человек узнал, что из ссылки не перенесено.
-let known = [ 'type', 'security', 'sni', 'fp', 'alpn', 'path', 'host', 'headerType', 'seed',
-              'serviceName', 'mode', 'authority', 'pbk', 'sid', 'spx', 'pqv', 'flow',
-              'encryption', 'quicSecurity', 'key', 'extra', 'allowInsecure', 'insecure',
-              'pinSHA256', 'pcs', 'vcn' ];
-if (N.PROTO == 'hysteria') push(known, 'obfs', 'obfs-password', 'mport');
-if (N.PROTO == 'wireguard')
-    push(known, 'publickey', 'privatekey', 'secretkey', 'pk', 'peer_pk', 'presharedkey',
-         'pre_shared_key', 'psk', 'address', 'local_address', 'mtu', 'reserved', 'keepalive');
-for (let l in split(query, '&'))
-    for (let pn in split(before(l, '='), /[ \t]+/))
-        if (pn != '' && !(pn in known))
-            warnf("параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он", pn);
-
-// Шифрование VLESS: форма -- образцом, версию ядра проверяет parse_node.
-if (N.ENC != '' && N.ENC != 'none') {
-    if (N.PROTO != 'vless') { flush(); dief("encryption=%s бывает только у vless", N.ENC); }
-    if (!grepq(/^mlkem768x25519plus\.[A-Za-z0-9._+\/=-]+$/, N.ENC)) {
-        flush(); dief("encryption=%s не поддержан: Xray-core знает только mlkem768x25519plus", N.ENC);
-    }
-}
-flush(); stop();
-UC
-}
-
-# Аутбаунд Xray из разобранного ключа (N_*).
-
-# Блок аутбаунда под свой протокол.
-build_outbound() {
-    case "$N_PROTO" in
-      vless)
-        OUTBOUND="\"protocol\": \"vless\", \"settings\": { \"vnext\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"users\": [ { \"id\": \"$N_UUID\", \"encryption\": \"${N_ENC:-none}\"$FLOWJ } ] } ] }" ;;
-      hysteria)
-        OUTBOUND="\"protocol\": \"hysteria\", \"settings\": { \"version\": 2, \"address\": \"$N_HOST\", \"port\": $N_PORT }" ;;
-      wireguard)
-        # address -- список через запятую, уже сверенный образцом в parse_uc.
-        _wa=$(printf '%s' "$N_WGADDR" | sed 's/,/", "/g')
-        _wp="\"publicKey\": \"$N_WGPUB\", \"endpoint\": \"$N_HOST:$N_PORT\""
-        if [ -n "$N_WGPSK" ]; then _wp="$_wp, \"preSharedKey\": \"$N_WGPSK\""; fi
-        if [ -n "$N_WGKA" ]; then _wp="$_wp, \"keepAlive\": $N_WGKA"; fi
-        _wo=""
-        if [ -n "$N_WGMTU" ]; then _wo=", \"mtu\": $N_WGMTU"; fi
-        if [ -n "$N_WGRES" ]; then _wo="$_wo, \"reserved\": [ $N_WGRES ]"; fi
-        # noKernelTun: wireguard внутри процесса, не интерфейсом ядра. С
-        # 24.11.30 Xray по умолчанию поднимает wg0 через /dev/net/tun: без
-        # kmod-tun «CreateTUN failed» (стенд 25.12.5, 2026-10-01), с ним
-        # появляется интерфейс, неизвестный маршрутизации. Старые версии поле
-        # игнорируют.
-        OUTBOUND="\"protocol\": \"wireguard\", \"settings\": { \"noKernelTun\": true, \"secretKey\": \"$N_WGKEY\", \"address\": [ \"$_wa\" ], \"peers\": [ { $_wp } ]$_wo }" ;;
-      vmess)
-        OUTBOUND="\"protocol\": \"vmess\", \"settings\": { \"vnext\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"users\": [ { \"id\": \"$N_UUID\", \"alterId\": ${N_AID:-0}, \"security\": \"${N_METHOD:-auto}\" } ] } ] }" ;;
-      trojan)
-        OUTBOUND="\"protocol\": \"trojan\", \"settings\": { \"servers\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"password\": $J_PASS } ] }" ;;
-      shadowsocks)
-        OUTBOUND="\"protocol\": \"shadowsocks\", \"settings\": { \"servers\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT, \"method\": \"$N_METHOD\", \"password\": $J_PASS } ] }" ;;
-      socks)
-        _su=""
-        if [ -n "$N_USER" ]; then
-          _su=", \"users\": [ { \"user\": $J_USER, \"pass\": $J_PASS } ]"
-        fi
-        OUTBOUND="\"protocol\": \"socks\", \"settings\": { \"servers\": [ { \"address\": \"$N_HOST\", \"port\": $N_PORT$_su } ] }" ;;
-      *) dief "протокол %s не собран" "$N_PROTO" ;;
-    esac
+    bw_uc parse
 }
 
 # Адреса и порты конфига: DNS-вход, пул fakeip, вход для трафика роутера.
@@ -1043,393 +636,38 @@ redir_port() {
     printf '%s' "$_rdp"
 }
 
-# streamSettings аутбаунда: транспорт, защита (tls, reality), flow и mux.
+# Аутбаунды: разбор ключа, транспорт, защита и блок JSON -- в ucode
+# (uc/outbound.uc); здесь вызов и eval его команд: N_*, блок, сообщения по
+# порядку (как у разбора ключа).
 
-# STREAM и SECURITY из разобранных полей. Зовётся и генератором, и проверкой
-# ноды: проверяется ровно тот транспорт, что пойдёт в бой.
-build_stream() {
-    # При своём конфиге собирать нечего: он уже целиком написан человеком.
-    if [ "$N_PROTO" = "raw" ]; then
-        STREAM=""; SECURITY=""; FLOWJ=""; MUXJ=""
-        OUTBOUND=""
-        return 0
-    fi
-    stream_transport
-    stream_security
-    FLOWJ=""
-    # if, а не «[ ] && ...»: при пустом значении та конструкция вернула бы 1, и
-    # set -e молча убил бы скрипт.
-    if [ -n "$N_FLOW" ]; then
-        # Vision -- только голый TCP с TLS или Reality; на ws, grpc и прочих
-        # Xray конфиг принимает, а падает в бою.
-        case "$N_TYPE" in
-          tcp|raw) ;;
-          *) warnf "flow=%s с транспортом %s не работает: Xray-core примет конфиг и сломается в бою" "$N_FLOW" "$N_TYPE" ;;
-        esac
-        FLOWJ=", \"flow\": \"$N_FLOW\""
-    fi
-
-    # После FLOWJ: аутбаунд входит в блок пользователя vless.
-    build_outbound
-
-    # mux схлопывает клиентские соединения в несколько к ноде: на роутере узкое
-    # место процессор, а полсотни TLS-сессий -- полсотни наборов криптографии.
-    # В поставке включён (8, замер в etc-config-byway), выключает 0. С flow mux
-    # несовместим: Vision сам делит поток.
-    MUXJ=""
-    # val_or: значение уходит в JSON без кавычек и приходит снаружи
-    # (EXPORT_KEYS, панель).
-    _mux=$(val_or mux_concurrency "$(u mux_concurrency)" \
-           '^[0-9]{1,3}$' 0 "$(_t 'конфига движка')")
-    if [ -n "$_mux" ] && [ "$_mux" != "0" ]; then
-        if [ -n "$N_FLOW" ]; then
-            warnf "mux отключён: он не сочетается с flow=%s (Vision делит поток сам)" "$N_FLOW"
-        elif [ "$N_TYPE" = "xhttp" ] || [ "$N_TYPE" = "grpc" ] || [ "$N_TYPE" = "hysteria" ]; then
-            # У xhttp свой xmux, у grpc multiMode: второй слой только добавляет
-            # блокировку начала очереди (xhttp, 2026-09-03: 896 мс с mux, 861
-            # без).
-            warnf "mux отключён: у транспорта %s своё мультиплексирование, второй слой поверх только вредит" "$N_TYPE"
-        elif [ "$N_PROTO" = "wireguard" ]; then
-            # У wireguard потока нет, делить нечего.
-            warn "mux к wireguard не применяется: у него нет потока, который можно делить"
-        else
-            MUXJ=" \"mux\": { \"enabled\": true, \"concurrency\": $_mux },"
-        fi
-    fi
+# Метка исходящих для «VPN для программ на роутере» -- числом, пока перехват
+# на shell. Последняя строка: self_mark печатает жалобы в тот же вывод.
+ob_env_mark() {
+    if [ "$(u router_via_vpn)" = "1" ]; then self_mark_dec | tail -1; fi
 }
 
-# STREAM: настройки транспорта по N_TYPE.
-stream_transport() {
-    case "$N_TYPE" in
-      # host отдельным полем, не в headers: Xray 26 ругается на старую форму
-      # (deprecated). Но wsSettings.host появилось к 1.8.24; у 1.8.3 (фид
-      # OpenWrt 22.03) поле отбрасывается молча, Host остаётся адресом
-      # соединения, CDN отвечает 404/1003. Отсюда развилка.
-      ws)  xray_ver_num >/dev/null
-           if [ "$XRAYVER" -lt 10824 ]; then
-             STREAM="\"network\": \"ws\", \"wsSettings\": { \"path\": \"$N_PATH\", \"headers\": { \"Host\": \"$N_WSHOST\" } }"
-           else
-             STREAM="\"network\": \"ws\", \"wsSettings\": { \"path\": \"$N_PATH\", \"host\": \"$N_WSHOST\" }"
-           fi ;;
-
-      # raw -- новое имя tcp, бинарник принимает оба. headerType=http включает
-      # обфускацию под HTTP.
-      tcp|raw)
-           if [ "$N_HDR" = "http" ]; then
-             STREAM="\"network\": \"tcp\", \"tcpSettings\": { \"header\": { \"type\": \"http\", \"request\": { \"path\": [ \"$N_PATH\" ], \"headers\": { \"Host\": [ \"$N_WSHOST\" ] } } } }"
-           else
-             STREAM="\"network\": \"tcp\""
-           fi ;;
-
-      kcp)
-           warn "mkcp идёт поверх UDP, а в РФ UDP душат первым делом"
-           # header и seed у mKCP: до 26.1.23 работают; 26.1.31–26.6.27
-           # отвергают («removed feature», конфиг не собирается); 26.9.x
-           # принимают и молча не применяют -- без маскировки сервер не
-           # ответит. С 26.1.31 не пишем и говорим (замена -- finalmask).
-           _k=""
-           if [ -n "$N_HDR" ]; then _k="\"header\": { \"type\": \"$N_HDR\" }"; fi
-           if [ -n "$N_SEED" ]; then
-               [ -n "$_k" ] && _k="$_k, "
-               _k="$_k\"seed\": \"$N_SEED\""
-           fi
-           xray_ver_num >/dev/null
-           if [ -n "$_k" ] && [ "${XRAYVER:-0}" -ge 260131 ]; then
-               warn "header и seed у mkcp удалены в Xray-core с 26.1.31 и в конфиг не пишутся: сервер с маскировкой mKCP не ответит; замена на сервере и в ключе — finalmask (mkcp-original, mkcp-aes128gcm)"
-               _k=""
-           fi
-           if [ -n "$_k" ]; then
-               STREAM="\"network\": \"kcp\", \"kcpSettings\": { $_k }"
-           else
-               STREAM="\"network\": \"kcp\""
-           fi ;;
-
-      grpc)
-           _g=""
-           if [ "$N_MODE" = "multi" ]; then _g=", \"multiMode\": true"; fi
-           if [ -n "$N_AUTH" ]; then _g="$_g, \"authority\": \"$N_AUTH\""; fi
-           STREAM="\"network\": \"grpc\", \"grpcSettings\": { \"serviceName\": \"$N_SVC\"$_g }" ;;
-
-      h2|http)
-           # Удалён весь транспорт: движок отвергает конфиг и называет замену.
-           # Версию не пишем: у выпусков 26.4-26.7 заметок нет.
-           warn "HTTP/2 из Xray-core удалён, замена: xhttp в режиме stream-one"
-           STREAM="\"network\": \"$N_TYPE\", \"httpSettings\": { \"path\": \"$N_PATH\", \"host\": [ \"$N_WSHOST\" ] }" ;;
-
-      quic)
-           # Тоже удалён; замена -- xhttp поверх H3.
-           warn "QUIC из Xray-core удалён, замена: xhttp stream-one поверх H3; в РФ QUIC блокируют первым делом"
-           _qs=${N_QSEC:-none}
-           _qh=${N_HDR:-none}
-           STREAM="\"network\": \"quic\", \"quicSettings\": { \"security\": \"$_qs\", \"key\": \"$N_QKEY\", \"header\": { \"type\": \"$_qh\" } }" ;;
-
-      httpupgrade)
-           # Версия появления не проверена: предупреждение, не отказ (у 1.8.3
-           # транспорта нет).
-           xray_ver_num >/dev/null
-           [ "$XRAYVER" -lt 10824 ] &&
-               warn "движок старый: транспорт httpupgrade он может не знать, и тогда конфиг соберётся, а туннель не встанет"
-           STREAM="\"network\": \"httpupgrade\", \"httpupgradeSettings\": { \"path\": \"$N_PATH\", \"host\": \"$N_WSHOST\" }" ;;
-
-      xhttp)
-           # На старом движке xhttp не «хуже», а не существует: поле отбросится
-           # молча. Отказ вместо конфига, который нечем объяснить.
-           xray_ver_num >/dev/null
-           if [ "$XRAYVER" -lt 10824 ]; then
-               dief "движку %s транспорт xhttp неизвестен (нужен Xray-core 1.8.24 или новее) — обновить: byway engine tested, либо взять ключ на ws" \
-                    "$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f1-2)"
-           fi
-           # extra -- вложенный JSON, в ссылке в процентной кодировке;
-           # подставляем как есть, битый поймает run -test в cmd_gen.
-           _m=""
-           if [ -n "$N_MODE" ]; then _m=", \"mode\": \"$N_MODE\""; fi
-           if [ -n "$N_EXTRA" ]; then _m="$_m, \"extra\": $N_EXTRA"; fi
-           STREAM="\"network\": \"xhttp\", \"xhttpSettings\": { \"path\": \"$N_PATH\", \"host\": \"$N_WSHOST\"$_m }" ;;
-
-      hysteria)
-           # Есть с 26.1.13, но схема hysteriaSettings менялась (up/down и
-           # udphop ушли в finalmask к 26.9.9): пишем общие поля version и
-           # auth. Нижняя граница 26.3.27 проверена прогоном.
-           xray_ver_num >/dev/null
-           if [ "$XRAYVER" -lt 260327 ]; then
-               dief "hysteria2 нужен Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested" \
-                    "$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f2)"
-           fi
-           warn "hysteria2 идёт поверх QUIC (UDP), а в РФ его ограничивают первым делом"
-           _fm=""
-           if [ -n "$N_OBFS" ]; then
-               # salamander в finalmask/udp -- с 26.7.11, раньше обфускации у
-               # hysteria не было.
-               if [ "$XRAYVER" -lt 260711 ]; then
-                   dief "obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а стоит %s — обновить: byway engine tested" \
-                        "$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f2)"
-               fi
-               _fm=", \"finalmask\": { \"udp\": [ { \"type\": \"salamander\", \"settings\": { \"password\": $J_OBFSPW } } ] }"
-           fi
-           STREAM="\"network\": \"hysteria\", \"hysteriaSettings\": { \"version\": 2, \"auth\": $J_PASS }$_fm" ;;
-
-      # У wireguard транспорта нет (UDP свой); в streamSettings остаётся метка
-      # self_sockopt.
-      wireguard) STREAM="" ;;
-
-      *)   dief "транспорт %s не поддержан — есть ws, tcp/raw, kcp, grpc, httpupgrade, xhttp, hysteria" "$N_TYPE" ;;
-    esac
-    return 0
+# Один ключ: N_*, блок PB, адреса сервера OB_HOSTS. 1 -- тег, 2 -- ссылка
+# (пусто -- ключ или свой конфиг из настроек), 3 -- quiet: без сообщений
+# разбора.
+ob_eval() {
+    xray_ver_num >/dev/null
+    _obm=$(ob_env_mark)
+    _obo=$(BW_URL=${2:-} BW_SNI=${N_SNI:-} BW_WSHOST=${N_WSHOST:-} \
+           BW_XRAYVER=$XRAYVER BW_XRAY=$XRAY BW_SELFMARK=$_obm \
+           bw_uc outbound "$1" "${3:-}") || die "аутбаунд не собрался: сбой ucode"
+    eval "$_obo"
 }
 
-# SECURITY: tls, reality или none по N_SEC.
-stream_security() {
-    case "$N_SEC" in
-      tls)     _a=""
-               # В два шага: вложенные кавычки в sed в подстановке в двойных
-               # кавычках рвут разбор (2026-09-03).
-               if [ -n "$N_ALPN" ]; then
-                 _alist=$(printf '%s' "$N_ALPN" | sed 's/,/", "/g')
-                 _a=", \"alpn\": [ \"$_alist\" ]"
-               fi
-               # allowInsecure ядро с 26.3.27 отвергает (там -- с 2026-06-01, с
-               # 26.6.27 -- без условий). Замена -- pinnedPeerCertSha256 или
-               # verifyPeerCertByName (сверено по исходникам 26.3.27-26.9.30).
-               xray_ver_num >/dev/null
-               if [ "$N_INSEC" = "1" ] || [ "$N_INSEC" = "true" ]; then
-                 if [ "$XRAYVER" -lt 260327 ]; then
-                   # Политика нового ядра и на старом: отказ без явного
-                   # разрешения; с отпечатком точнее сказать «нужно 26.3.27+».
-                   [ "$(u allow_insecure)" = "1" ] || [ -n "$N_PIN$N_VCN" ] ||
-                     die "в ключе отключена проверка сертификата (allowInsecure): соединение может подменить любой на пути. Для своего сервера с самоподписанным сертификатом: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload"
-                   warn "allowInsecure=1: проверка сертификата сервера отключена, соединение можно подменить"
-                   _a="$_a, \"allowInsecure\": true"
-                 elif [ -z "$N_PIN" ] && [ -z "$N_VCN" ]; then
-                   die "в ключе отключена проверка сертификата (allowInsecure или insecure), а Xray-core с 26.3.27 так не умеет: нужен отпечаток сертификата сервера (pcs= или pinSHA256=) либо настоящий сертификат на сервере"
-                 fi
-               fi
-               if [ -n "$N_PIN" ] || [ -n "$N_VCN" ]; then
-                 if [ "$XRAYVER" -lt 260327 ]; then
-                   dief "проверка сертификата по отпечатку (pcs, vcn) нужна Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested" \
-                        "$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f2)"
-                 fi
-                 if [ -n "$N_PIN" ]; then _a="$_a, \"pinnedPeerCertSha256\": \"$N_PIN\""; fi
-                 if [ -n "$N_VCN" ]; then _a="$_a, \"verifyPeerCertByName\": \"$N_VCN\""; fi
-               fi
-               # Отпечаток браузера только если есть: у hysteria (QUIC) его
-               # нет.
-               _f=""
-               if [ -n "$N_FP" ]; then _f=", \"fingerprint\": \"$N_FP\""; fi
-               SECURITY="\"security\": \"tls\", \"tlsSettings\": { \"serverName\": \"$N_SNI\"$_f$_a }" ;;
-      reality)
-               # spiderX и mldsa65Verify проверены на бинарнике: мусор в
-               # значении даёт ошибку именно про них, поля реализованы.
-               _r=""
-               if [ -n "$N_SPX" ]; then _r=", \"spiderX\": \"$N_SPX\""; fi
-               if [ -n "$N_PQV" ]; then _r="$_r, \"mldsa65Verify\": \"$N_PQV\""; fi
-               SECURITY="\"security\": \"reality\", \"realitySettings\": { \"serverName\": \"$N_SNI\", \"fingerprint\": \"$N_FP\", \"publicKey\": \"$N_PBK\", \"shortId\": \"$N_SID\"$_r }" ;;
-      none)    # vless и trojan без шифрования к публичному адресу ядро с
-               # 26.7.11 отвергает само; на старом -- то же решение здесь:
-               # uuid или пароль и весь туннель видны любому на пути.
-               case "$N_PROTO" in vless|trojan)
-                 xray_ver_num >/dev/null
-                 if [ "$XRAYVER" -lt 260711 ] && [ "$(u allow_insecure)" != "1" ]; then
-                   case "$N_HOST" in
-                     10.*|192.168.*|127.*|169.254.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) ;;
-                     *) die "ключ vless или trojan без TLS к публичному адресу: ключ и трафик видны любому на пути. Нужен ключ с security=tls или reality; разрешить всё же: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload" ;;
-                   esac
-                 fi ;;
-               esac
-               SECURITY="\"security\": \"none\"" ;;
-      *)       dief "security=%s не поддержан" "$N_SEC" ;;
-    esac
-    return 0
-}
-
-# Аутбаунды целиком: один ключ, автовыбор (balancer), свой конфиг.
-
-# Объект аутбаунда целиком. Для своего конфига -- написанное человеком плюс
-# тег: без него правила не найдут аутбаунд.
-proxy_block() {
-    _tag=${1:-proxy}
-    if [ "$N_PROTO" = "raw" ]; then
-        raw_json_out "$_tag"
-    else
-        # Только непустые части: у wireguard транспорта нет, и «{ %s, %s }»
-        # дало бы «{ , …}».
-        _ss=$STREAM
-        if [ -n "$SECURITY" ]; then _ss="${_ss:+$_ss, }$SECURITY"; fi
-        _so=$(self_sockopt)
-        if [ -z "$_ss" ]; then _so=${_so#, }; fi
-        printf '{ "tag": "%s", %s,%s "streamSettings": { %s%s } }' \
-            "$_tag" "$OUTBOUND" "$MUXJ" "$_ss" "$_so"
-    fi
-}
-
-# Метка на исходящих; пусто при выключенном заворачивании. Для своего конфига
-# (N_PROTO=raw) метку не ставим: лезть в чужой JSON вслепую опаснее, `sockopt`
-# человек допишет сам (сказано в подсказке к настройке).
-self_sockopt() {
-    # По настройке, а не по redir_port: та ещё жалуется на порт, а зовём мы эту
-    # функцию из трёх мест.
-    [ "$(u router_via_vpn)" = "1" ] || return 0
-    printf ', "sockopt": { "mark": %s }' "$(self_mark_dec)"
-}
-
-# Свой конфиг (N_RAW) -- разобранным и собранным заново, с тегом. Склейка
-# текста (тег перед последней «}») пропускала в конфиг движка всё, что
-# человек или чужая выгрузка допишет после объекта: «}, { ... }» становилось
-# новыми ключами верхнего уровня -- входами, журналом в любой путь, а движок
-# может идти от root. Дубля тега тоже нет: свой удаляется, наш ставится.
-# Не один объект -- код 1.
-raw_json_out() {   # 1 -- тег
-    BW_RAW=$N_RAW BW_TAG=$1 ucode -e '
-        let o;
-        try { o = json(getenv("BW_RAW")); } catch (e) { exit(1); }
-        if (type(o) != "object") exit(1);
-        delete o.tag;
-        o.tag = getenv("BW_TAG");
-        print(sprintf("%J", o));
-    ' 2>/dev/null
-}
-
-# Адреса серверов своего конфига (N_RAW): address у settings, vnext, servers,
-# endpoint у peers -- по строке на адрес. Через окружение, без fs: модуль есть
-# не во всех сборках ucode. Не разобралось или негодный знак в адресе --
-# адрес пропускается.
-raw_hosts() {
-    BW_RAW=$N_RAW ucode -e '
-        let o;
-        try { o = json(getenv("BW_RAW")); } catch (e) { exit(0); }
-        let seen = {};
-        function add(h) {
-            if (type(h) != "string" || match(h, /^\[/)) return;
-            h = replace(h, /:[0-9]+$/, "");
-            if (match(h, /^[A-Za-z0-9.-]+$/) && !seen[h]) { seen[h] = 1; print(h, "\n"); }
-        }
-        let s = (type(o) == "object") ? o.settings : null;
-        if (type(s) != "object") exit(0);
-        add(s.address);
-        for (let k in [ "vnext", "servers" ])
-            if (type(s[k]) == "array") for (let x in s[k]) if (type(x) == "object") add(x.address);
-        if (type(s.peers) == "array") for (let x in s.peers) if (type(x) == "object") add(x.endpoint);
-    ' 2>/dev/null || true
-}
-
-# Аутбаунды: обычные режимы дают один с тегом proxy; urltest -- по одному на
-# ключ (proxy-N) и балансировщик leastPing, куда идут правила. Схема проверена
-# на 26.7.11 (observatory, balancers, balancerTag).
+# Аутбаунды целиком: PROXIES, VPN_HOSTS, OBSERVATORY, BALANCERS,
+# PROXY_TARGET, LAST_TARGET, PROXY_KEYIDX, _n, N_*. SKIP_KEYS -- ключи
+# автовыбора, которые отверг сам движок (повтор сборки в cmd_gen).
 build_proxies() {
-    _mode=$(u conn_mode)
-    OBSERVATORY=""
-    BALANCERS=""
-    PROXY_TARGET='"outboundTag": "proxy"'
-    # Остаток правил: напрямую (списки) или в туннель (all).
-    if [ "$(u list_mode)" = "all" ]; then
-        LAST_TARGET=$PROXY_TARGET
-    else
-        LAST_TARGET='"outboundTag": "direct"'
-    fi
-
-    VPN_HOSTS=""
-    if [ "$_mode" != "urltest" ]; then
-        if [ -n "${1:-}" ]; then parse_node "$1"; else parse_node; fi
-        build_stream
-        PROXIES=$(proxy_block)
-        # Свой конфиг: адрес ноды внутри чужого JSON, N_HOST = «-»; в правило
-        # он шёл как ip "-/32", и движок отвергал конфиг.
-        if [ "$N_PROTO" = "raw" ]; then
-            # Адрес сервера -- из самого JSON: без него при DNS через туннель
-            # имя сервера разрешалось через ещё не поднятый туннель, а в
-            # режиме «всё через VPN» соединение к серверу уходило в перехват.
-            VPN_HOSTS=$(raw_hosts | tr '\n' ' ')
-            [ -n "$VPN_HOSTS" ] ||
-            warn "свой конфиг: адрес сервера лежит внутри чужого JSON, byway его не знает и из перехвата не исключит — проверить, что адрес сервера не попал в списки, иначе туннель замкнётся сам на себя"
-            # Метку для «VPN для программ на роутере» в чужой JSON не вписываем
-            # (комментарии в нём ucode не разберёт) -- говорим, что дописать.
-            if [ "$(u router_via_vpn)" = "1" ] && ! printf '%s' "$N_RAW" | grep -q '"mark"'; then
-                warnf "свой конфиг: включено «VPN для программ на роутере», а метки в нём нет — если адрес сервера попадёт в списки, соединение движка к нему уйдёт в перехват по кругу; дописать в streamSettings поле sockopt.mark = %s" "$(self_mark_dec)"
-            fi
-        else
-            VPN_HOSTS=$N_HOST
-        fi
-        return 0
-    fi
-
-    _keys=$(u node_urls)
-    [ -n "$_keys" ] || die "выбран автовыбор, но ни одного ключа не добавлено"
-
-    PROXIES=""
-    _n=0
-    _ki=-1
-    PROXY_KEYIDX=""             # номер ключа в списке для каждого proxy-N
-    xray_ver_num >/dev/null     # версия -- один раз, подоболочки её наследуют
-    for _k in $_keys; do
-        _ki=$((_ki + 1))
-        # Ключи, которые отверг уже сам движок (повтор сборки в cmd_gen, Ф-3).
-        case " ${SKIP_KEYS:-} " in *" $_ki "*) continue ;; esac
-        # Подоболочка: parse_node на плохом ключе зовёт die (exit), и один
-        # негодный ключ из десяти валил бы весь gen. build_stream там же:
-        # отказы по версии ядра тоже через die. Настоящий разбор -- после, в
-        # текущей оболочке.
-        if ! _kerr=$( ( parse_node "$_k" && build_stream ) 2>&1 ); then
-            warnf "ключ пропущен: %s" "$(printf '%s' "$_kerr" | tail -1 | tr -d '\033' | sed 's/\[[0-9;]*m//g; s/^ *\[x\] *//')"
-            continue
-        fi
-        parse_node "$_k"
-        build_stream
-        _b=$(proxy_block "proxy-$_n")
-        PROXY_KEYIDX="$PROXY_KEYIDX $_ki"
-        VPN_HOSTS="$VPN_HOSTS $N_HOST"
-        if [ -n "$PROXIES" ]; then PROXIES="$PROXIES,
-    $_b"; else PROXIES="    $_b"; fi
-        _n=$((_n + 1))
-    done
-    [ "$_n" -gt 0 ] || die "ни один ключ не разобрался"
-
-    # Идёт в `"probeInterval": "'$_iv'"`: кавычка в значении дописала бы в
-    # конфиг что угодно.
-    _iv=$(val_or probe_interval "$(u probe_interval)" '^[0-9]{1,4}[smh]$' 3m "$(_t 'конфига движка')")
-    OBSERVATORY='"observatory": { "subjectSelector": [ "proxy-" ], "probeUrl": "https://www.google.com/generate_204", "probeInterval": "'$_iv'" },'
-    BALANCERS='"balancers": [ { "tag": "auto", "selector": [ "proxy-" ], "strategy": { "type": "leastPing" } } ],'
-    PROXY_TARGET='"balancerTag": "auto"'
-    [ "$(u list_mode)" = "all" ] && LAST_TARGET=$PROXY_TARGET
-    N_LABEL=$(_f 'автовыбор из %s' "$_n")
+    xray_ver_num >/dev/null
+    _obm=$(ob_env_mark)
+    _obo=$(BW_SKIP=${SKIP_KEYS:-} BW_SNI=${N_SNI:-} BW_WSHOST=${N_WSHOST:-} \
+           BW_XRAYVER=$XRAYVER BW_XRAY=$XRAY BW_SELFMARK=$_obm \
+           bw_uc proxies) || die "аутбаунд не собрался: сбой ucode"
+    eval "$_obo"
 }
 
 # Сборка конфига Xray: cmd_gen и его шаги gen_*. $OUT меняется, только если
@@ -1628,14 +866,13 @@ gen_routes() {
             continue
         fi
         # Подоболочка: негодный ключ не должен ронять сборку остальных.
-        if ! ( parse_node "$_rurl" && build_stream ) >/dev/null 2>&1; then
+        if ! ( ob_eval "route-$_rn" "$_rurl" ) >/dev/null 2>&1; then
             warnf "направление «%s»: ключ не разбирается, пропущено" "$_rn"
             continue
         fi
-        parse_node "$_rurl" >/dev/null 2>&1
-        build_stream
+        ob_eval "route-$_rn" "$_rurl" quiet
         ROUTE_OUT="$ROUTE_OUT
-$(proxy_block "route-$_rn"),"
+$PB,"
         ROUTE_HOSTS="$ROUTE_HOSTS $N_HOST"
 
         # Через list_to_json, как главный список: route_list отсеивает только
@@ -2183,13 +1420,12 @@ cmd_probe() {
     fi
     # Без аргумента в режиме «свой конфиг» проверяется он, как у check.
     if [ -z "${1:-}" ] && [ "$(u conn_mode)" = "outbound" ]; then
-        parse_node
+        ob_eval proxy ""
     else
         URL=${1:-$(u node_url)}
         [ -n "$URL" ] || die "ссылка не задана: передать аргументом либо записать в byway.main.node_url"
-        parse_node "$URL"
+        ob_eval proxy "$URL"
     fi
-    build_stream
 
     PORT=${PROBE_PORT:-15080}
     CFG=/tmp/byway-probe.json
@@ -2207,7 +1443,7 @@ cmd_probe() {
   "log": { "loglevel": "warning" },
   "inbounds": [ { "tag": "s", "listen": "127.0.0.1", "port": $PORT,
                   "protocol": "socks", "settings": { "udp": true } } ],
-  "outbounds": [ $(proxy_block) ]
+  "outbounds": [ $PB ]
 }
 PROBE
 
@@ -2254,8 +1490,7 @@ cmd_check() {
         dief "движка нет (%s) — ключ проверить нечем; сам ключ тут ни при чём" "$XRAY"
     # Ссылку передаём в разбор, только если дана аргументом: иначе разбор сам
     # выберет ключ из UCI или свой конфиг.
-    if [ -n "${1:-}" ]; then parse_node "$1"; else parse_node; fi
-    build_stream
+    ob_eval proxy "${1:-}"
 
     CFG=/tmp/byway-check.json
     trap ': > "$CFG" 2>/dev/null' EXIT INT TERM
@@ -2263,7 +1498,7 @@ cmd_check() {
     cat > "$CFG" <<CHK
 {
   "log": { "loglevel": "warning" },
-  "outbounds": [ $(proxy_block) ]
+  "outbounds": [ $PB ]
 }
 CHK
     printf '  %-12s %-10s %s:%s  ' "$N_TYPE" "$N_SEC" "$N_HOST" "$N_PORT"
@@ -7588,6 +6823,10 @@ exit $?
 let fs = require('fs');
 let uci = require('uci');
 
+// Встроенный die бросает исключение; имя die ниже занимает вывод «[x]» с
+// выходом. Объявления функций не поднимаются: здесь ещё встроенный.
+const raise = die;
+
 const LISTS = '/etc/byway';
 
 // ── настройки ──────────────────────────────────────────────────────────────
@@ -7723,6 +6962,15 @@ function _numgt(s, lim) {
 	return length(s) > 3 || (s !== '' && int(s) > lim);
 }
 
+// Отброшенная строка -- в файл bad. Наверху и с глобальным состоянием, не
+// вложенной функцией: см. uc/keys.uc о ucode 22.03/23.05.
+let LJ_BAD = null, LJ_BF = null;
+function lj_reject(s) {
+	if (!LJ_BAD) return;
+	LJ_BF ??= fs.open(LJ_BAD, 'a');
+	if (LJ_BF) LJ_BF.write(s + '\n');
+}
+
 function list_json(file, pfx, bad) {
 	let f = fs.open(file, 'r');
 	// Нет файла -- как busybox awk: жалоба в stderr, код 1, в вывод ничего (вывод --
@@ -7731,12 +6979,8 @@ function list_json(file, pfx, bad) {
 		fs.stderr.write(sprintf('list_json: %s: %s\n', file, fs.error()));
 		exit(1);
 	}
-	let bf = null;
-	let reject = function (s) {
-		if (!bad) return;
-		bf ??= fs.open(bad, 'a');
-		if (bf) bf.write(s + '\n');
-	};
+	LJ_BAD = bad;
+	LJ_BF = null;
 	let dom = substr(pfx, 0, 7) == 'domain:';
 	let n = 0;
 	let buf = [];
@@ -7747,26 +6991,26 @@ function list_json(file, pfx, bad) {
 		l = trim(l, WS);
 		if (l === '' || substr(l, 0, 1) == '#' || substr(l, 0, 2) == '//')
 			continue;
-		if (length(l) > 253) { reject(l); continue; }
+		if (length(l) > 253) { lj_reject(l); continue; }
 		let out;
 		if (dom) {
 			let v = l, pre = '';
 			let c = index(v, ':');
 			if (c > 0) {
 				let p0 = substr(v, 0, c);
-				if (p0 == 'geosite' || p0 == 'ext') { reject(l); continue; }
+				if (p0 == 'geosite' || p0 == 'ext') { lj_reject(l); continue; }
 				if (p0 == 'domain' || p0 == 'full' || p0 == 'keyword' || p0 == 'regexp') {
 					pre = p0 + ':';
 					v = substr(v, c + 1);
-					if (!length(v)) { reject(l); continue; }
+					if (!length(v)) { lj_reject(l); continue; }
 				}
 			}
 			if (pre == 'regexp:') {
 				v = replace(replace(v, '\\', '\\\\'), '"', '\\"');
 			} else if (pre == 'keyword:') {
-				if (!_only(v, ALNUM + '._-')) { reject(l); continue; }
+				if (!_only(v, ALNUM + '._-')) { lj_reject(l); continue; }
 			} else {
-				if (!_domain_ok(v)) { reject(l); continue; }
+				if (!_domain_ok(v)) { lj_reject(l); continue; }
 				if (pre == '') pre = pfx;
 			}
 			out = pre + v;
@@ -7776,7 +7020,7 @@ function list_json(file, pfx, bad) {
 			// грубо: строгую форму проверяет set_elements6, дальше строку
 			// разбирает сам Xray.
 			if (index(l, ':') >= 0) {
-				if (!match(l, /^[0-9a-fA-F:]+(\/[0-9]{1,3})?$/)) { reject(l); continue; }
+				if (!match(l, /^[0-9a-fA-F:]+(\/[0-9]{1,3})?$/)) { lj_reject(l); continue; }
 			} else {
 				let ok = match(l, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/) != null;
 				if (ok) {
@@ -7785,7 +7029,7 @@ function list_json(file, pfx, bad) {
 						if (_numgt(oc[i], 255)) ok = false;
 					if (length(oc) == 5 && _numgt(oc[4], 32)) ok = false;
 				}
-				if (!ok) { reject(l); continue; }
+				if (!ok) { lj_reject(l); continue; }
 			}
 			out = pfx + l;
 		}
@@ -7799,7 +7043,827 @@ function list_json(file, pfx, bad) {
 	if (length(buf))
 		print((n ? ',\n' : '') + join(',\n', buf));
 	f.close();
-	if (bf) bf.close();
+	if (LJ_BF) LJ_BF.close();
+}
+
+// Разбор ключа (vless, vmess, trojan, ss, socks, hysteria2, wireguard).
+// Логика -- прежний keys/parse.uc без правок разбора: на выходе те же команды
+// sh (bw_uc parse -> eval в parse_node) и, для сборки на ucode, сам ключ
+// объектом (N) с сообщениями (msgs, fatal). Выход из середины -- исключением
+// PARSE_STOP: die каркаса завершает программу.
+//
+// ⚠️ Помощники -- функции верхнего уровня, состояние -- глобальное (PK_*), без
+// вложенных функций: ucode до 2024-11-29 (22.03, 23.05) хранил захваченную
+// вложенной функцией переменную объемлющей функции в массиве или объекте
+// ссылкой на кадр стека -- после выхода из функции программа падала при
+// уборке памяти (стенды 2026-10-16; исправлено в ucode «resolve upvalue
+// values in arrays and objects»).
+const PARSE_STOP = '__byway_parse_stop__';
+let PK_OUT = [], PK_R = null, PK_N = null, PK_QUERY = '', PK_PREV_SNI = '', PK_PREV_WSHOST = '';
+
+// Функции верхнего уровня видят только объявленное выше: pk_q и pk_put первыми.
+function pk_q(s) { return "'" + replace('' + s, "'", "'\\''") + "'"; }
+function pk_put(n, v) { push(PK_OUT, n + '=' + pk_q(v)); }
+function pk_stop() { raise(PARSE_STOP); }
+function pk_warn(m) { push(PK_OUT, 'warn ' + pk_q(m)); push(PK_R.msgs, [ m ]); }
+function pk_warnf(m, a) { push(PK_OUT, 'warnf ' + pk_q(m) + ' ' + pk_q(a)); push(PK_R.msgs, [ m, a ]); }
+function pk_die(m) { push(PK_OUT, 'die ' + pk_q(m)); PK_R.fatal = [ m ]; pk_stop(); }
+function pk_dief(m, a) { push(PK_OUT, 'dief ' + pk_q(m) + ' ' + pk_q(a)); PK_R.fatal = [ m, a ]; pk_stop(); }
+// vmess: поле JSON строкой (была стрелка внутри ветки -- захват локального).
+function pk_jf(o, k) { return (o[k] == null) ? '' : '' + o[k]; }
+
+function pk_nl(s) { return rtrim(s, '\n'); }
+
+function pk_pctd(s) {
+    return pk_nl(replace(s, /%([0-9a-fA-F]{1,2})?/g,
+        (m, h) => h ? (hex(h) ? chr(hex(h)) : '') : '\\x'));
+}
+
+function pk_b64d(s) {
+    s = replace(replace(replace(s, /[\r\n]/g, ''), '_', '/'), '-', '+');
+    if (length(s) % 4 == 2) s += '==';
+    else if (length(s) % 4 == 3) s += '=';
+    let r = b64dec(s);
+    return r == null ? '' : pk_nl(replace(r, '\0', ''));
+}
+
+function pk_before(s, c) { let i = index(s, c); return i < 0 ? s : substr(s, 0, i); }
+
+function pk_after(s, c) { let i = index(s, c); return i < 0 ? s : substr(s, i + length(c)); }
+
+function pk_lastafter(s, c) { let i = rindex(s, c); return i < 0 ? s : substr(s, i + length(c)); }
+
+function pk_grepq(re, s) {
+    if (s == '') return false;
+    for (let l in split(s, '\n')) if (match(l, re)) return true;
+    return false;
+}
+
+function pk_jstr(s) {
+    return '"' + replace(s, /[\\"\x01-\x1f]/g,
+        (c) => (c == '\\' || c == '"') ? '\\' + c : sprintf('\\u%04x', ord(c))) + '"';
+}
+
+function pk_flush() {
+    for (let k in PK_N) pk_put('N_' + k, PK_N[k]);
+    for (let k in [ 'PASS', 'USER', 'OBFSPW' ]) pk_put('J_' + k, pk_jstr(PK_N[k] ?? ''));
+}
+
+function pk_node_json_ok() {
+    for (let p in [ ['адрес', PK_N.HOST], ['id', PK_N.UUID], ['пароль', PK_N.PASS],
+                    ['user', PK_N.USER], ['method', PK_N.METHOD], ['type', PK_N.TYPE],
+                    ['security', PK_N.SEC], ['sni', PK_N.SNI ?? PK_PREV_SNI], ['fp', PK_N.FP],
+                    ['path', PK_N.PATH], ['host', PK_N.WSHOST ?? PK_PREV_WSHOST], ['pbk', PK_N.PBK],
+                    ['sid', PK_N.SID], ['flow', PK_N.FLOW], ['mode', PK_N.MODE],
+                    ['alpn', PK_N.ALPN], ['headerType', PK_N.HDR], ['seed', PK_N.SEED],
+                    ['serviceName', PK_N.SVC], ['authority', PK_N.AUTH], ['spx', PK_N.SPX],
+                    ['pqv', PK_N.PQV], ['quicSecurity', PK_N.QSEC], ['key', PK_N.QKEY],
+                    ['encryption', PK_N.ENC], ['obfs-password', PK_N.OBFSPW],
+                    ['pcs', PK_N.PIN], ['vcn', PK_N.VCN], ['obfs', PK_N.OBFS],
+                    ['privatekey', PK_N.WGKEY], ['publickey', PK_N.WGPUB],
+                    ['presharedkey', PK_N.WGPSK], ['address', PK_N.WGADDR],
+                    ['mtu', PK_N.WGMTU], ['reserved', PK_N.WGRES], ['keepalive', PK_N.WGKA] ]) {
+        if (match(p[1], /[\x01-\x1f\x7f]/)) {
+            pk_flush();
+            pk_dief("в поле «%s» ссылки управляющий знак (перевод строки, табуляция): такая ссылка подменяет поля конфига", p[0]);
+        }
+        if (p[0] in [ 'пароль', 'user', 'obfs-password' ]) continue;
+        if (index(p[1], '"') >= 0 || index(p[1], '\\') >= 0) {
+            pk_flush();
+            pk_dief("в поле «%s» ссылки кавычка или обратная косая: значения уходят в конфиг как есть, и такая ссылка подменяет его поля", p[0]);
+        }
+    }
+}
+
+function pk_json_obj_ok(s) {
+    let d = 0, instr = false, esc = false, started = false, closed = false;
+    for (let c in split(s + '\n', '')) {
+        if (instr) {
+            if (esc) esc = false;
+            else if (c == '\\') esc = true;
+            else if (c == '"') instr = false;
+            continue;
+        }
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        if (!started) {
+            if (c != '{') return false;
+            started = true; d = 1; continue;
+        }
+        if (closed) return false;
+        if (c == '"') { instr = true; continue; }
+        if (c == '{' || c == '[') { d++; continue; }
+        if (c == '}' || c == ']') {
+            d--;
+            if (d < 0) return false;
+            if (d == 0) closed = true;
+            continue;
+        }
+    }
+    return !instr && started && closed && d == 0;
+}
+
+function pk_qraw(name) {
+    for (let l in split(PK_QUERY, '&'))
+        if (substr(l, 0, length(name) + 1) == name + '=')
+            return substr(l, length(name) + 1);
+    return null;
+}
+
+function pk_qp(name) { let v = pk_qraw(name); return v == null ? '' : pk_pctd(v); }
+
+function pk_qpa(names) { for (let n in names) { let v = pk_qp(n); if (v != '') return v; } return ''; }
+
+function pk_qp_json(name) {
+    let v = pk_qraw(name);
+    if (v == null) return '';
+    for (let p in [ ['%2F', '/'], ['%3A', ':'], ['%2C', ','], ['%20', ' '], ['%3D', '='],
+                    ['%26', '&'], ['%7B', '{'], ['%7D', '}'], ['%22', '"'], ['%5B', '['],
+                    ['%5D', ']'] ])
+        v = replace(v, p[0], p[1]);
+    return pk_nl(v);
+}
+
+function parse_key(URL, prev_sni, prev_wshost) {
+	PK_OUT = [];
+	PK_R = { msgs: [], fatal: null, scheme: '', label: '' };
+	PK_QUERY = '';
+	PK_PREV_SNI = prev_sni ?? '';
+	PK_PREV_WSHOST = prev_wshost ?? '';
+	try {
+		// Как `printf %b` над «%» -> «\x»: «%» без цифры остаётся «\x», NUL пропадает.
+		// base64 и base64url без «=» (SIP002), как `base64 -d` после добивки.
+		// grep -Eq: совпала хоть одна строка.
+
+		PK_N = {
+		    UUID: '', PASS: '', USER: '', METHOD: '', AID: '0',
+		    TYPE: 'tcp', SEC: 'none', PATH: '/', FP: 'chrome',
+		    PBK: '', SID: '', FLOW: '', MODE: '', ALPN: '',
+		    HDR: '', SEED: '', SVC: '', AUTH: '', SPX: '', PQV: '',
+		    ENC: '', QSEC: '', QKEY: '', EXTRA: '', INSEC: '',
+		    OBFS: '', OBFSPW: '', PIN: '', VCN: '',
+		    WGKEY: '', WGPUB: '', WGPSK: '', WGADDR: '', WGMTU: '', WGRES: '', WGKA: ''
+		};
+		// sni и host ss не задаёт: в sh остаются прежние, их и проверяем.
+		// Строка JSON: пароль и логин уходят в конфиг строкой JSON, кавычка и
+		// обратная косая в них законны и экранируются (J_*), а не запрещаются.
+
+		// Поля, уходящие в конфиг строками. Пароли и логин экранирует jstr --
+		// кавычка в них не отказ; управляющий знак -- отказ везде.
+
+		// extra подставляется в конфиг объектом, мимо node_json_ok: ровно один
+		// объект и ничего вокруг. `{} } }, "settings": {…}` закрыл бы
+		// xhttpSettings и streamSettings и дописал свой settings (Xray берёт
+		// последний из повторных ключей). Вид скобок не различаем -- ядро отвергнет.
+
+		let scheme = pk_before(URL, '://');
+		pk_put('N_SCHEME', scheme);
+		PK_R.scheme = scheme;
+		if (!(scheme in [ 'vless', 'trojan', 'socks', 'vmess', 'ss', 'hysteria2', 'hy2', 'wireguard', 'wg' ])) {
+		    // В Xray-core нет исходящего tuic, а hysteria -- только вторая версия
+		    // (сверено по исходникам 26.9.30).
+		    if (scheme == 'hysteria' || scheme == 'tuic')
+		        pk_dief("%s в Xray-core нет; из похожего есть hysteria2", scheme);
+		    pk_dief("неизвестный вид ссылки: %s", scheme);
+		}
+		let rest = pk_after(URL, '://');
+		// Метка после решётки -- имя, обычно с флагом; не секрет.
+		// Без управляющих знаков: метка попадает в вывод терминала.
+		PK_R.label = index(URL, '#') >= 0 ? replace(pk_pctd(pk_after(URL, '#')), /[\x01-\x1f\x7f]/g, '') : '';
+		pk_put('N_LABEL', PK_R.label);
+		rest = pk_before(rest, '#');
+
+		// vmess://<base64 от JSON>: add, port, id, aid, net, type, host, path, tls,
+		// sni, scy, alpn, fp.
+		if (scheme == 'vmess') {
+		    let j = pk_b64d(rest);
+		    if (j == '') { pk_flush(); pk_die("vmess-ссылка не раскодировалась"); }
+		    // Битый JSON бросает исключение: ucode выходил с трассой вместо отказа.
+		    let o = null;
+		    try { o = json(j); } catch (e) { o = null; }
+		    if (type(o) != 'object') { pk_flush(); pk_die("vmess-ссылка не раскодировалась"); }
+		    PK_N.HOST = pk_jf(o, 'add'); PK_N.PORT = pk_jf(o, 'port'); PK_N.UUID = pk_jf(o, 'id');
+		    if (index(PK_N.HOST, ':') >= 0) { pk_flush(); pk_dief("адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя", PK_N.HOST); }
+		    // aid уходит в конфиг без кавычек -- только число.
+		    PK_N.AID = pk_jf(o, 'aid') || '0';
+		    if (!match(PK_N.AID, /^[0-9]+$/)) { pk_flush(); pk_dief("aid у vmess — не число: %s", PK_N.AID); }
+		    PK_N.TYPE = pk_jf(o, 'net') || 'tcp';
+		    PK_N.PATH = pk_jf(o, 'path') || '/';
+		    PK_N.WSHOST = pk_jf(o, 'host');
+		    // type=none клиенты пишут почти всегда; свежее ядро отвергает его как
+		    // заголовок mkcp, поэтому «нет заголовка» -- пусто.
+		    PK_N.HDR = pk_jf(o, 'type'); if (PK_N.HDR == 'none') PK_N.HDR = '';
+		    if (pk_jf(o, 'tls') == 'tls') PK_N.SEC = 'tls';
+		    PK_N.SNI = pk_jf(o, 'sni') || PK_N.WSHOST || PK_N.HOST;
+		    if (PK_N.WSHOST == '') PK_N.WSHOST = PK_N.HOST;
+		    PK_N.METHOD = pk_jf(o, 'scy');
+		    if (!(PK_N.METHOD in [ '', 'auto', 'aes-128-gcm', 'chacha20-poly1305', 'none', 'zero' ])) {
+		        pk_flush();
+		        pk_dief("scy=%s у vmess Xray-core не знает: есть auto, aes-128-gcm, chacha20-poly1305, none, zero", PK_N.METHOD);
+		    }
+		    PK_N.ALPN = pk_jf(o, 'alpn');
+		    if (pk_jf(o, 'fp') != '') PK_N.FP = pk_jf(o, 'fp');
+		    // У vmess имя сервиса gRPC лежит в path (v2rayN и др.); сырой path, не
+		    // PK_N.PATH, где пустой заменён на «/».
+		    if (PK_N.TYPE == 'grpc') PK_N.SVC = pk_jf(o, 'path');
+		    PK_N.PROTO = 'vmess';
+		    // Прочие поля JSON (allowInsecure и т. п.) не переносятся -- называем.
+		    for (let k in keys(o))
+		        if (!(k in [ 'v', 'ps', 'add', 'port', 'id', 'aid', 'scy', 'net', 'type', 'host',
+		                     'path', 'tls', 'sni', 'alpn', 'fp' ]))
+		            pk_warnf("параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он", k);
+		    pk_node_json_ok();
+		    pk_flush(); pk_stop();
+		}
+
+		// ss://<base64 метод:пароль>@host:port и ss://метод:пароль@host:port; в
+		// старой форме в base64 вся ссылка.
+		if (scheme == 'ss') {
+		    if (index(rest, '@') < 0) {
+		        rest = pk_b64d(pk_before(rest, '?'));
+		        if (index(rest, '@') < 0) { pk_flush(); pk_die("ss-ссылка не разобралась"); }
+		    }
+		    // Делим по последней «@»: в открытом пароле она законна.
+		    let ui = substr(rest, 0, rindex(rest, '@'));
+		    let hp = pk_lastafter(rest, '@');
+		    // Плагин (obfs-local, v2ray-plugin) Xray-core не запускает; прочие
+		    // параметры не переносятся -- называем.
+		    if (index(hp, 'plugin=') >= 0)
+		        pk_warn("plugin у shadowsocks не переносится: Xray-core плагины не запускает, сервер с плагином не ответит");
+		    if (index(hp, '?') >= 0)
+		        for (let l in split(pk_after(hp, '?'), '&')) {
+		            let pn = pk_before(l, '=');
+		            if (pn != '' && pn != 'plugin')
+		                pk_warnf("параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он", pn);
+		        }
+		    hp = pk_before(pk_before(hp, '?'), '/');
+		    let plain = index(ui, ':') >= 0 ? pk_pctd(ui) : pk_b64d(ui);
+		    if (substr(hp, 0, 1) == '[') { pk_flush(); pk_dief("адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя", hp); }
+		    PK_N.METHOD = pk_before(plain, ':');
+		    PK_N.PASS = pk_after(plain, ':');
+		    PK_N.HOST = pk_before(hp, ':');
+		    PK_N.PORT = pk_lastafter(hp, ':');
+		    // Без порта взялся бы сам адрес: "port": example.com.
+		    if (PK_N.PORT == PK_N.HOST) PK_N.PORT = '443';
+		    PK_N.PROTO = 'shadowsocks';
+		    pk_node_json_ok();
+		    pk_flush(); pk_stop();
+		}
+
+		// Остальные схемы -- всё в адресе открытым текстом. Без «@» части до неё
+		// нет: wg-ссылки Hiddify и hysteria2 без пароля несут всё в параметрах.
+		let ui = index(rest, '@') >= 0 ? pk_before(rest, '@') : '';
+		let rest2 = pk_after(rest, '@');
+		// hysteria2 пишет «host:port/?sni=…» -- косая перед вопросом не порт.
+		let hostport = pk_before(pk_before(rest2, '?'), '/');
+		// IPv6 не поддержан: [2001:db8::1]:443 резался бы по первому двоеточию.
+		if (substr(hostport, 0, 1) == '[') { pk_flush(); pk_dief("адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя", hostport); }
+		PK_N.HOST = pk_before(hostport, ':');
+		PK_N.PORT = pk_lastafter(hostport, ':');
+		if (PK_N.PORT == PK_N.HOST) PK_N.PORT = '443';
+		PK_QUERY = index(rest2, '?') >= 0 ? pk_after(rest2, '?') : '';
+
+		if (scheme == 'vless') { PK_N.UUID = ui; PK_N.PROTO = 'vless'; }
+		else if (scheme == 'trojan') { PK_N.PASS = pk_pctd(ui); PK_N.PROTO = 'trojan'; }
+		else if (scheme == 'hysteria2' || scheme == 'hy2') { PK_N.PASS = pk_pctd(ui); PK_N.PROTO = 'hysteria'; }
+		else if (scheme == 'wireguard' || scheme == 'wg') { PK_N.WGKEY = pk_pctd(ui); PK_N.PROTO = 'wireguard'; }
+		else if (scheme == 'socks') {
+		    let su = pk_pctd(ui);
+		    // Часть клиентов кладёт «логин:пароль» в base64 (socks://dXNlcjpwYXNz@…).
+		    if (su != '' && index(su, ':') < 0) {
+		        let sd = pk_b64d(su);
+		        if (index(sd, ':') >= 0) su = sd;
+		    }
+		    PK_N.USER = pk_before(su, ':'); PK_N.PASS = pk_after(su, ':');
+		    if (PK_N.USER == su) { PK_N.USER = ''; PK_N.PASS = ''; }
+		    PK_N.PROTO = 'socks';
+		}
+
+		// Раскодируем целиком: кавычку, косую и управляющие знаки отсекает
+		// node_json_ok. Частичное раскодирование превращало путь v2rayN
+		// `%2F%3Fed%3D2048` в `/%3Fed=2048`: Xray не находил ed, ответ 404.
+		// Первый непустой из нескольких имён (v2rayN -- publickey, Hiddify -- peer_pk).
+		// extra -- объект JSON: раскодируются только знаки, законные в нём; объект
+		// проверяет json_obj_ok.
+
+		let v = pk_qp('type'); if (v != '') PK_N.TYPE = v;
+		// trojan без TLS не бывает, а клиенты security часто опускают.
+		if (PK_N.PROTO == 'trojan') PK_N.SEC = 'tls';
+		v = pk_qp('security'); if (v != '') PK_N.SEC = v;
+		PK_N.SNI = pk_qp('sni') || PK_N.HOST;
+		v = pk_qp('fp'); if (v != '') PK_N.FP = v;
+		v = pk_qp('path'); if (v != '') PK_N.PATH = v;
+		PK_N.WSHOST = pk_qp('host') || PK_N.HOST;
+		PK_N.PBK = pk_qp('pbk'); PK_N.SID = pk_qp('sid'); PK_N.FLOW = pk_qp('flow');
+		// flow у trojan в конфиг не пишется, а mux при нём отключался.
+		if (PK_N.PROTO == 'trojan' && PK_N.FLOW != '') {
+		    pk_warnf("flow=%s у trojan Xray-core не поддерживает — пропущен", PK_N.FLOW); PK_N.FLOW = '';
+		}
+		PK_N.MODE = pk_qp('mode'); PK_N.ALPN = pk_qp('alpn'); PK_N.HDR = pk_qp('headerType');
+		PK_N.SEED = pk_qp('seed'); PK_N.SVC = pk_qp('serviceName'); PK_N.AUTH = pk_qp('authority');
+		PK_N.SPX = pk_qp('spx'); PK_N.PQV = pk_qp('pqv'); PK_N.ENC = pk_qp('encryption');
+		PK_N.QSEC = pk_qp('quicSecurity'); PK_N.QKEY = pk_qp('key'); PK_N.EXTRA = pk_qp_json('extra');
+		PK_N.INSEC = pk_qp('allowInsecure') || pk_qp('insecure');
+		// pcs -- имя у v2rayN, pinSHA256 -- у hysteria2; значение одно и то же.
+		PK_N.PIN = pk_qp('pcs') || pk_qp('pinSHA256');
+		PK_N.VCN = pk_qp('vcn');
+
+		if (PK_N.PROTO == 'hysteria') {
+		    // Транспорт hysteria всегда под TLS («tls config is nil» без него); у
+		    // QUIC нет uTLS-отпечатка.
+		    PK_N.TYPE = 'hysteria'; PK_N.SEC = 'tls'; PK_N.FP = '';
+		    if (PK_N.ALPN == '') PK_N.ALPN = 'h3';
+		    // Диапазон портов Xray-core через hysteriaSettings не берёт.
+		    if (match(PK_N.PORT, /[,-]/)) {
+		        let p1 = match(PK_N.PORT, /^[^,-]*/)[0];
+		        pk_warnf("диапазон портов в ключе не переносится: соединение идёт на порт %s", p1);
+		        PK_N.PORT = p1;
+		    }
+		    v = pk_qp('obfs');
+		    if (v == 'salamander') {
+		        PK_N.OBFS = 'salamander'; PK_N.OBFSPW = pk_qp('obfs-password');
+		        if (PK_N.OBFSPW == '') { pk_flush(); pk_die("obfs=salamander без obfs-password: пароль обфускации обязателен"); }
+		    }
+		    else if (v != '' && v != 'none') {
+		        pk_flush(); pk_dief("obfs=%s у hysteria2 не поддержан: в Xray-core есть только salamander", v);
+		    }
+		    if (pk_qp('mport') != '')
+		        pk_warn("mport (смена портов) не переносится: соединение идёт на основной порт из ключа");
+		}
+
+		if (PK_N.PROTO == 'wireguard') {
+		    PK_N.TYPE = 'wireguard'; PK_N.SEC = 'none';
+		    if (PK_N.WGKEY == '') PK_N.WGKEY = pk_qpa([ 'privatekey', 'secretkey', 'pk' ]);
+		    PK_N.WGPUB = pk_qpa([ 'publickey', 'peer_pk' ]);
+		    PK_N.WGPSK = pk_qpa([ 'presharedkey', 'pre_shared_key', 'psk' ]);
+		    PK_N.WGADDR = pk_nl(replace(pk_qpa([ 'address', 'local_address' ]), ' ', ''));
+		    PK_N.WGMTU = pk_qp('mtu'); PK_N.WGRES = pk_nl(replace(pk_qp('reserved'), ' ', '')); PK_N.WGKA = pk_qp('keepalive');
+		    // Ключи -- base64 на 32 байта либо hex (ParseWireGuardKey); образец
+		    // строгий: значение уходит в конфиг.
+		    let key = /^([A-Za-z0-9+\/]{43}=|[0-9a-fA-F]{64})$/;
+		    if (!pk_grepq(key, PK_N.WGKEY)) { pk_flush(); pk_die("в ключе wireguard нет закрытого ключа либо он не той формы (base64 на 44 знака либо 64 шестнадцатеричных)"); }
+		    if (!pk_grepq(key, PK_N.WGPUB)) { pk_flush(); pk_die("в ключе wireguard нет публичного ключа сервера (publickey) либо он не той формы"); }
+		    if (PK_N.WGPSK != '' && !pk_grepq(key, PK_N.WGPSK)) { pk_flush(); pk_die("presharedkey в ключе wireguard не той формы"); }
+		    // Без своего адреса в туннеле ядро ставит 10.0.0.1, сервер такого
+		    // клиента не узнаёт, и соединение молча не идёт.
+		    if (PK_N.WGADDR == '') { pk_flush(); pk_die("в ключе wireguard нет address -- адреса этого клиента в туннеле"); }
+		    if (!pk_grepq(/^[0-9a-fA-F.:]+(\/[0-9]{1,3})?(,[0-9a-fA-F.:]+(\/[0-9]{1,3})?)*$/, PK_N.WGADDR)) {
+		        pk_flush(); pk_dief("address в ключе wireguard не похож на список адресов: %s", PK_N.WGADDR);
+		    }
+		    if (PK_N.WGMTU != '' && !pk_grepq(/^[0-9]{3,4}$/, PK_N.WGMTU)) { pk_flush(); pk_dief("mtu в ключе wireguard -- не число: %s", PK_N.WGMTU); }
+		    if (PK_N.WGRES != '' && !pk_grepq(/^[0-9]{1,3},[0-9]{1,3},[0-9]{1,3}$/, PK_N.WGRES)) {
+		        pk_flush(); pk_dief("reserved в ключе wireguard -- не три числа через запятую: %s", PK_N.WGRES);
+		    }
+		    if (PK_N.WGKA != '' && !pk_grepq(/^[0-9]{1,5}$/, PK_N.WGKA)) { pk_flush(); pk_dief("keepalive в ключе wireguard -- не число: %s", PK_N.WGKA); }
+		}
+		if (PK_N.PIN != '' && !pk_grepq(/^[0-9a-fA-F:,]+$/, PK_N.PIN)) {
+		    pk_flush(); pk_dief("отпечаток сертификата (pcs, pinSHA256) -- не шестнадцатеричный: %s", PK_N.PIN);
+		}
+		if (PK_N.VCN != '' && !pk_grepq(/^[A-Za-z0-9.,*-]+$/, PK_N.VCN)) {
+		    pk_flush(); pk_dief("имя для проверки сертификата (vcn) -- не имя хоста: %s", PK_N.VCN);
+		}
+		pk_node_json_ok();
+		if (PK_N.EXTRA != '' && !pk_json_obj_ok(PK_N.EXTRA)) {
+		    pk_flush();
+		    pk_die("параметр extra в ссылке -- не один объект JSON: он подставляется в конфиг как есть, и такая ссылка переписывает соседние поля, включая адрес сервера и защиту");
+		}
+
+		// Имена параметров В ССЫЛКЕ -- соглашение клиентов; незнакомые называем,
+		// чтобы человек узнал, что из ссылки не перенесено.
+		let known = [ 'type', 'security', 'sni', 'fp', 'alpn', 'path', 'host', 'headerType', 'seed',
+		              'serviceName', 'mode', 'authority', 'pbk', 'sid', 'spx', 'pqv', 'flow',
+		              'encryption', 'quicSecurity', 'key', 'extra', 'allowInsecure', 'insecure',
+		              'pinSHA256', 'pcs', 'vcn' ];
+		if (PK_N.PROTO == 'hysteria') push(known, 'obfs', 'obfs-password', 'mport');
+		if (PK_N.PROTO == 'wireguard')
+		    push(known, 'publickey', 'privatekey', 'secretkey', 'pk', 'peer_pk', 'presharedkey',
+		         'pre_shared_key', 'psk', 'address', 'local_address', 'mtu', 'reserved', 'keepalive');
+		for (let l in split(PK_QUERY, '&'))
+		    for (let pn in split(pk_before(l, '='), /[ \t]+/))
+		        if (pn != '' && !(pn in known))
+		            pk_warnf("параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он", pn);
+
+		// Шифрование VLESS: форма -- образцом, версию ядра проверяет parse_node.
+		if (PK_N.ENC != '' && PK_N.ENC != 'none') {
+		    if (PK_N.PROTO != 'vless') { pk_flush(); pk_dief("encryption=%s бывает только у vless", PK_N.ENC); }
+		    if (!pk_grepq(/^mlkem768x25519plus\.[A-Za-z0-9._+\/=-]+$/, PK_N.ENC)) {
+		        pk_flush(); pk_dief("encryption=%s не поддержан: Xray-core знает только mlkem768x25519plus", PK_N.ENC);
+		    }
+		}
+		pk_flush(); pk_stop();
+	} catch (e) {
+		if (e.message !== PARSE_STOP) raise(e.message);
+	}
+	return { out: PK_OUT, msgs: PK_R.msgs, fatal: PK_R.fatal, N: PK_N, scheme: PK_R.scheme, label: PK_R.label };
+}
+
+function cmd_parse() {
+	let r = parse_key(getenv('BW_URL') ?? '', getenv('BW_SNI') ?? '', getenv('BW_WSHOST') ?? '');
+	print(join('\n', r.out), '\n');
+}
+
+// Аутбаунд Xray из разобранного ключа: транспорт, защита (tls, reality), flow,
+// mux, протокол -- перенос build_stream, build_outbound, proxy_block и
+// build_proxies из shell. JSON собирается объектами, не склейкой строк.
+// Пока gen на shell, наружу идут команды sh (как у bw_uc parse): сообщения по
+// порядку, N_*, готовый блок JSON. Тексты сообщений -- прежние ключи перевода.
+// Функции -- верхнего уровня, состояние -- OB_* (см. uc/keys.uc о ucode 22.03).
+
+const OB_STOP = '__byway_outbound_stop__';
+// OB_QUIET_PARSE: сообщения разбора не выводить (направления: прежде
+// parse_node шёл в >/dev/null, а сообщения транспорта -- на экран).
+let OB_OUT = [], OB_QUIET_PARSE = false, OB_FATAL = null;
+
+// Сообщения -- командами sh; в тихом прогоне (проба ключа автовыбора)
+// копятся, отказ запоминается текстом для «ключ пропущен».
+function ob_cmd(name, fmt, args, err) {
+	push(OB_OUT, name + ' ' + join(' ', map([ fmt, ...args ], pk_q)) + (err ? ' >&2' : ''));
+}
+function ob_warn(m)          { ob_cmd('warn', m, []); }
+function ob_warnf(m, ...a)   { ob_cmd('warnf', m, a); }
+function ob_die(m)           { OB_FATAL = _t(m); ob_cmd('die', m, []); raise(OB_STOP); }
+function ob_dief(m, ...a)    { OB_FATAL = _pf(_t(m), a); ob_cmd('dief', m, a); raise(OB_STOP); }
+function ob_put(n, v)        { push(OB_OUT, n + '=' + pk_q(v)); }
+
+// val_or: значение настройки по образцу, иначе умолчание с жалобой в stderr.
+function ob_val_or(name, val, re, def, where) {
+	if (val === '') return def;
+	if (match(val, /[\x01-\x1f\x7f]/)) {
+		ob_cmd('warnf', 'настройка %s содержит управляющие знаки и не годится для %s, взято %s', [ name, where, def ], true);
+		return def;
+	}
+	if (match(val, re)) return val;
+	ob_cmd('warnf', 'настройка %s = «%s» не годится для %s, взято %s', [ name, val, where, def ], true);
+	return def;
+}
+
+function ob_xver() { let v = getenv('BW_XRAYVER'); return v ? int(v) : 999999; }
+
+// Версия ядра для сообщения: первая строка `xray version`, поля как у cut.
+function ob_xrayv(fields) {
+	let r = run([ getenv('BW_XRAY') ?? 'xray', 'version' ]);
+	let f = split(split(r.out, '\n')[0], ' ');
+	return fields == 2 ? (f[1] ?? '') : join(' ', slice(f, 0, 2));
+}
+
+function ob_private(h) {
+	return match(h, /^(10\.|192\.168\.|127\.|169\.254\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[01]\.)/) != null;
+}
+
+// streamSettings: транспорт по N.TYPE.
+function ob_transport(N) {
+	let xv = ob_xver();
+	let t = N.TYPE;
+	if (t == 'ws') {
+		// host отдельным полем с 1.8.24; у 1.8.3 (22.03) -- в headers.
+		if (xv < 10824)
+			return { network: 'ws', wsSettings: { path: N.PATH, headers: { Host: N.WSHOST } } };
+		return { network: 'ws', wsSettings: { path: N.PATH, host: N.WSHOST } };
+	}
+	if (t == 'tcp' || t == 'raw') {
+		if (N.HDR == 'http')
+			return { network: 'tcp', tcpSettings: { header: { type: 'http',
+				request: { path: [ N.PATH ], headers: { Host: [ N.WSHOST ] } } } } };
+		return { network: 'tcp' };
+	}
+	if (t == 'kcp') {
+		ob_warn('mkcp идёт поверх UDP, а в РФ UDP душат первым делом');
+		// header и seed: до 26.1.23 работают, с 26.1.31 удалены (finalmask).
+		let k = {};
+		if (N.HDR != '') k.header = { type: N.HDR };
+		if (N.SEED != '') k.seed = N.SEED;
+		if (length(k) && xv >= 260131) {
+			ob_warn('header и seed у mkcp удалены в Xray-core с 26.1.31 и в конфиг не пишутся: сервер с маскировкой mKCP не ответит; замена на сервере и в ключе — finalmask (mkcp-original, mkcp-aes128gcm)');
+			k = {};
+		}
+		return length(k) ? { network: 'kcp', kcpSettings: k } : { network: 'kcp' };
+	}
+	if (t == 'grpc') {
+		let g = { serviceName: N.SVC };
+		if (N.MODE == 'multi') g.multiMode = true;
+		if (N.AUTH != '') g.authority = N.AUTH;
+		return { network: 'grpc', grpcSettings: g };
+	}
+	if (t == 'h2' || t == 'http') {
+		ob_warn('HTTP/2 из Xray-core удалён, замена: xhttp в режиме stream-one');
+		return { network: t, httpSettings: { path: N.PATH, host: [ N.WSHOST ] } };
+	}
+	if (t == 'quic') {
+		ob_warn('QUIC из Xray-core удалён, замена: xhttp stream-one поверх H3; в РФ QUIC блокируют первым делом');
+		return { network: 'quic', quicSettings: { security: N.QSEC || 'none', key: N.QKEY,
+			header: { type: N.HDR || 'none' } } };
+	}
+	if (t == 'httpupgrade') {
+		if (xv < 10824)
+			ob_warn('движок старый: транспорт httpupgrade он может не знать, и тогда конфиг соберётся, а туннель не встанет');
+		return { network: 'httpupgrade', httpupgradeSettings: { path: N.PATH, host: N.WSHOST } };
+	}
+	if (t == 'xhttp') {
+		if (xv < 10824)
+			ob_dief('движку %s транспорт xhttp неизвестен (нужен Xray-core 1.8.24 или новее) — обновить: byway engine tested, либо взять ключ на ws', ob_xrayv(12));
+		let x = { path: N.PATH, host: N.WSHOST };
+		if (N.MODE != '') x.mode = N.MODE;
+		// extra -- один объект (json_obj_ok в разборе); не JSON вовсе --
+		// отказ здесь, прежде отвергал движок.
+		if (N.EXTRA != '') {
+			let e = null;
+			try { e = json(N.EXTRA); } catch (err) { e = null; }
+			if (type(e) != 'object')
+				ob_die('параметр extra в ссылке -- не один объект JSON: он подставляется в конфиг как есть, и такая ссылка переписывает соседние поля, включая адрес сервера и защиту');
+			x.extra = e;
+		}
+		return { network: 'xhttp', xhttpSettings: x };
+	}
+	if (t == 'hysteria') {
+		if (xv < 260327)
+			ob_dief('hysteria2 нужен Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
+		ob_warn('hysteria2 идёт поверх QUIC (UDP), а в РФ его ограничивают первым делом');
+		let s = { network: 'hysteria', hysteriaSettings: { version: 2, auth: N.PASS } };
+		if (N.OBFS != '') {
+			if (xv < 260711)
+				ob_dief('obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
+			s.finalmask = { udp: [ { type: 'salamander', settings: { password: N.OBFSPW } } ] };
+		}
+		return s;
+	}
+	// У wireguard транспорта нет; в streamSettings остаётся метка.
+	if (t == 'wireguard') return {};
+	ob_dief('транспорт %s не поддержан — есть ws, tcp/raw, kcp, grpc, httpupgrade, xhttp, hysteria', t);
+}
+
+// streamSettings: защита по N.SEC, поля -- в st.
+function ob_security(N, st, sni) {
+	let xv = ob_xver();
+	if (N.SEC == 'tls') {
+		let s = { serverName: sni };
+		if (N.FP != '') s.fingerprint = N.FP;
+		if (N.ALPN != '') s.alpn = split(N.ALPN, ',');
+		// allowInsecure ядро с 26.3.27 отвергает; замена -- отпечаток или имя.
+		if (N.INSEC == '1' || N.INSEC == 'true') {
+			if (xv < 260327) {
+				if (u('allow_insecure') != '1' && N.PIN + N.VCN == '')
+					ob_die('в ключе отключена проверка сертификата (allowInsecure): соединение может подменить любой на пути. Для своего сервера с самоподписанным сертификатом: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload');
+				ob_warn('allowInsecure=1: проверка сертификата сервера отключена, соединение можно подменить');
+				s.allowInsecure = true;
+			} else if (N.PIN == '' && N.VCN == '') {
+				ob_die('в ключе отключена проверка сертификата (allowInsecure или insecure), а Xray-core с 26.3.27 так не умеет: нужен отпечаток сертификата сервера (pcs= или pinSHA256=) либо настоящий сертификат на сервере');
+			}
+		}
+		if (N.PIN != '' || N.VCN != '') {
+			if (xv < 260327)
+				ob_dief('проверка сертификата по отпечатку (pcs, vcn) нужна Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
+			if (N.PIN != '') s.pinnedPeerCertSha256 = N.PIN;
+			if (N.VCN != '') s.verifyPeerCertByName = N.VCN;
+		}
+		st.security = 'tls';
+		st.tlsSettings = s;
+	} else if (N.SEC == 'reality') {
+		let r = { serverName: sni, fingerprint: N.FP, publicKey: N.PBK, shortId: N.SID };
+		if (N.SPX != '') r.spiderX = N.SPX;
+		if (N.PQV != '') r.mldsa65Verify = N.PQV;
+		st.security = 'reality';
+		st.realitySettings = r;
+	} else if (N.SEC == 'none') {
+		// vless и trojan без шифрования к публичному адресу ядро с 26.7.11
+		// отвергает само; на старом -- то же решение здесь.
+		if ((N.PROTO == 'vless' || N.PROTO == 'trojan') && xv < 260711 &&
+		    u('allow_insecure') != '1' && !ob_private(N.HOST))
+			ob_die('ключ vless или trojan без TLS к публичному адресу: ключ и трафик видны любому на пути. Нужен ключ с security=tls или reality; разрешить всё же: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload');
+		st.security = 'none';
+	} else {
+		ob_dief('security=%s не поддержан', N.SEC);
+	}
+}
+
+// Протокол и settings.
+function ob_outbound(N) {
+	let p = N.PROTO, port = int(N.PORT);
+	if (p == 'vless') {
+		let usr = { id: N.UUID, encryption: N.ENC || 'none' };
+		if (N.FLOW != '') usr.flow = N.FLOW;
+		return { protocol: 'vless', settings: { vnext: [ { address: N.HOST, port: port, users: [ usr ] } ] } };
+	}
+	if (p == 'hysteria')
+		return { protocol: 'hysteria', settings: { version: 2, address: N.HOST, port: port } };
+	if (p == 'wireguard') {
+		let peer = { publicKey: N.WGPUB, endpoint: N.HOST + ':' + N.PORT };
+		if (N.WGPSK != '') peer.preSharedKey = N.WGPSK;
+		if (N.WGKA != '') peer.keepAlive = int(N.WGKA);
+		// noKernelTun: wireguard внутри процесса; с 24.11.30 Xray иначе
+		// поднимает wg0 через /dev/net/tun (без kmod-tun -- отказ).
+		let s = { noKernelTun: true, secretKey: N.WGKEY, address: split(N.WGADDR, ','), peers: [ peer ] };
+		if (N.WGMTU != '') s.mtu = int(N.WGMTU);
+		// Циклом, не map(…, int): map отдаёт вторым доводом номер, а у int
+		// второй довод -- основание счисления.
+		if (N.WGRES != '') { s.reserved = []; for (let x in split(N.WGRES, ',')) push(s.reserved, int(x)); }
+		return { protocol: 'wireguard', settings: s };
+	}
+	if (p == 'vmess')
+		return { protocol: 'vmess', settings: { vnext: [ { address: N.HOST, port: port,
+			users: [ { id: N.UUID, alterId: int(N.AID || '0'), security: N.METHOD || 'auto' } ] } ] } };
+	if (p == 'trojan')
+		return { protocol: 'trojan', settings: { servers: [ { address: N.HOST, port: port, password: N.PASS } ] } };
+	if (p == 'shadowsocks')
+		return { protocol: 'shadowsocks', settings: { servers: [ { address: N.HOST, port: port,
+			method: N.METHOD, password: N.PASS } ] } };
+	if (p == 'socks') {
+		let srv = { address: N.HOST, port: port };
+		if (N.USER != '') srv.users = [ { user: N.USER, pass: N.PASS } ];
+		return { protocol: 'socks', settings: { servers: [ srv ] } };
+	}
+	ob_dief('протокол %s не собран', p);
+}
+
+// Свой конфиг (conn_mode outbound): один объект JSON, тег -- наш.
+function ob_raw(tag) {
+	let o = null;
+	try { o = json(u('outbound_json')); } catch (e) { o = null; }
+	if (type(o) != 'object') return null;
+	delete o.tag;
+	o.tag = tag;
+	return o;
+}
+
+// Адреса серверов своего конфига: address у settings, vnext, servers,
+// endpoint у peers; без [IPv6] и порта, только имя или адрес.
+function ob_raw_host(seen, h) {
+	if (type(h) != 'string' || substr(h, 0, 1) == '[') return;
+	h = replace(h, /:[0-9]+$/, '');
+	if (match(h, /^[A-Za-z0-9.-]+$/) && !seen[h]) { seen[h] = 1; push(seen.__list, h); }
+}
+function ob_raw_hosts(o) {
+	let seen = { __list: [] };
+	let s = o.settings;
+	if (type(s) != 'object') return [];
+	ob_raw_host(seen, s.address);
+	for (let k in [ 'vnext', 'servers' ])
+		if (type(s[k]) == 'array') for (let x in s[k]) if (type(x) == 'object') ob_raw_host(seen, x.address);
+	if (type(s.peers) == 'array') for (let x in s.peers) if (type(x) == 'object') ob_raw_host(seen, x.endpoint);
+	return seen.__list;
+}
+
+// Разбор ключа (как parse_node) и блок аутбаунда (как build_stream +
+// proxy_block). url пуст -- ключ или свой конфиг из настроек. Итог --
+// { N, block, host, raw }; отказ -- исключение OB_STOP.
+function ob_key(url, tag, prev_sni, prev_wshost) {
+	if (url == '' && u('conn_mode') == 'outbound') {
+		let raw = u('outbound_json');
+		if (raw == '') ob_die('выбран свой конфиг, но он пуст');
+		let o = ob_raw(tag);
+		if (o == null) ob_die('свой конфиг — не один JSON-объект аутбаунда: проверить скобки и кавычки');
+		let lbl = u('conn_label');
+		let N = { PROTO: 'raw', RAW: raw, LABEL: lbl != '' ? lbl : _t('свой конфиг'),
+		          TYPE: '-', SEC: '-', HOST: '-', PORT: '0' };
+		return { N: N, block: o, raw: true };
+	}
+	if (url == '') url = u('node_url');
+	if (url == '') ob_die('ключ не задан');
+	let r = parse_key(url, prev_sni, prev_wshost);
+	if (!OB_QUIET_PARSE)
+		for (let m in r.msgs) ob_cmd(length(m) > 1 ? 'warnf' : 'warn', m[0], slice(m, 1));
+	if (r.fatal) {
+		if (length(r.fatal) > 1) ob_dief(...r.fatal); else ob_die(r.fatal[0]);
+	}
+	let N = r.N;
+	// Схему и имя разбор кладёт прямо в вывод для sh, мимо N.
+	N.SCHEME = r.scheme;
+	N.LABEL = r.label;
+	// В ss sni и host не задаются: остаются прежние, как в shell.
+	if (N.SNI == null) N.SNI = prev_sni;
+	if (N.WSHOST == null) N.WSHOST = prev_wshost;
+	if (N.ENC != '' && N.ENC != 'none' && ob_xver() < 250829)
+		ob_dief('шифрование VLESS (encryption=mlkem768x25519plus) появилось в Xray-core 25.8.29, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
+	if (!match(N.PORT, /^[0-9]+$/) || int(N.PORT) < 1 || int(N.PORT) > 65535)
+		ob_dief('порт в ссылке недопустим: %s', N.PORT);
+
+	let st = ob_transport(N);
+	ob_security(N, st, N.SNI);
+	if (N.FLOW != '' && N.TYPE != 'tcp' && N.TYPE != 'raw')
+		ob_warnf('flow=%s с транспортом %s не работает: Xray-core примет конфиг и сломается в бою', N.FLOW, N.TYPE);
+	let ob = ob_outbound(N);
+
+	// mux: в поставке 0; с flow, своим мультиплексированием и wireguard -- нет.
+	let mux = null;
+	let mc = ob_val_or('mux_concurrency', u('mux_concurrency'), /^[0-9]{1,3}$/, '0', _t('конфига движка'));
+	if (mc != '' && mc != '0') {
+		if (N.FLOW != '')
+			ob_warnf('mux отключён: он не сочетается с flow=%s (Vision делит поток сам)', N.FLOW);
+		else if (N.TYPE == 'xhttp' || N.TYPE == 'grpc' || N.TYPE == 'hysteria')
+			ob_warnf('mux отключён: у транспорта %s своё мультиплексирование, второй слой поверх только вредит', N.TYPE);
+		else if (N.PROTO == 'wireguard')
+			ob_warn('mux к wireguard не применяется: у него нет потока, который можно делить');
+		else
+			mux = { enabled: true, concurrency: int(mc) };
+	}
+	// Метка на исходящих при «VPN для программ на роутере» (число -- из
+	// shell, self_mark_dec, до переноса перехвата).
+	let sm = getenv('BW_SELFMARK');
+	if (u('router_via_vpn') == '1' && sm) st.sockopt = { mark: int(sm) };
+
+	let b = { tag: tag, protocol: ob.protocol, settings: ob.settings };
+	if (mux) b.mux = mux;
+	b.streamSettings = st;
+	return { N: N, block: b, raw: false };
+}
+
+// N_* для shell -- как после parse_node.
+function ob_put_n(N) {
+	for (let k in N) ob_put('N_' + k, N[k]);
+	for (let k in [ 'PASS', 'USER', 'OBFSPW' ]) ob_put('J_' + k, pk_jstr(N[k] ?? ''));
+}
+
+function ob_flush() { print(join('\n', OB_OUT), '\n'); }
+
+// bw_uc outbound ТЕГ: ключ из BW_URL (пусто -- из настроек), N_* и блок (PB).
+function cmd_outbound(tag, quiet) {
+	OB_OUT = [];
+	OB_QUIET_PARSE = quiet == 'quiet';
+	try {
+		let k = ob_key(getenv('BW_URL') ?? '', tag ?? 'proxy', getenv('BW_SNI') ?? '', getenv('BW_WSHOST') ?? '');
+		ob_put_n(k.N);
+		ob_put('PB', sprintf('%J', k.block));
+		ob_put('OB_HOSTS', k.raw ? join(' ', ob_raw_hosts(k.block)) : k.N.HOST);
+	} catch (e) {
+		if (e.message !== OB_STOP) raise(e.message);
+	}
+	ob_flush();
+}
+
+// bw_uc proxies: аутбаунды целиком (build_proxies). Обычные режимы -- один
+// с тегом proxy; urltest -- по одному на ключ (proxy-N) и балансировщик
+// leastPing. Негодный ключ автовыбора пропускается с причиной.
+function cmd_proxies() {
+	OB_OUT = [];
+	let mode = u('conn_mode');
+	let all = u('list_mode') == 'all';
+	let tgt = '"outboundTag": "proxy"';
+	ob_put('OBSERVATORY', '');
+	ob_put('BALANCERS', '');
+	try {
+		if (mode != 'urltest') {
+			let k = ob_key('', 'proxy', getenv('BW_SNI') ?? '', getenv('BW_WSHOST') ?? '');
+			ob_put_n(k.N);
+			ob_put('PROXIES', sprintf('%J', k.block));
+			ob_put('PROXY_TARGET', tgt);
+			ob_put('LAST_TARGET', all ? tgt : '"outboundTag": "direct"');
+			if (k.raw) {
+				let hs = ob_raw_hosts(k.block);
+				ob_put('VPN_HOSTS', join(' ', hs));
+				if (!length(hs))
+					ob_warn('свой конфиг: адрес сервера лежит внутри чужого JSON, byway его не знает и из перехвата не исключит — проверить, что адрес сервера не попал в списки, иначе туннель замкнётся сам на себя');
+				if (u('router_via_vpn') == '1' && index(k.N.RAW, '"mark"') < 0)
+					ob_warnf('свой конфиг: включено «VPN для программ на роутере», а метки в нём нет — если адрес сервера попадёт в списки, соединение движка к нему уйдёт в перехват по кругу; дописать в streamSettings поле sockopt.mark = %s', getenv('BW_SELFMARK') ?? '');
+			} else {
+				ob_put('VPN_HOSTS', k.N.HOST);
+			}
+		} else {
+			let keys = split(trim(u('node_urls')), /[ \t\n]+/);
+			if (keys[0] == '') ob_die('выбран автовыбор, но ни одного ключа не добавлено');
+			let skip = ' ' + (getenv('BW_SKIP') ?? '') + ' ';
+			let blocks = [], idx = '', hosts = '', n = 0, last = null;
+			let psni = getenv('BW_SNI') ?? '', pws = getenv('BW_WSHOST') ?? '';
+			for (let ki = 0; ki < length(keys); ki++) {
+				if (index(skip, ' ' + ki + ' ') >= 0) continue;
+				// Тихий прогон: сообщения ключа -- только если он годен.
+				let saved = OB_OUT;
+				OB_OUT = [];
+				OB_FATAL = null;
+				let k = null;
+				try {
+					k = ob_key(keys[ki], 'proxy-' + n, psni, pws);
+				} catch (e) {
+					if (e.message !== OB_STOP) raise(e.message);
+				}
+				let msgs = OB_OUT;
+				OB_OUT = saved;
+				if (k == null) {
+					ob_warnf('ключ пропущен: %s', OB_FATAL ?? '');
+					continue;
+				}
+				for (let m in msgs) push(OB_OUT, m);
+				psni = k.N.SNI; pws = k.N.WSHOST;
+				push(blocks, sprintf('%J', k.block));
+				idx += ' ' + ki;
+				hosts += ' ' + k.N.HOST;
+				last = k.N;
+				n++;
+			}
+			if (!n) ob_die('ни один ключ не разобрался');
+			ob_put_n(last);
+			let iv = ob_val_or('probe_interval', u('probe_interval'), /^[0-9]{1,4}[smh]$/, '3m', _t('конфига движка'));
+			ob_put('PROXIES', '    ' + join(',\n    ', blocks));
+			ob_put('PROXY_KEYIDX', idx);
+			ob_put('VPN_HOSTS', hosts);
+			ob_put('_n', n);
+			ob_put('OBSERVATORY', '"observatory": { "subjectSelector": [ "proxy-" ], "probeUrl": "https://www.google.com/generate_204", "probeInterval": "' + iv + '" },');
+			ob_put('BALANCERS', '"balancers": [ { "tag": "auto", "selector": [ "proxy-" ], "strategy": { "type": "leastPing" } } ],');
+			ob_put('PROXY_TARGET', '"balancerTag": "auto"');
+			ob_put('LAST_TARGET', all ? '"balancerTag": "auto"' : '"outboundTag": "direct"');
+			ob_put('N_LABEL', _f('автовыбор из %s', n));
+		}
+	} catch (e) {
+		if (e.message !== OB_STOP) raise(e.message);
+	}
+	ob_flush();
 }
 
 // Разбор команды. Сюда попадают только перенесённые на ucode команды: прочие
@@ -7817,6 +7881,9 @@ const CMDS = {
 	version: function () { print('byway ', getenv('BW_VERSION'), '\n'); },
 	xlat: cmd_xlat,
 	listjson: list_json,
+	parse: cmd_parse,
+	outbound: cmd_outbound,
+	proxies: cmd_proxies,
 };
 
 let _cmd = ARGV[0] ?? '';

@@ -22,13 +22,12 @@ cmd_probe() {
     fi
     # Без аргумента в режиме «свой конфиг» проверяется он, как у check.
     if [ -z "${1:-}" ] && [ "$(u conn_mode)" = "outbound" ]; then
-        parse_node
+        ob_eval proxy ""
     else
         URL=${1:-$(u node_url)}
         [ -n "$URL" ] || die "ссылка не задана: передать аргументом либо записать в byway.main.node_url"
-        parse_node "$URL"
+        ob_eval proxy "$URL"
     fi
-    build_stream
 
     PORT=${PROBE_PORT:-15080}
     CFG=/tmp/byway-probe.json
@@ -46,7 +45,7 @@ cmd_probe() {
   "log": { "loglevel": "warning" },
   "inbounds": [ { "tag": "s", "listen": "127.0.0.1", "port": $PORT,
                   "protocol": "socks", "settings": { "udp": true } } ],
-  "outbounds": [ $(proxy_block) ]
+  "outbounds": [ $PB ]
 }
 PROBE
 
@@ -93,8 +92,7 @@ cmd_check() {
         dief "движка нет (%s) — ключ проверить нечем; сам ключ тут ни при чём" "$XRAY"
     # Ссылку передаём в разбор, только если дана аргументом: иначе разбор сам
     # выберет ключ из UCI или свой конфиг.
-    if [ -n "${1:-}" ]; then parse_node "$1"; else parse_node; fi
-    build_stream
+    ob_eval proxy "${1:-}"
 
     CFG=/tmp/byway-check.json
     trap ': > "$CFG" 2>/dev/null' EXIT INT TERM
@@ -102,7 +100,7 @@ cmd_check() {
     cat > "$CFG" <<CHK
 {
   "log": { "loglevel": "warning" },
-  "outbounds": [ $(proxy_block) ]
+  "outbounds": [ $PB ]
 }
 CHK
     printf '  %-12s %-10s %s:%s  ' "$N_TYPE" "$N_SEC" "$N_HOST" "$N_PORT"

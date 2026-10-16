@@ -775,3 +775,4 @@ dns_route=%s не понят — DNS идёт напрямую; допустим
 то же в фоне, ход в журнале (так зовёт панель)	the same in the background, progress in the log (how the panel calls it)
 часть byway на ucode не извлечена в /var/run	the ucode part of byway was not extracted to /var/run
 byway: неизвестная команда «%s». Список: byway	byway: unknown command "%s". For the list of commands: byway
+аутбаунд не собрался: сбой ucode	the outbound was not built: ucode failure

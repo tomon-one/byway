@@ -194,14 +194,13 @@ gen_routes() {
             continue
         fi
         # Подоболочка: негодный ключ не должен ронять сборку остальных.
-        if ! ( parse_node "$_rurl" && build_stream ) >/dev/null 2>&1; then
+        if ! ( ob_eval "route-$_rn" "$_rurl" ) >/dev/null 2>&1; then
             warnf "направление «%s»: ключ не разбирается, пропущено" "$_rn"
             continue
         fi
-        parse_node "$_rurl" >/dev/null 2>&1
-        build_stream
+        ob_eval "route-$_rn" "$_rurl" quiet
         ROUTE_OUT="$ROUTE_OUT
-$(proxy_block "route-$_rn"),"
+$PB,"
         ROUTE_HOSTS="$ROUTE_HOSTS $N_HOST"
 
         # Через list_to_json, как главный список: route_list отсеивает только

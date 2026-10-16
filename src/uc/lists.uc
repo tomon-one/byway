@@ -42,6 +42,15 @@ function _numgt(s, lim) {
 	return length(s) > 3 || (s !== '' && int(s) > lim);
 }
 
+// Отброшенная строка -- в файл bad. Наверху и с глобальным состоянием, не
+// вложенной функцией: см. uc/keys.uc о ucode 22.03/23.05.
+let LJ_BAD = null, LJ_BF = null;
+function lj_reject(s) {
+	if (!LJ_BAD) return;
+	LJ_BF ??= fs.open(LJ_BAD, 'a');
+	if (LJ_BF) LJ_BF.write(s + '\n');
+}
+
 function list_json(file, pfx, bad) {
 	let f = fs.open(file, 'r');
 	// Нет файла -- как busybox awk: жалоба в stderr, код 1, в вывод ничего (вывод --
@@ -50,12 +59,8 @@ function list_json(file, pfx, bad) {
 		fs.stderr.write(sprintf('list_json: %s: %s\n', file, fs.error()));
 		exit(1);
 	}
-	let bf = null;
-	let reject = function (s) {
-		if (!bad) return;
-		bf ??= fs.open(bad, 'a');
-		if (bf) bf.write(s + '\n');
-	};
+	LJ_BAD = bad;
+	LJ_BF = null;
 	let dom = substr(pfx, 0, 7) == 'domain:';
 	let n = 0;
 	let buf = [];
@@ -66,26 +71,26 @@ function list_json(file, pfx, bad) {
 		l = trim(l, WS);
 		if (l === '' || substr(l, 0, 1) == '#' || substr(l, 0, 2) == '//')
 			continue;
-		if (length(l) > 253) { reject(l); continue; }
+		if (length(l) > 253) { lj_reject(l); continue; }
 		let out;
 		if (dom) {
 			let v = l, pre = '';
 			let c = index(v, ':');
 			if (c > 0) {
 				let p0 = substr(v, 0, c);
-				if (p0 == 'geosite' || p0 == 'ext') { reject(l); continue; }
+				if (p0 == 'geosite' || p0 == 'ext') { lj_reject(l); continue; }
 				if (p0 == 'domain' || p0 == 'full' || p0 == 'keyword' || p0 == 'regexp') {
 					pre = p0 + ':';
 					v = substr(v, c + 1);
-					if (!length(v)) { reject(l); continue; }
+					if (!length(v)) { lj_reject(l); continue; }
 				}
 			}
 			if (pre == 'regexp:') {
 				v = replace(replace(v, '\\', '\\\\'), '"', '\\"');
 			} else if (pre == 'keyword:') {
-				if (!_only(v, ALNUM + '._-')) { reject(l); continue; }
+				if (!_only(v, ALNUM + '._-')) { lj_reject(l); continue; }
 			} else {
-				if (!_domain_ok(v)) { reject(l); continue; }
+				if (!_domain_ok(v)) { lj_reject(l); continue; }
 				if (pre == '') pre = pfx;
 			}
 			out = pre + v;
@@ -95,7 +100,7 @@ function list_json(file, pfx, bad) {
 			// грубо: строгую форму проверяет set_elements6, дальше строку
 			// разбирает сам Xray.
 			if (index(l, ':') >= 0) {
-				if (!match(l, /^[0-9a-fA-F:]+(\/[0-9]{1,3})?$/)) { reject(l); continue; }
+				if (!match(l, /^[0-9a-fA-F:]+(\/[0-9]{1,3})?$/)) { lj_reject(l); continue; }
 			} else {
 				let ok = match(l, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/) != null;
 				if (ok) {
@@ -104,7 +109,7 @@ function list_json(file, pfx, bad) {
 						if (_numgt(oc[i], 255)) ok = false;
 					if (length(oc) == 5 && _numgt(oc[4], 32)) ok = false;
 				}
-				if (!ok) { reject(l); continue; }
+				if (!ok) { lj_reject(l); continue; }
 			}
 			out = pfx + l;
 		}
@@ -118,5 +123,5 @@ function list_json(file, pfx, bad) {
 	if (length(buf))
 		print((n ? ',\n' : '') + join(',\n', buf));
 	f.close();
-	if (bf) bf.close();
+	if (LJ_BF) LJ_BF.close();
 }

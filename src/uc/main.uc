@@ -13,6 +13,9 @@ const CMDS = {
 	version: function () { print('byway ', getenv('BW_VERSION'), '\n'); },
 	xlat: cmd_xlat,
 	listjson: list_json,
+	parse: cmd_parse,
+	outbound: cmd_outbound,
+	proxies: cmd_proxies,
 };
 
 let _cmd = ARGV[0] ?? '';
