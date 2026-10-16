@@ -5,6 +5,7 @@
 'require ui';
 'require uci';
 'require byway.lang as lang';
+'require byway.ui as bwui';
 
 /* Короткое имя для перевода. Строки в коде остаются русскими и служат
    ключом словаря: пропущенный перевод выводится по-русски. */
@@ -94,6 +95,7 @@ return view.extend({
 
 	render: function (data) {
 		setTitle();
+		bwui.afterApply(_('Не применилось — работает прежняя настройка.'));
 
 		var m = new form.Map('byway', _('Что пускать через VPN'),
 			_('По спискам — через VPN идёт только перечисленное ниже. Всё через VPN — весь трафик, включая загрузки и обновления.'));
@@ -308,6 +310,10 @@ return view.extend({
 	},
 
 	handleSaveApply: function (ev) {
+		/* Правка UCI (направления) -- LuCI перезагрузит страницу, итог покажет
+		   render (bwui.markApplied). Правку одних файлов списков UCI не видит:
+		   её применяем здесь же. */
+		bwui.markApplied();
 		return this.super('handleSaveApply', [ ev ]).then(function () {
 			ui.showModal(_('Применение'), [
 				E('p', { 'class': 'spinning' }, _('Идёт пересборка и перезапуск'))
@@ -333,7 +339,9 @@ return view.extend({
 				   о пересечении с zapret, о подозрительно широкой подсети, о
 				   выключенном mux. Раньше весь его вывод выбрасывался при
 				   коде 0, и человек не видел этих слов НИКОГДА. */
-				var warns = out.split('\n').filter(function (l) { return /\[!\]/.test(l); }).join('\n');
+				var warns = out.split('\n').filter(function (l) {
+					return /\[!\]/.test(l) && !/ -- (ожидание|waiting)\s*$/.test(l);
+				}).join('\n');
 				if (warns.trim())
 					ui.addNotification(null, [
 						E('p', {}, _('Применено, но byway есть что сказать:')),

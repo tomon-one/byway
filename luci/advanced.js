@@ -39,6 +39,24 @@ return view.extend({
 
 	render: function (data) {
 		setTitle();
+		/* Итог сохранения -- после перезагрузки LuCI (bwui.markApplied). Язык
+		   сменили -- byway lang докачивает словарь (установщик кладёт только
+		   выбранный) и страница перечитывается ещё раз под новый словарь;
+		   прежде загрузку обрывала перезагрузка LuCI после применения. */
+		var applied = bwui.takeApplied();
+		if (applied && applied.lang)
+			fs.exec(bwui.BYWAY, [ 'lang', applied.lang ]).then(function (r) {
+				if (r.code !== 0)
+					ui.addNotification(null, [
+						E('p', {}, _('Словарь не установлен — язык остался прежним.')),
+						E('pre', { 'style': 'white-space:pre-wrap' },
+							[ bwui.plain((r.stdout || '') + (r.stderr || '')) ])
+					], 'error');
+				else
+					location.reload();
+			}).catch(function () {});
+		else if (applied)
+			bwui.genReport(_('Настройки не приняты — работают прежние.'));
 
 		var m, s, o;
 
@@ -86,54 +104,11 @@ return view.extend({
 
 	handleSaveApply: function (ev) {
 		var langBefore = uci.get('byway', 'main', 'lang') || 'ru';
+		/* Метку ставит uci-applied через секунды, после подтверждения
+		   применения, -- успеваем подписаться и после сохранения. */
 		return this.super('handleSaveApply', [ ev ]).then(function () {
-			/* Язык сменили -- словарь выбранного может отсутствовать:
-			   установщик кладёт только тот, что выбран при установке.
-			   byway lang докачивает английский или стирает лишний, а страница
-			   перечитывается, чтобы подхватить новый словарь панели. */
 			var langNow = uci.get('byway', 'main', 'lang') || 'ru';
-			if (langNow !== langBefore)
-				return fs.exec(bwui.BYWAY, [ 'lang', langNow ]).then(function (r) {
-					if (r.code !== 0)
-						ui.addNotification(null, [
-							E('p', {}, _('Словарь не установлен — язык остался прежним.')),
-							E('pre', { 'style': 'white-space:pre-wrap' },
-								[ bwui.plain((r.stdout || '') + (r.stderr || '')) ])
-						], 'error');
-					else
-						location.reload();
-				});
-			/* Что перезапускать -- решает procd: он видит uci commit byway и
-			   зовёт reload, а тот сверяет собранный конфиг с прежним и трогает
-			   службу только при отличии. Здесь остаётся показать ошибку
-			   сборки, если она есть.
-
-			   Прежде этим решением ведал список «важных» опций прямо здесь.
-			   Он и не понадобился: с ним смена языка панели всё равно роняла
-			   туннель на пятнадцать секунд, потому что procd перезапускал
-			   службу на каждый commit независимо от него. */
-			return fs.exec(bwui.BYWAY, [ 'gen' ]).then(function (r) {
-				var out = bwui.plain((r.stdout || '') + (r.stderr || ''));
-				if (r.code !== 0) {
-					ui.addNotification(null, [
-						E('p', {}, _('Настройки не приняты — работают прежние.')),
-						E('pre', { 'style': 'white-space:pre-wrap' }, [ out ])
-					], 'error');
-					return;
-				}
-				/* Успешный gen тоже бывает не молчаливым: он предупреждает
-				   о пересечении с zapret, о подозрительно широкой подсети, о
-				   выключенном mux. Раньше весь его вывод выбрасывался при
-				   коде 0, и человек не видел этих слов НИКОГДА. */
-				var warns = out.split('\n').filter(function (l) { return /\[!\]/.test(l); }).join('\n');
-				if (warns.trim())
-					ui.addNotification(null, [
-						E('p', {}, _('Применено, но byway есть что сказать:')),
-						E('pre', { 'style': 'white-space:pre-wrap' }, [ warns.trim() ])
-					], 'warning');
-				else
-					ui.addNotification(null, E('p', {}, _('Применено')), 'info');
-			});
+			bwui.markApplied(langNow !== langBefore ? { lang: langNow } : null);
 		});
 	}
 });

@@ -6,6 +6,7 @@
 'require uci';
 'require byway.lang as lang';
 'require network';
+'require byway.ui as bwui';
 
 /* Заголовок вкладки: «имя роутера | byway». LuCI ставит «имя — Раздел»,
    и при нескольких открытых вкладках их не различить. Имя запоминаем при
@@ -48,6 +49,7 @@ return view.extend({
 
 	render: function (data) {
 		setTitle();
+		bwui.afterApply(_('Настройки не приняты — работают прежние.'));
 
 		var devices = (data[1] || []).map(function (d) {
 			return d.getName ? d.getName() : String(d);
@@ -210,36 +212,11 @@ return view.extend({
 	},
 
 	handleSaveApply: function (ev) {
-		return this.super('handleSaveApply', [ ev ]).then(function () {
-			/* Что перезапускать -- решает procd: он видит uci commit byway и
-			   зовёт reload, а тот сверяет собранный конфиг с прежним и трогает
-			   службу только при отличии. Список «важных» опций жил здесь и
-			   всё равно не спасал: procd перезапускал службу на каждый
-			   commit независимо от него, и смена языка роняла туннель на
-			   пятнадцать секунд. */
-			return fs.exec(BYWAY, [ 'gen' ]).then(function (r) {
-				var out = ((r.stdout || '') + (r.stderr || ''))
-					.replace(/\[[0-9;]*m/g, '');
-				if (r.code !== 0) {
-					ui.addNotification(null, [
-						E('p', {}, _('Настройки не приняты — работают прежние.')),
-						E('pre', { 'style': 'white-space:pre-wrap' }, [ out ])
-					], 'error');
-					return;
-				}
-				/* Успешный gen тоже бывает не молчаливым: он предупреждает
-				   о пересечении с zapret, о подозрительно широкой подсети, о
-				   выключенном mux. Раньше весь его вывод выбрасывался при
-				   коде 0, и человек не видел этих слов НИКОГДА. */
-				var warns = out.split('\n').filter(function (l) { return /\[!\]/.test(l); }).join('\n');
-				if (warns.trim())
-					ui.addNotification(null, [
-						E('p', {}, _('Применено, но byway есть что сказать:')),
-						E('pre', { 'style': 'white-space:pre-wrap' }, [ warns.trim() ])
-					], 'warning');
-				else
-					ui.addNotification(null, E('p', {}, _('Применено')), 'info');
-			});
-		});
+		/* Что перезапускать -- решает procd: он видит uci commit byway и
+		   зовёт reload, а тот сверяет собранный конфиг с прежним и трогает
+		   службу только при отличии. Итог сборки -- после перезагрузки
+		   страницы (bwui.markApplied). */
+		bwui.markApplied();
+		return this.super('handleSaveApply', [ ev ]);
 	}
 });

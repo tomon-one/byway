@@ -45,6 +45,7 @@ return view.extend({
 	render: function (data) {
 		var impBtn = null;   /* кнопка приёма -- нужна после отрисовки */
 		setTitle();
+		bwui.afterApply(_('Настройки не приняты — работают прежние.'));
 
 		var m = new form.Map('byway', _('Обслуживание'));
 		var s = m.section(form.NamedSection, 'main', 'byway');
@@ -462,15 +463,11 @@ return view.extend({
 	},
 
 	/* Таблица «Записи» и кнопка очистки заводятся при отрисовке, по
-	   сохранённому значению show_usage. Значит включение сбора без
-	   перезагрузки страницы ничего на экране не меняло: человек ставил
-	   галочку, применял и не понимал, где обещанное. Перечитываем страницу,
-	   но ТОЛЬКО когда галочка действительно поменялась. */
+	   сохранённому значению show_usage. Перечитывать страницу самим не нужно:
+	   LuCI сам перезагружает её после применения, а свой location.reload
+	   сразу после сохранения обрывал применение (2026-10-16). */
 	handleSaveApply: function (ev) {
-		var before = uci.get('byway', 'main', 'show_usage');
-		return this.super('handleSaveApply', [ ev ]).then(function () {
-			if (uci.get('byway', 'main', 'show_usage') !== before)
-				location.reload();
-		});
+		bwui.markApplied();
+		return this.super('handleSaveApply', [ ev ]);
 	}
 });

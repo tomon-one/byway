@@ -5,6 +5,7 @@
 'require ui';
 'require uci';
 'require byway.lang as lang';
+'require byway.ui as bwui';
 
 /* Заголовок вкладки: «имя роутера | byway». LuCI ставит «имя — Раздел», и при
    нескольких открытых вкладках их не различить. Имя запоминаем при первом
@@ -168,6 +169,75 @@ function keyLabel(url) {
 	catch (e) { return url.slice(h + 1); }
 }
 
+/* Подписка обновила ключи. Тот же ключ -- тот же сервер: схема, учётная
+   часть (uuid), адрес, порт и транспорт (type). Имя после решётки и path
+   сервис меняет при переезде (2026-10-16: «Франкфурт-XH» → «Варшава-XH», у
+   ключа сменились только имя и path) -- активный ключ получает новую
+   ссылку, а не остаётся вчерашним. Пропал из подписки -- прежний оставлен,
+   говорим об этом. */
+function keyId(u) {
+	var b = (u || '').split('#')[0];
+	var m = b.match(/^([a-z0-9+.-]+):\/\/([^@\/?]*@)?([^\/?]+)/i);
+	var t = b.match(/[?&]type=([^&]*)/);
+	return m ? [ m[1].toLowerCase(), m[2] || '', m[3].toLowerCase(), t ? t[1] : '' ].join('|') : b;
+}
+
+function sameKey(a, b) {
+	return keyId(a) === keyId(b);
+}
+
+function takeSubKeys(good) {
+	uci.set('byway', 'main', 'node_urls', good);
+	var cur = uci.get('byway', 'main', 'node_url') || '';
+	var fresh = good.filter(function (k) { return sameKey(k, cur); })[0];
+	if (fresh && fresh !== cur)
+		uci.set('byway', 'main', 'node_url', fresh);
+	if (KEYS_OPT) {
+		var el = KEYS_OPT.getUIElement('main');
+		if (el) el.setValue(good);
+	}
+	if (REPAINT_ACTIVE) REPAINT_ACTIVE();
+	return !cur || !!fresh;
+}
+
+/* Кнопка «Обновить ключи из подписки» для режимов с несколькими ключами:
+   адрес -- сохранённый, его вписывают в способе «Загрузка из подписки». */
+var SubRefresh = form.DummyValue.extend({
+	renderWidget: function () {
+		var note = E('div', { 'style': 'margin-top:.5em' });
+		var btn = E('button', {
+			'class': 'btn cbi-button-action',
+			'click': ui.createHandlerFn(this, function () {
+				var url = (uci.get('byway', 'main', 'sub_url') || '').trim();
+				note.innerHTML = '';
+				if (!url) {
+					note.appendChild(E('em', {}, [ _('Подписка не задана: её адрес вписывается в способе «Загрузка из подписки».') ]));
+					return Promise.resolve();
+				}
+				if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+				note.appendChild(E('span', { 'class': 'spinning' }, [ _('Список загружается…') ]));
+				return run([ 'sub', url ]).then(function (body) {
+					var good = parseKeys(maybeDecode(body))
+						.filter(function (x) { return x.ok; })
+						.map(function (x) { return x.url; });
+					note.innerHTML = '';
+					if (!good.length) {
+						var why = (body || '').replace(/^\s*\[[x!*]\]\s*/, '').trim();
+						note.appendChild(E('em', { 'style': 'color:#c00' }, [ why ||
+							_('Ключей не пришло. Либо адрес неверен, либо ответ не успел прийти — вторая причина вероятнее, если подписка обычно работает.') ]));
+						return;
+					}
+					var kept = takeSubKeys(good);
+					note.appendChild(E('div', {}, [ _('Ключей из подписки: %d. Заработают после «Сохранить и применить».').format(good.length) ]));
+					if (!kept)
+						note.appendChild(E('div', { 'style': 'color:#c00' }, [ _('Активного ключа в подписке больше нет — он оставлен прежним.') ]));
+				});
+			})
+		}, [ _('Обновить ключи из подписки') ]);
+		return E('div', {}, [ btn, note ]);
+	}
+});
+
 /* ── проверки ── */
 /* Функция, а не готовый объект: на уровне модуля uci ещё не загружен, и
    перевод в этот момент вернул бы русский текст даже при английском языке.
@@ -280,9 +350,10 @@ var SubPicker = form.DummyValue.extend({
 						   общую догадку: «подписка не скачалась» и «пришло,
 						   но ключей внутри нет» лечатся по-разному. */
 						var why = (body || '').replace(/^\s*\[[x!*]\]\s*/, '').trim();
-						listBox.appendChild(E('em', { 'style': 'color:#c00' },
+						/* Массивом: ответ byway несёт тело чужой подписки (ui.js). */
+						listBox.appendChild(E('em', { 'style': 'color:#c00' }, [
 							why ? why
-							    : _('Ключей не пришло. Либо адрес неверен, либо ответ не успел прийти — вторая причина вероятнее, если подписка обычно работает.')));
+							    : _('Ключей не пришло. Либо адрес неверен, либо ответ не успел прийти — вторая причина вероятнее, если подписка обычно работает.') ]));
 						return;
 					}
 					var cur = uci.get('byway', 'main', 'node_url') || '';
@@ -292,16 +363,12 @@ var SubPicker = form.DummyValue.extend({
 					   и подписку не надо загружать заново. */
 					var good = keys.filter(function (x) { return x.ok; })
 					               .map(function (x) { return x.url; });
-					uci.set('byway', 'main', 'node_urls', good);
-					uci.changed();
 					/* То же самое -- в само поле и в выбор активного, иначе
 					   на экране останется прежний список, а в настройках уже
-					   будет новый. */
-					if (KEYS_OPT) {
-						var el = KEYS_OPT.getUIElement('main');
-						if (el) el.setValue(good);
-					}
-					if (REPAINT_ACTIVE) REPAINT_ACTIVE();
+					   будет новый; переименованный активный ключ -- с новым
+					   именем. */
+					takeSubKeys(good);
+					cur = uci.get('byway', 'main', 'node_url') || '';
 					listBox.appendChild(E('div', {
 						'style': 'margin-bottom:.5em;opacity:.75'
 					}, _('Найдено ключей: ') + keys.length +
@@ -320,7 +387,6 @@ var SubPicker = form.DummyValue.extend({
 						radio.addEventListener('change', function () {
 							uci.set('byway', 'main', 'node_url', k.url);
 							uci.set('byway', 'main', 'conn_mode', 'sub');
-							uci.changed();
 						});
 						listBox.appendChild(E('div', {
 							'style': 'padding:.25em 0' + (k.ok ? '' : ';opacity:.45')
@@ -371,34 +437,14 @@ return view.extend({
 	   ключ, не показывалось ничего. Человек уверен, что ключ принят, а туннель
 	   работает на прежнем конфиге -- или не работает вовсе. */
 	handleSaveApply: function (ev) {
-		return this.super('handleSaveApply', [ ev ]).then(function () {
-			return fs.exec(BYWAY, [ 'gen' ]).then(function (r) {
-				var out = plain((r.stdout || '') + (r.stderr || ''));
-				if (r.code !== 0) {
-					ui.addNotification(null, [
-						E('p', {}, _('Ключ не принят — работает прежняя настройка.')),
-						E('pre', { 'style': 'white-space:pre-wrap' }, [ out ])
-					], 'error');
-					return;
-				}
-				/* Успешный gen тоже бывает не молчаливым: он предупреждает
-				   о пересечении с zapret, о подозрительно широкой подсети, о
-				   выключенном mux. Раньше весь его вывод выбрасывался при
-				   коде 0, и человек не видел этих слов НИКОГДА. */
-				var warns = out.split('\n').filter(function (l) { return /\[!\]/.test(l); }).join('\n');
-				if (warns.trim())
-					ui.addNotification(null, [
-						E('p', {}, _('Применено, но byway есть что сказать:')),
-						E('pre', { 'style': 'white-space:pre-wrap' }, [ warns.trim() ])
-					], 'warning');
-				else
-					ui.addNotification(null, E('p', {}, _('Применено')), 'info');
-			});
-		});
+		/* Итог сборки -- после перезагрузки страницы (bwui.markApplied). */
+		bwui.markApplied();
+		return this.super('handleSaveApply', [ ev ]);
 	},
 
 	render: function (data) {
 		setTitle();
+		bwui.afterApply(_('Ключ не принят — работает прежняя настройка.'));
 
 		var health = E('div', {}, healthBox(data[1]));
 		var nameEl = E('span', { 'style': 'font-weight:bold' }, [ connName(data[2]) ]);
@@ -427,8 +473,9 @@ return view.extend({
 		   вызывается при каждом переходе по вкладкам, отчего опросчики
 		   копились и укладывали роутер. Только по кнопке и при открытии. */
 
-		var m = new form.Map('byway', 'byway',
-			_('Часть трафика идёт через VPN, остальное напрямую.'));
+		/* Без заголовка: крупное «byway» с подписью только отодвигало
+		   проверку вниз (владелец 2026-10-16). */
+		var m = new form.Map('byway');
 		var s = m.section(form.NamedSection, 'main', 'byway');
 		s.addremove = false;
 		s.anonymous = true;
@@ -551,6 +598,13 @@ return view.extend({
 		keysOpt.depends('conn_mode', 'selector');
 		keysOpt.depends('conn_mode', 'urltest');
 		keysOpt.remove = function () {};
+		/* Загрузка подписки переписывает список в самом поле, иначе на экране
+		   и в выборе активного оставался прежний (KEYS_OPT не присваивался). */
+		KEYS_OPT = keysOpt;
+
+		o = s.option(SubRefresh, '_subrefresh', ' ');
+		o.depends('conn_mode', 'selector');
+		o.depends('conn_mode', 'urltest');
 
 		/* Список ключей берётся ЗАНОВО при каждой отрисовке, а не один раз при
 		   входе на страницу. Со снимком, сделанным в render, добавленный ключ
@@ -597,7 +651,6 @@ return view.extend({
 				});
 				radio.addEventListener('change', function () {
 					uci.set('byway', 'main', 'node_url', k);
-					uci.changed();
 				});
 				box.appendChild(E('div', { 'style': 'padding:.25em 0' }, [
 					radio,

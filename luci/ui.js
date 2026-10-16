@@ -158,6 +158,66 @@ return baseclass.extend({
 		});
 	},
 
+	/* Итог сохранения -- ПОСЛЕ перезагрузки страницы. «Сохранить и применить»
+	   LuCI ждёт подтверждения и перезагружает страницу через полторы секунды:
+	   всё, что вкладка показывала до этого, стиралось, не успев прочитаться.
+	   gen, запущенный панелью рядом, сталкивался с gen из reload службы (procd
+	   зовёт его на тот же commit) и печатал «уже идёт -- ожидание», а свой
+	   location.reload обрывал само применение (2026-10-16). Поэтому метку
+	   ставит событие LuCI uci-applied, а вкладка при отрисовке забирает её и
+	   один раз собирает конфиг. extra -- что сделать вместо сборки (язык). */
+	markApplied: function (extra) {
+		document.addEventListener('uci-applied', function () {
+			try {
+				var m = extra || {};
+				m.t = Date.now();
+				sessionStorage.setItem('byway-applied', JSON.stringify(m));
+			} catch (e) { /* без хранилища итог просто не покажется */ }
+		}, { once: true });
+	},
+
+	takeApplied: function () {
+		var m = null;
+		try {
+			m = JSON.parse(sessionStorage.getItem('byway-applied') || 'null');
+			sessionStorage.removeItem('byway-applied');
+		} catch (e) { return null; }
+		return (m && Date.now() - m.t < 120000) ? m : null;
+	},
+
+	/* Сборка и её итог. Строка ожидания замка -- не предупреждение: это
+	   reload службы ещё собирает тот же конфиг. */
+	genReport: function (failText) {
+		var self = this;
+		return fs.exec(BYWAY, [ 'gen' ]).then(function (r) {
+			var out = self.plain((r.stdout || '') + (r.stderr || ''));
+			if (r.code !== 0) {
+				ui.addNotification(null, [
+					E('p', {}, [ failText ]),
+					E('pre', { 'style': 'white-space:pre-wrap' }, [ out ])
+				], 'error');
+				return;
+			}
+			/* Успешный gen тоже бывает не молчаливым: он предупреждает
+			   о пересечении с zapret, о подозрительно широкой подсети, о
+			   выключенном mux. */
+			var warns = out.split('\n').filter(function (l) {
+				return /\[!\]/.test(l) && !/ -- (ожидание|waiting)\s*$/.test(l);
+			}).join('\n');
+			if (warns.trim())
+				ui.addNotification(null, [
+					E('p', {}, _('Применено, но byway есть что сказать:')),
+					E('pre', { 'style': 'white-space:pre-wrap' }, [ warns.trim() ])
+				], 'warning');
+			else
+				ui.addNotification(null, E('p', {}, _('Применено')), 'info');
+		}).catch(function () {});
+	},
+
+	afterApply: function (failText) {
+		return this.takeApplied() ? this.genReport(failText) : Promise.resolve();
+	},
+
 	say: function (box, text) {
 		box.firstChild.textContent = text || '';
 		box.style.display = text ? '' : 'none';
