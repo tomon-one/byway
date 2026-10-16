@@ -4,6 +4,7 @@ core/head.sh
 core/output.sh
 core/uci.sh
 core/lang.sh
+core/ucode.sh
 core/util.sh
 core/net.sh
 keys/parse.sh

@@ -1,6 +1,8 @@
 #!/bin/sh
 # Собирает byway из файлов src/ в порядке ORDER; строка «#@include ФАЙЛ»
-# заменяется содержимым файла (разборщик keys/parse.uc). Правится src/, а не
+# заменяется содержимым файла (разборщик keys/parse.uc). Часть на ucode
+# (uc/ORDER) -- в конце, после exit, между #@uc-begin и #@uc-end: shell туда не
+# доходит, `sh -n` видит её телом heredoc, bw_uc (core/ucode.sh) вырезает. Правится src/, а не
 # byway: собранный файл перезаписывается целиком. --check -- только сверка
 # (код 1, если byway отстал от src/).
 set -e
@@ -27,6 +29,14 @@ grep -v '^[[:space:]]*\(#\|$\)' ORDER | while IFS= read -r f; do
         inc "$f"
     fi
 done > "$out"
+{
+    printf '\nexit $?\n: <<'"'"'#@uc-end'"'"'\n#@uc-begin\n'
+    grep -v '^[[:space:]]*\(#\|$\)' uc/ORDER | while IFS= read -r f; do
+        cat "uc/$f"
+        echo
+    done
+    printf '#@uc-end\n'
+} >> "$out"
 if [ "${1:-}" = --check ]; then
     cmp -s "$out" ../byway && exit 0
     echo "byway отстал от src/ -- запустите src/build.sh" >&2

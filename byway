@@ -207,6 +207,33 @@ fi
 # Двойной перевод безвреден: готовая строка в словаре не найдётся.
 _f() { _fm=$(_t "$1"); shift; printf "$_fm" "$@"; }
 
+# Часть byway на ucode (переход с shell по группам команд, план
+# docs/plans/2026-10-16-improvements.md): программа -- в конце этого же файла,
+# между метками #@uc-begin и #@uc-end.
+
+# ucode читает программу только из файла, который можно перематывать:
+# конвейер падает на 25.12 («Invalid seek»), /dev/fd нет на 22.03 (стенды
+# 2026-10-16). Поэтому она вырезается в файл -- заново, когда сменился сам
+# byway (inode, размер, время). /var/run, а не /var/run/byway: файл исполняет
+# root, и каталог, куда пишет кто-то ещё, дал бы подменить программу.
+# BW_SELF -- путь к byway: стенды подгружают его кусок под другим именем.
+BW_SELF=${BW_SELF:-}
+BW_UCF=/var/run/byway.uc
+
+bw_uc() {
+    [ -n "$BW_SELF" ] || BW_SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+    _ust=$(ls -lni "$BW_SELF" 2>/dev/null || true)
+    if [ -z "$_ust" ] || [ "$(head -n 1 "$BW_UCF" 2>/dev/null)" != "// $_ust" ]; then
+        { printf '// %s\n' "$_ust"
+          sed -n '/^#@uc-begin$/,/^#@uc-end$/{/^#@uc-/d;p}' "$BW_SELF"; } > "$BW_UCF.$$" &&
+            mv "$BW_UCF.$$" "$BW_UCF" || {
+                rm -f "$BW_UCF.$$" 2>/dev/null || true
+                die "часть byway на ucode не извлечена в /var/run"
+            }
+    fi
+    BW_VERSION=$BYWAY_VERSION BW_LANG=$BW_LANG ucode -S "$BW_UCF" "$@"
+}
+
 # Общие помощники: проверка значений, замки, сравнение версий, pid движка.
 
 # Порт: число 1..65535; идёт в JSON без кавычек (порт ключа и входы).
@@ -7590,10 +7617,10 @@ case "${1:-}" in
   engine) shift; cmd_engine "$@" ;;
   lang)   shift; cmd_lang "$@" ;;
   # Служебная: перевод сообщения службы (init-скрипт), формат и доводы printf.
-  xlat)   shift; _xf=$(_t "$1"); shift; printf "$_xf" "$@" ;;
+  xlat)   shift; bw_uc xlat "$@" ;;
   clear)  shift; cmd_clear "$@" ;;
   import) shift; cmd_import "$@" ;;
-  version|--version|-v) echo "byway $BYWAY_VERSION" ;;
+  version|--version|-v) bw_uc version ;;
   watch)  cmd_watch ;;
   pulse)  cmd_pulse ;;
   job)    shift; cmd_job "$@" ;;
@@ -7636,3 +7663,126 @@ case "${1:-}" in
     ;;
   *)     printf "$(_f 'byway: неизвестная команда «%s». Список: byway\n' "$1")"; exit 1 ;;
 esac
+
+exit $?
+: <<'#@uc-end'
+#@uc-begin
+// Каркас части byway на ucode: настройки (UCI), перевод, вывод и журнал,
+// запуск программ. Опора -- только модули fs и uci: на 22.03 других нет.
+
+let fs = require('fs');
+let uci = require('uci');
+
+const LISTS = '/etc/byway';
+
+// ── настройки ──────────────────────────────────────────────────────────────
+// Один курсор на запуск: каждый `u` в shell -- отдельный процесс uci.
+// BW_UCI_DIR -- подставной каталог конфигов для стендов (как подменённый u).
+let _cur = null;
+function cursor() {
+	if (_cur == null) {
+		let d = getenv('BW_UCI_DIR');
+		_cur = d ? uci.cursor(d) : uci.cursor();
+	}
+	return _cur;
+}
+
+// Как `uci -q get byway.main.X`: незаданное -- пустая строка, список --
+// через пробел.
+function u(opt) {
+	let v = cursor().get('byway', 'main', opt);
+	if (v == null) return '';
+	return type(v) == 'array' ? join(' ', v) : '' + v;
+}
+
+// ── перевод ────────────────────────────────────────────────────────────────
+// Словарь тот же, что у shell: lang/<язык>.tsv, «ключ<TAB>перевод». Ключ --
+// русская строка как в shell-коде, то есть с \n и \t двумя знаками; здесь
+// строки уже с настоящими переводами строки, поэтому при поиске они
+// записываются обратно, а в переводе -- раскрываются.
+let LANG = getenv('BW_LANG') || u('lang');
+if (!match(LANG, /^[a-z][a-z]$/)) LANG = 'ru';
+let _dict = null;
+
+function _unesc(s) {
+	return replace(replace(s, '\\n', '\n'), '\\t', '\t');
+}
+
+function _t(s) {
+	if (LANG == 'ru') return s;
+	if (_dict == null) {
+		_dict = {};
+		for (let l in split(fs.readfile(LISTS + '/lang/' + LANG + '.tsv') ?? '', '\n')) {
+			let i = index(l, '\t');
+			if (i > 0) _dict[substr(l, 0, i)] ??= substr(l, i + 1);
+		}
+	}
+	let v = _dict[replace(replace(s, '\n', '\\n'), '\t', '\\t')];
+	return v == null ? s : _unesc(v);
+}
+
+// Формат с подстановками, как shell printf: недостающие доводы -- пустые
+// строки (sprintf печатал бы «(null)»).
+function _pf(fmt, args) {
+	let n = length(match(fmt, /%[^%]/g) ?? []);
+	let a = [ ...args ];
+	while (length(a) < n) push(a, '');
+	return sprintf(fmt, ...a);
+}
+
+function _f(fmt, ...args) { return _pf(_t(fmt), args); }
+
+// ── вывод и журнал ─────────────────────────────────────────────────────────
+// Те же знаки и цвета, что у shell (core/output.sh): вывод разбирают панель
+// и человек, по [*] [!] [x].
+function _say(s)   { print('\x1b[1;32m[*]\x1b[0m ', s, '\n'); }
+function _warn(s)  { print('\x1b[1;33m[!]\x1b[0m ', s, '\n'); }
+function die_raw(s) { print('\x1b[1;31m[x]\x1b[0m ', s, '\n'); exit(1); }
+
+function say(s)  { _say(_t(s)); }
+function warn(s) { _warn(_t(s)); }
+function die(s)  { die_raw(_t(s)); }
+function sayf(fmt, ...a)  { _say(_pf(_t(fmt), a)); }
+function warnf(fmt, ...a) { _warn(_pf(_t(fmt), a)); }
+function dief(fmt, ...a)  { die_raw(_pf(_t(fmt), a)); }
+
+// Журнал системы -- logger со списком доводов, без оболочки: текст из
+// настроек и ключей в командную строку не попадает.
+function logt(s)          { system([ 'logger', '-t', 'byway', _t(s) ]); }
+function logf(fmt, ...a)  { system([ 'logger', '-t', 'byway', _pf(_t(fmt), a) ]); }
+
+// ── запуск программ ────────────────────────────────────────────────────────
+// popen принимает только строку для оболочки: каждый довод -- в одинарных
+// кавычках.
+function q(s) { return "'" + replace('' + s, "'", "'\\''") + "'"; }
+
+// Вывод и код выхода программы; stderr -- вместе с выводом, если err.
+function run(argv, err) {
+	let p = fs.popen(join(' ', map(argv, q)) + (err ? ' 2>&1' : ' 2>/dev/null'), 'r');
+	if (!p) return { code: 127, out: '' };
+	let out = p.read('all') ?? '';
+	return { code: p.close(), out: out };
+}
+
+// Разбор команды. Сюда попадают только перенесённые на ucode команды: прочие
+// разбирает shell (ui/main.sh) и зовёт bw_uc лишь для этих.
+
+// Перевод сообщения init-скрипта: формат и доводы, как shell printf --
+// формат приходит из командной строки с \n двумя знаками.
+function cmd_xlat(fmt, ...args) {
+	let s = _t(fmt ?? '');
+	s = replace(replace(replace(s, '\\n', '\n'), '\\t', '\t'), '\\\\', '\\');
+	print(_pf(s, args));
+}
+
+const CMDS = {
+	version: function () { print('byway ', getenv('BW_VERSION'), '\n'); },
+	xlat: cmd_xlat,
+};
+
+let _cmd = ARGV[0] ?? '';
+if (CMDS[_cmd] == null)
+	dief('byway: неизвестная команда «%s». Список: byway', _cmd);
+CMDS[_cmd](...slice(ARGV, 1));
+
+#@uc-end
