@@ -656,7 +656,7 @@ xmux не ограничивает соединения: ядро собрано
 нет файла %s	no such file: %s
 в %s нет ядра xray — нужен .gz с бинарником или .zip выпуска	%s holds no xray core — a .gz with the binary or a release .zip is needed
 своя сборка: %s, sha256 ядра %s	custom build: %s, core sha256 %s
-при сбое сервера xhttp открывает сотни соединений: память роутера, риск блокировки адреса. Ядро с -tags http2legacy: docs/engine.md, «Ядро на Go 1.27»	when the server fails, xhttp opens hundreds of connections: router memory, risk of the address being blocked. A core built with -tags http2legacy: docs/engine.en.md, "Engine built with Go 1.27"
+при сбое сервера xhttp открывает сотни соединений: память роутера, риск блокировки адреса. Ядро с -tags http2legacy либо на x/net v0.60.0+: docs/engine.md, «Ядро на Go 1.27»	when the server fails, xhttp opens hundreds of connections: router memory, risk of the address being blocked. A core built with -tags http2legacy or x/net v0.60.0+: docs/engine.en.md, "Engine built with Go 1.27"
 ключ не разобрался: сбой разборщика (ucode)	the key could not be parsed: the parser (ucode) failed
 есть ucode (разбор ключей)	ucode is present (key parsing)
 нет ucode — ключи не разбираются	no ucode — keys cannot be parsed

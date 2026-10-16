@@ -584,10 +584,10 @@ eng_local() {
     fi
 }
 
-# Ядро на Go 1.27 без -tags http2legacy: XHTTP открывает соединение на каждый
-# ждущий запрос, xmux.maxConnections их не держит; при висящем рукопожатии --
-# сотни соединений и OOM (Xray#6797, сборки XTLS с 26.9.8). Тег сборки виден
-# в buildinfo бинарника. $1 -- путь к ядру.
+# Ядро на Go 1.27 без -tags http2legacy и с x/net старше v0.60.0: XHTTP
+# открывает соединение на каждый ждущий запрос, xmux.maxConnections их не
+# держит; при висящем рукопожатии -- сотни соединений и OOM (Xray#6797, сборки
+# XTLS с 26.9.8). Тег и версия x/net видны в buildinfo. $1 -- путь к ядру.
 eng_dial_bug() {
     # Поиск по файлу ядра -- 36 МБ с флеша, секунды; итог помним для этого
     # файла (inode, размер, время) в /tmp. Наша сборка помечена и в version.
@@ -601,7 +601,10 @@ eng_dial_bug() {
     _dv=$("$1" version 2>/dev/null | head -1)
     case "$_dv" in
       *http2legacy*) ;;
-      *'(go1.27.'*|*'(go1.27 '*|*'(go1.27)'*) grep -q 'http2legacy' "$1" 2>/dev/null || _db=1 ;;
+      *'(go1.27.'*|*'(go1.27 '*|*'(go1.27)'*)
+        grep -q 'http2legacy' "$1" 2>/dev/null ||
+            grep -qE 'golang\.org/x/net.v(0\.([6-9][0-9]|[1-9][0-9][0-9])|[1-9][0-9]*)\.' "$1" 2>/dev/null ||
+            _db=1 ;;
     esac
     printf '%s\n%s\n' "$_dk" "$_db" > "$_dc" 2>/dev/null || true
     [ "$_db" = 1 ]

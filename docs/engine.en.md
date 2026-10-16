@@ -277,20 +277,22 @@ is closed, with `open` it goes to the internet directly.
 
 ## Engine built with Go 1.27
 
-Xray-core releases 26.9.8 through 26.9.30 are built with Go 1.27. Its HTTP/2
+Xray-core releases since 26.9.8 are built with Go 1.27 and `x/net` older than v0.60.0. The Go 1.27 HTTP/2
 client stopped coalescing dials, so XHTTP opens a TCP connection for every
 waiting request, and `xmux.maxConnections` does not limit them. While the
 server answers, this means a few extra connections. When the handshake with
 the server hangs (the server is down, the address is being blocked), it
 becomes hundreds of connections: the router runs out of memory, and a burst
 of connections to one address is a reason to block it. Details:
-[XTLS/Xray-core#6797](https://github.com/XTLS/Xray-core/issues/6797); the Go
-fix: [golang/go#81646](https://github.com/golang/go/issues/81646).
+[XTLS/Xray-core#6797](https://github.com/XTLS/Xray-core/issues/6797). The fix
+is in `golang.org/x/net` v0.60.0
+([golang/go#81646](https://github.com/golang/go/issues/81646)); no Xray release
+includes it yet (as of 2026-10-16 it is only on the `main` branch).
 
 Only xhttp keys are affected. With such an engine `byway doctor` warns
 "xmux does not limit connections", and `byway status` prints an `xmux` line.
-The sign is `go1.27` in `xray version` and a build without the
-`http2legacy` tag.
+The sign is `go1.27` in `xray version`, a build without the
+`http2legacy` tag and `golang.org/x/net` older than v0.60.0.
 
 The `-tags http2legacy` tag brings back the previous HTTP/2 client. It is set
 at build time, so the ready-made engine from GitHub cannot be fixed with it:
@@ -316,6 +318,11 @@ the one `xray version` shows for the release engine. The flags are the same as
 in the XTLS release build (`.github/workflows/release.yml`): without
 `-tags http2legacy` this command produces a file byte-identical to the release
 engine, so the build is easy to verify.
+
+The other way is a build without the tag but with the fixed `x/net`: run
+`go get golang.org/x/net@v0.60.0` before `go build` and drop
+`-tags http2legacy`. Such a build no longer matches the release byte for
+byte, so build without changes first, verify, then raise `x/net`.
 
 On the router:
 
