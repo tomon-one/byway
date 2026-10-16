@@ -12,6 +12,7 @@ function cmd_xlat(fmt, ...args) {
 const CMDS = {
 	version: function () { print('byway ', getenv('BW_VERSION'), '\n'); },
 	xlat: cmd_xlat,
+	listjson: list_json,
 };
 
 let _cmd = ARGV[0] ?? '';

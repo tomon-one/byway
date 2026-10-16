@@ -15,6 +15,10 @@ bw_uc() {
     [ -n "$BW_SELF" ] || BW_SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
     _ust=$(ls -lni "$BW_SELF" 2>/dev/null || true)
     if [ -z "$_ust" ] || [ "$(head -n 1 "$BW_UCF" 2>/dev/null)" != "// $_ust" ]; then
+        # Без своей части файл -- не byway (стенд подгрузил кусок под чужим
+        # именем): пустая программа молча отдала бы пустой вывод.
+        grep -q '^#@uc-begin$' "$BW_SELF" 2>/dev/null ||
+            die "часть byway на ucode не извлечена в /var/run"
         { printf '// %s\n' "$_ust"
           sed -n '/^#@uc-begin$/,/^#@uc-end$/{/^#@uc-/d;p}' "$BW_SELF"; } > "$BW_UCF.$$" &&
             mv "$BW_UCF.$$" "$BW_UCF" || {
