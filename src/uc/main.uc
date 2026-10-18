@@ -24,6 +24,7 @@ const CMDS = {
 	doctor: cmd_doctor,
 	report: cmd_report,
 	gen: cmd_gen,
+	merged: cmd_merged,
 };
 
 let _cmd = ARGV[0] ?? '';

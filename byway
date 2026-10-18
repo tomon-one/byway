@@ -733,110 +733,14 @@ plain_domains() {
     return 0
 }
 
-# Свой список подсетей плюс подключённых пресетов и включённых направлений,
-# одним файлом (отдаётся путь). Читают сборка конфига, набор nft и kill
-# switch -- все обязаны видеть одно и то же, иначе подсеть из конфига, но не
-# из правил ядра, снимает обвязку целиком.
-# Кэш нужен, потому что потребителей семеро (сторож раз в 5 мин, health, top)
-# и без него каждый гнал бы полную склейку и сортировку: на 200 000 записей
-# 12 МБ в tmpfs, 288 раз в сутки. Годен, если слепок источников совпал,
-# источники не новее файла и файл не новее слепка: /tmp общий, подложенный
-# список решал бы, что идёт в туннель. Слепок нужен, потому что снятая в
-# панели галочка пресета файлов не трогает.
-merged_subnets() {
-    _s=/tmp/byway-subnets-all.lst
-    _st=$_s.$$
-    # Слепок источников; свой файл не входит -- ловится временем правки.
-    _ssig="$(u preset)|"
-    for _rs2 in $(route_names); do
-        [ "$(uci -q get "byway.$_rs2.enabled")" = "0" ] && continue
-        _ssig="$_ssig$_rs2 "
-    done
-    if [ -f "$_s" ] && [ "$(cat "$_s.sig" 2>/dev/null || true)" = "$_ssig" ]; then
-        _sold=0
-        # Файл новее своего слепка -- трогали не мы (слепок пишется сразу после
-        # файла): пересобрать.
-        [ -n "$(find "$_s" -newer "$_s.sig" 2>/dev/null)" ] && _sold=1
-        for _mf in "$LISTS/subnets.lst" \
-                   $(for _p in $(u preset); do echo "$PRESETS_DIR/$_p.sub"; done) \
-                   $(for _r in $(route_names); do echo "$ROUTES_DIR/$_r.lst"; done); do
-            [ -f "$_mf" ] || continue
-            if [ -n "$(find "$_mf" -newer "$_s" 2>/dev/null)" ]; then _sold=1; break; fi
-        done
-        if [ "$_sold" = 0 ]; then printf '%s' "$_s"; return 0; fi
-    fi
-    # `|| :`: нет своего файла -- не отказ сборки (cat даёт 1 под set -e).
-    { cat "$LISTS/subnets.lst" 2>/dev/null || :; printf '\n'; } > "$_st"
-    # Подсети включённых направлений тоже: иначе адресная половина не попадала
-    # в набор nft, трафик шёл напрямую, а доменная работала («направление
-    # работает через раз»).
-    for _rn3 in $(route_names); do
-        [ "$(uci -q get "byway.$_rn3.enabled")" = "0" ] && continue
-        [ -f "$ROUTES_DIR/$_rn3.lst" ] && route_list "$ROUTES_DIR/$_rn3.lst" net >> "$_st"
-    done
-    for _pn3 in $(u preset); do
-        _pfs=$PRESETS_DIR/$_pn3.sub
-        [ -f "$_pfs" ] && { cat "$_pfs"; printf '\n'; } >> "$_st"
-    done
-    # Пробел внутри строки не вырезается (см. fetch_list): проверки формы
-    # дальше нет, склеенная запись ушла бы прямо в маршрутизацию.
-    grep -vE '^[[:space:]]*(//|#|$)' "$_st" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |
-      sort -u > "$_st.s"
-    mv "$_st.s" "$_s"
-    printf '%s' "$_ssig" > "$_s.sig" 2>/dev/null || true
-    rm -f "$_st" 2>/dev/null || true
-    printf '%s' "$_s"
+# Склейка свой + направления + пресеты, одним файлом без повторов (отдаётся
+# путь) -- в ucode (uc/merge.uc, кэш с подписью). Читают сборка конфига, nft,
+# запрет и проверки -- все видят одно и то же.
+merged_env() {
+    BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR BW_BADLIST=$BADLIST bw_uc merged "$1"
 }
-
-# Свой список доменов плюс включённые направления и подключённые пресеты,
-# без повторов; отдаётся путь. Кэш и слепок -- как у merged_subnets.
-merged_domains() {
-    # Собирается сбоку и встаёт на место одним mv: читателей семеро, а усечение
-    # рабочего файла держало его неполным до конца (gen читает путь секундами
-    # позже). Замок в gen защищает только сборку от сборки.
-    _m=/tmp/byway-domains-all.lst
-    _mt=$_m.$$
-    # Слепок: подключённые пресеты и включённые направления; снятая в UCI
-    # галочка файлов не трогает.
-    _msig="$(u preset)|"
-    for _rs in $(route_names); do
-        [ "$(uci -q get "byway.$_rs.enabled")" = "0" ] && continue
-        _msig="$_msig$_rs "
-    done
-    if [ -f "$_m" ] && [ "$(cat "$_m.sig" 2>/dev/null || true)" = "$_msig" ]; then
-        _mold=0
-        # Файл новее слепка -- трогали не мы.
-        [ -n "$(find "$_m" -newer "$_m.sig" 2>/dev/null)" ] && _mold=1
-        for _mf in "$LISTS/domains.lst" \
-                   $(for _p in $(u preset); do echo "$PRESETS_DIR/$_p.lst"; done) \
-                   $(for _r in $(route_names); do echo "$ROUTES_DIR/$_r.lst"; done); do
-            [ -f "$_mf" ] || continue
-            if [ -n "$(find "$_mf" -newer "$_m" 2>/dev/null)" ]; then _mold=1; break; fi
-        done
-        if [ "$_mold" = 0 ]; then printf '%s' "$_m"; return 0; fi
-    fi
-    { cat "$LISTS/domains.lst" 2>/dev/null || :; printf '\n'; } > "$_mt"
-    # Домены включённых направлений тоже: без подставного адреса их трафик не
-    # попадёт в перехват. Только заведённые, не весь каталог: файл удалённого
-    # направления продолжал бы уводить домены.
-    for _rn2 in $(route_names); do
-        [ "$(uci -q get "byway.$_rn2.enabled")" = "0" ] && continue
-        [ -f "$ROUTES_DIR/$_rn2.lst" ] && route_list "$ROUTES_DIR/$_rn2.lst" dom >> "$_mt"
-    done
-    # Только подключённые пресеты, не весь каталог: иначе снятая в панели
-    # галочка не отключала скачанную копию.
-    for _pn in $(u preset); do
-        _pf=$PRESETS_DIR/$_pn.lst
-        [ -f "$_pf" ] && { cat "$_pf"; printf '\n'; } >> "$_mt"
-    done
-    grep -vE '^[[:space:]]*(//|#|$)' "$_mt" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |
-      sort -u > "$_mt.s"
-    # Черновик с $$ в имени: общий делили бы два сборщика.
-    mv "$_mt.s" "$_m"
-    printf '%s' "$_msig" > "$_m.sig" 2>/dev/null || true
-    rm -f "$_mt" 2>/dev/null || true
-    printf '%s' "$_m"
-}
+merged_subnets() { merged_env subnets; }
+merged_domains() { merged_env domains; }
 
 # Готовые наборы (presets): загрузка, проверка, пересечения с /etc/hosts.
 
@@ -5173,6 +5077,99 @@ function lj_plain(l) {
 	return _domain_ok(l, true) ? l : null;
 }
 
+// Общие списки доменов и подсетей: свои + включённые направления + подключённые
+// пресеты, одним файлом без повторов (бывшие merged_domains, merged_subnets).
+// Читают сборка конфига, набор nft, запрет и проверки -- все обязаны видеть одно
+// и то же. Склейка кэшируется: потребителей много (сторож раз в 5 минут), а на
+// 200 000 записях это 12 МБ в tmpfs.
+
+// Подпись кэша: что склеено (пресеты, направления), каждый источник и сама
+// склейка -- путём, временем и размером. Годен, только если подпись та же и все
+// источники СТРОГО старше сборки: время -- в секундах, и правка в ту же
+// секунду, что прошлая склейка, иначе не была бы видна (2026-10-18).
+function mg_stat(f) {
+	let s = fs.stat(f);
+	return s ? f + ' ' + s.mtime + ' ' + s.size : null;
+}
+
+function mg_routes() {
+	let all = cursor().get_all('byway') ?? {}, r = [];
+	for (let n in all) if (all[n]['.type'] == 'route' && all[n].enabled != '0') push(r, all[n]);
+	r = sort(r, (a, b) => a['.index'] - b['.index']);
+	return map(r, (s) => s['.name']);
+}
+
+// Строки направления, разложенные надвое (route_list): dom или net. Строка с
+// пробелом внутри -- формат hosts («0.0.0.0 example.com»), не запись: в
+// отброшенные, не склеивать.
+function mg_route_part(file, want) {
+	let r = [];
+	for (let l in lj_lines(file)) {
+		if (match(l, /[ \t\x0b\x0c]/)) { lj_reject(l); continue; }
+		let net = match(l, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/) != null;
+		if ((want == 'net') == net) push(r, l);
+	}
+	return r;
+}
+
+// bw_uc merged domains|subnets: путь к склейке (собрать, если кэш негоден).
+function cmd_merged(kind) {
+	let dom = kind != 'subnets';
+	let lists = getenv('BW_LISTS'), routes = getenv('BW_ROUTES'), presets = getenv('BW_PRESETS');
+	let out = dom ? '/tmp/byway-domains-all.lst' : '/tmp/byway-subnets-all.lst';
+	let pre = split(trim(u('preset')), /[ \t\n]+/);
+	if (pre[0] == '') pre = [];
+	let rts = mg_routes();
+	let src = [ lists + (dom ? '/domains.lst' : '/subnets.lst') ];
+	for (let r in rts) push(src, routes + '/' + r + '.lst');
+	for (let p in pre) push(src, presets + '/' + p + (dom ? '.lst' : '.sub'));
+
+	let sig = [ join(' ', pre) + '|' + join(' ', rts) ], newest = 0;
+	for (let f in src) {
+		let s = fs.stat(f);
+		if (!s) continue;
+		push(sig, f + ' ' + s.mtime + ' ' + s.size);
+		if (s.mtime > newest) newest = s.mtime;
+	}
+	let old = split(fs.readfile(out + '.sig') ?? '', '\n');
+	let cur = mg_stat(out);
+	// Строка 1 -- время сборки, последняя -- сама склейка (её правка чужими
+	// руками -- тоже повод пересобрать: /tmp общий).
+	if (cur != null && length(old) == length(sig) + 2 && old[length(old) - 1] == cur &&
+	    join('\n', slice(old, 1, length(old) - 1)) == join('\n', sig) && newest < int(old[0])) {
+		print(out);
+		return;
+	}
+
+	// Сборка: текст -- в черновик, чистка и sort -u -- busybox (на роутере
+	// быстрее, и список не держится в памяти ucode).
+	let now = time();
+	let tmp = trim(run([ 'mktemp', '/tmp/byway-merge.XXXXXX' ]).out);
+	if (tmp === '') { print(out); return; }
+	let f = fs.open(tmp, 'w');
+	let own = fs.readfile(src[0]);
+	if (own != null) f.write(own + '\n');
+	LJ_BAD = getenv('BW_BADLIST');
+	LJ_BF = null;
+	for (let r in rts) {
+		let part = mg_route_part(routes + '/' + r + '.lst', dom ? 'dom' : 'net');
+		if (length(part)) f.write(join('\n', part) + '\n');
+	}
+	if (LJ_BF) { LJ_BF.close(); LJ_BF = null; }
+	for (let p in pre) {
+		let t = fs.readfile(presets + '/' + p + (dom ? '.lst' : '.sub'));
+		if (t != null) f.write(t + '\n');
+	}
+	f.close();
+	let r = run([ 'sh', '-c', 'grep -vE "^[[:space:]]*(//|#|$)" "$1" | tr -d "\\r" | ' +
+	              'sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*$//" | sort -u > "$1.s" && mv "$1.s" "$2"',
+	              'sh', tmp, out ], true);
+	fs.unlink(tmp);
+	if (r.code != 0) { fs.unlink(tmp + '.s'); print(out); return; }
+	fs.writefile(out + '.sig', now + '\n' + join('\n', sig) + '\n' + mg_stat(out));
+	print(out);
+}
+
 // Разбор ключа (vless, vmess, trojan, ss, socks, hysteria2, wireguard).
 // Логика -- прежний keys/parse.uc без правок разбора: на выходе те же команды
 // sh (bw_uc parse -> eval в parse_node) и, для сборки на ucode, сам ключ
@@ -8091,6 +8088,7 @@ const CMDS = {
 	doctor: cmd_doctor,
 	report: cmd_report,
 	gen: cmd_gen,
+	merged: cmd_merged,
 };
 
 let _cmd = ARGV[0] ?? '';
