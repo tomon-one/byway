@@ -5,4 +5,5 @@ keys.uc
 outbound.uc
 gen.uc
 probe.uc
+status.uc
 main.uc

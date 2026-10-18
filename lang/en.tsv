@@ -29,7 +29,6 @@ vpn\tfail\tссылка не разобрана\n	vpn\tfail\tlink not parsed\n
 vpn\tok\t%s мс\n	vpn\tok\t%s ms\n
 vpn\twarn\t%s мс, медленно\n	vpn\twarn\t%s ms, slow\n
 tunnel\tok\tтрафик проходит\n	tunnel\tok\ttraffic passes\n
-tunnel\twarn\tсписок пуст\n	tunnel\twarn\tlist is empty\n
 dns\tok\tотвечает\n	dns\tok\tanswers\n
 ещё запускается	still starting
 \n  \033[2mEnter — назад\033[0m	\n  \033[2mEnter — back\033[0m

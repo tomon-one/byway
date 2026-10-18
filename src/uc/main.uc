@@ -16,6 +16,9 @@ const CMDS = {
 	check: cmd_check,
 	probe: cmd_probe,
 	show: cmd_show,
+	status: cmd_status,
+	health: cmd_health,
+	rawok: cmd_rawok,
 	gen: cmd_gen,
 };
 
