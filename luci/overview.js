@@ -252,11 +252,34 @@ function checks() {
 }
 var TONE = { ok: '#2a2', warn: '#e90', fail: '#c00' };
 
+/* Что делать, когда точка красная (владелец 2026-10-18: «чтобы даже новичок
+   понял, что делать»). По имени проверки и состоянию, не по тексту
+   пояснения: тот переводится. Служба лежит -- остальное следствие, совет один. */
+function advice(seen) {
+	var f = function (k) { return seen[k] && seen[k].state === 'fail'; };
+	/* Ключа нет -- ведёт блок «С чего начать», советы были бы шумом. */
+	if (noKey()) return [];
+	if (f('service'))
+		return [ _('Служба не запущена. Проверьте, что стоит галочка «Включить» и задан ключ, затем нажмите «Перезапустить». Не помогло — «Обслуживание» → «Проверить окружение» назовёт причину.') ];
+	var out = [];
+	if (f('vpn'))
+		out.push(_('Связи с сервером VPN нет: ключ вставлен не целиком, устарел, или сервер выключен либо заблокирован. Нажмите «Проверить ключ» ниже; если и там «НЕ РАБОТАЕТ», возьмите свежий ключ у сервиса VPN.'));
+	else if (f('tunnel'))
+		out.push(_('Сервер отвечает, но трафик через него не идёт. Чаще всего ключ устарел или в нём ошибка (пароль, идентификатор): нажмите «Проверить ключ» ниже и при неудаче возьмите новый ключ у сервиса VPN.'));
+	/* Без связи с сервером DNS проверять нечем -- это следствие, не причина. */
+	if (f('dns') && !out.length)
+		out.push(_('Резолвер byway не отвечает, и сайты из списков не откроются. Нажмите «Перезапустить»; не помогло — «Обслуживание» → «Проверить окружение».'));
+	return out;
+}
+
 function healthBox(text) {
 	var seen = {};
 	(text || '').split('\n').forEach(function (l) {
 		var p = l.split('\t');
 		if (p.length >= 3) seen[p[0]] = { state: p[1], note: p[2] };
+	});
+	var tips = advice(seen).map(function (t) {
+		return E('div', { 'style': 'color:#c00;margin-top:.3em;font-size:90%' }, [ '\u26a0 ' + t ]);
 	});
 	return E('div', {}, Object.keys(checks()).map(function (k) {
 		var v = seen[k] || { state: 'warn', note: _('нет данных') };
@@ -268,7 +291,17 @@ function healthBox(text) {
 			E('span', { 'style': 'margin-left:.4em' }, checks()[k]),
 			E('span', { 'style': 'margin-left:.4em;opacity:.65' }, [ '— ' + v.note ])
 		]);
-	}));
+	}).concat(tips));
+}
+
+/* Ключ ещё не задан -- в сохранённых настройках, по способу подключения. */
+function noKey() {
+	var g = function (o) { return uci.get('byway', 'main', o); };
+	switch (g('conn_mode') || 'key') {
+	case 'selector': case 'urltest': return !L.toArray(g('node_urls')).length;
+	case 'outbound': return !(g('outbound_json') || '').trim();
+	default: return !(g('node_url') || '').trim();
+	}
 }
 
 /* Строки «ВНИМАНИЕ …» из статуса. byway печатает их ради человека, а панель
@@ -487,7 +520,22 @@ return view.extend({
 		var ss = s.option(form.SectionValue, '_check', form.NamedSection,
 			'main', 'byway', _('Проверка')).subsection;
 
-		var o = ss.option(form.DummyValue, '_health', _('Состояние'));
+		/* Первый вход: ключа нет -- три шага вместо четырёх красных точек. */
+		var o;
+		if (noKey()) {
+			o = ss.option(form.DummyValue, '_start', _('С чего начать'));
+			o.cfgvalue = function () {
+				return E('div', { 'style': 'line-height:1.6' }, [
+					E('div', {}, [ _('1. Вставьте ключ в поле «Ключ» ниже. Ключ — ссылка вида vless://…, trojan://… или ss://…; её выдаёт сервис VPN: в письме, в личном кабинете или в боте. Если сервис дал адрес подписки (https://…), выберите способ подключения «Загрузка из подписки».') ]),
+					E('div', {}, [ _('2. Нажмите «Сохранить и применить» внизу страницы.') ]),
+					E('div', {}, [ _('3. Через полминуты нажмите «Проверить сейчас»: все четыре точки должны стать зелёными.') ]),
+					E('div', { 'style': 'opacity:.75' }, [ _('Что пускать через VPN, задаёт вкладка «Списки»: свои сайты и готовые списки на выбор.') ]),
+					E('div', { 'style': 'opacity:.75' }, [ E('a', { 'href': 'https://github.com/tomon-one/byway/blob/main/docs/' + (lang.lang() === 'en' ? 'beginner.en.md' : 'beginner.md'), 'target': '_blank', 'rel': 'noopener' }, [ _('Подробно, по шагам и со словарём терминов — byway простыми словами') ]) ])
+				]);
+			};
+		}
+
+		o = ss.option(form.DummyValue, '_health', _('Состояние'));
 		o.cfgvalue = function () { return health; };
 
 		o = ss.option(form.DummyValue, '_conn', _('Подключение'));
@@ -558,7 +606,7 @@ return view.extend({
 		o.rmempty = false;
 
 		o = s.option(form.ListValue, 'conn_mode', _('Способ подключения'),
-			_('byway понимает vless, vmess, trojan, shadowsocks, socks, hysteria2 и wireguard. Автоматически — Xray-core замеряет задержку и ведёт трафик через самый быстрый живой ключ.'));
+			_('Как byway получает ключ. Обычно сервис VPN даёт либо один ключ, либо адрес подписки — ссылку на список ключей. «Несколько, автоматически» — byway сам выбирает самый быстрый из работающих. «Свой конфиг» — для тех, кто пишет настройки Xray вручную. Ключи понимает такие: vless, vmess, trojan, shadowsocks, socks, hysteria2, wireguard.'));
 		o.value('key', _('Один ключ'));
 		o.value('sub', _('Загрузка из подписки'));
 		o.value('selector', _('Несколько, вручную'));
@@ -567,7 +615,7 @@ return view.extend({
 		o.default = 'key';
 
 		var urlOpt = o = s.option(form.TextValue, 'node_url', _('Ключ'),
-			_('Ссылка целиком. Имя после решётки станет названием подключения.'));
+			_('Ссылка от сервиса VPN целиком, вида vless://… или trojan://…. Текст после знака # станет названием подключения.'));
 		o.rows = 3;
 		o.monospace = true;
 		o.depends('conn_mode', 'key');
@@ -583,7 +631,7 @@ return view.extend({
 		o.remove = keepHidden;
 
 		o = s.option(form.Value, 'sub_url', _('Адрес подписки'),
-			_('Адрес https://…, по которому сервис отдаёт список ключей. Это не сам ключ.'));
+			_('Ссылка https://… от сервиса VPN, по которой он отдаёт список ключей. Сам ключ сюда не вставляют: для него способ «Один ключ».'));
 		o.placeholder = 'https://example.com/sub/abcdef';
 		o.depends('conn_mode', 'sub');
 		o.remove = keepHidden;
@@ -594,7 +642,7 @@ return view.extend({
 		/* Несколько ключей сразу. Загрузка подписки складывает их сюда сама,
 		   так что обычно вписывать руками не придётся. */
 		var keysOpt = s.option(form.DynamicList, 'node_urls', _('Ключи'),
-			_('По одному на строку. Подписка заполняет их сама.'));
+			_('По одному ключу на строку. Кнопка «Обновить ключи из подписки» заполняет их сама.'));
 		keysOpt.depends('conn_mode', 'selector');
 		keysOpt.depends('conn_mode', 'urltest');
 		keysOpt.remove = function () {};
@@ -663,7 +711,7 @@ return view.extend({
 		/* Свой конфиг — способ подключиться к тому, чего byway не понимает
 		   по ссылке. У podkop это называлось Outbound Config. */
 		o = s.option(form.TextValue, 'outbound_json', _('Конфиг аутбаунда'),
-			_('Кусок конфигурации Xray-core объектом: protocol, settings, при нужде streamSettings. Тег byway подставит сам.'));
+			_('Для опытных: кусок настроек Xray-core для исходящего соединения (outbound) — protocol, settings, при нужде streamSettings. Тег byway подставит сам.'));
 		o.rows = 10;
 		o.monospace = true;
 		o.depends('conn_mode', 'outbound');
@@ -709,7 +757,7 @@ return view.extend({
 		};
 
 		o = s.option(form.ListValue, 'on_failure', _('Если VPN не поднялся'),
-			_('Когда движок VPN на роутере не работает или перехват не лёг. Недоступный сервер при работающем движке сюда не относится: трафик и так уходит в движок и мимо VPN не идёт. «Пустить напрямую» — интернет работает, но то, что шло через VPN, идёт без него. «Не пускать» — это закрывается: в режиме «по спискам» — сайты из списков, в режиме «всё через VPN» — весь интернет. Доступ к роутеру остаётся.'));
+			_('Что делать, если VPN на самом роутере не запустился. «Пустить напрямую» — интернет работает, но то, что шло через VPN, идёт без него, и заблокированное не откроется. «Не пускать» — это закрыто, пока VPN не заработает: в режиме «По спискам» — сайты из списков, в режиме «Всё через VPN» — весь интернет. Доступ к роутеру остаётся в обоих случаях. Если недоступен только сервер VPN, а на роутере всё работает, выбор ни на что не влияет: трафик и так ждёт сервер и мимо VPN не идёт.'));
 		o.value('open', _('Пустить напрямую'));
 		o.value('closed', _('Не пускать'));
 		o.default = 'closed';

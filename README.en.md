@@ -50,6 +50,10 @@ works](#how-it-works) · [The web UI](#the-web-ui) · [Commands](#commands) ·
 [Removal](#removal) · [Compatibility](#compatibility) · [Written with an
 AI](#written-with-an-ai)
 
+**New to OpenWrt or to VPNs** — start with [byway in plain
+words](docs/beginner.en.md): installing and setting up step by step. Unfamiliar
+words — in the [glossary](docs/glossary.en.md).
+
 In more detail, as separate documents: [how byway
 works](docs/architecture.en.md) · [keys and connection](docs/keys.en.md) ·
 [the Xray-core engine](docs/engine.en.md) · [when it does not

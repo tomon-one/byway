@@ -48,6 +48,10 @@ Xray-core](https://img.shields.io/badge/%D1%8F%D0%B4%D1%80%D0%BE-Xray--core-333)
 [Удаление](#удаление) · [Совместимость](#совместимость) · [Написано вместе с
 ИИ](#написано-вместе-с-ии)
 
+**Впервые с OpenWrt или с VPN** — начните с [byway простыми
+словами](docs/beginner.md): установка и настройка по шагам. Незнакомые слова —
+в [словаре](docs/glossary.md).
+
 Подробнее, отдельными документами: [как устроен byway](docs/architecture.md) ·
 [ключи и подключение](docs/keys.md) · [ядро Xray-core](docs/engine.md) ·
 [когда не работает](docs/troubleshooting.md) · [почему только

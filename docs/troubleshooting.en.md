@@ -7,6 +7,8 @@ The commands run on the router, in an ssh console. Most of this is in the
 web UI too, but the console shows more. Output is quoted as it appears with
 the English dictionary installed (`byway lang en`).
 
+Unfamiliar words — in the [glossary](glossary.en.md); the path from scratch — [byway in plain words](beginner.en.md).
+
 ---
 
 ## Where to start
