@@ -10,6 +10,11 @@
 # BW_SELF -- путь к byway: стенды подгружают его кусок под другим именем.
 BW_SELF=${BW_SELF:-}
 BW_UCF=/var/run/byway.uc
+# Скомпилированная (ucode -c): разбор 260 КБ исходника стоит ~0,15 с на
+# роутере при каждом вызове, байткод грузится впятеро быстрее (стенд
+# 2026-10-18). Строгий режим (-S) задаётся при компиляции. Не скомпилировалась
+# -- идёт исходник.
+BW_UCC=/var/run/byway.ucc
 
 bw_uc_prep() {
     [ -n "$BW_SELF" ] || BW_SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
@@ -19,16 +24,23 @@ bw_uc_prep() {
         # именем): пустая программа молча отдала бы пустой вывод.
         grep -q '^#@uc-begin$' "$BW_SELF" 2>/dev/null ||
             die "часть byway на ucode не извлечена в /var/run"
+        # Байткод прежней версии -- прочь ДО подмены исходника: параллельный
+        # вызов увидел бы новый исходник и запустил старый байткод.
+        rm -f "$BW_UCC" 2>/dev/null || true
         { printf '// %s\n' "$_ust"
           sed -n '/^#@uc-begin$/,/^#@uc-end$/{/^#@uc-/d;p}' "$BW_SELF"; } > "$BW_UCF.$$" &&
             mv "$BW_UCF.$$" "$BW_UCF" || {
                 rm -f "$BW_UCF.$$" 2>/dev/null || true
                 die "часть byway на ucode не извлечена в /var/run"
             }
+        ucode -c -S -o "$BW_UCC.$$" "$BW_UCF" >/dev/null 2>&1 &&
+            mv "$BW_UCC.$$" "$BW_UCC" 2>/dev/null || rm -f "$BW_UCC.$$" 2>/dev/null || true
     fi
+    if [ -f "$BW_UCC" ]; then BW_UCRUN=$BW_UCC; else BW_UCRUN="-S $BW_UCF"; fi
 }
 
 bw_uc() {
     bw_uc_prep
-    BW_VERSION=$BYWAY_VERSION BW_LANG=$BW_LANG ucode -S "$BW_UCF" "$@"
+    # shellcheck disable=SC2086
+    BW_VERSION=$BYWAY_VERSION BW_LANG=$BW_LANG ucode $BW_UCRUN "$@"
 }

@@ -327,6 +327,8 @@ if [ -x /etc/init.d/byway ]; then
     do_ rm -f /etc/init.d/byway /etc/rc.d/S90byway /etc/rc.d/S21byway /etc/rc.d/K10byway
     # Журнал обращений в памяти: до перезагрузки занимал бы её зря.
     do_ rm -rf /var/run/byway
+    # Часть byway на ucode, вырезанная из программы, и её байткод.
+    do_ rm -f /var/run/byway.uc /var/run/byway.ucc
     say "остановлена и снята с автозапуска"
 fi
 # Пользователь, от которого работал движок: строки дописал user_add в конец,

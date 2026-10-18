@@ -42,7 +42,7 @@ cmd_plumb() {
     bw_uc_prep
     BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR \
     BW_BADLIST=$BADLIST BW_PKGFIX=$PKG_FIX BW_VERSION=$BYWAY_VERSION BW_LANG=$BW_LANG \
-        ucode -S "$BW_UCF" plumb "$@" &
+        ucode $BW_UCRUN plumb "$@" &
     _ppid=$!
     _prc=0
     wait "$_ppid" || _prc=$?

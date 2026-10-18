@@ -35,6 +35,8 @@ const CMDS = {
 	nftsig: cmd_nftsig,
 	nftblock: cmd_nftblock,
 	selfmark: cmd_selfmark,
+	watch: cmd_watch,
+	pulse: cmd_pulse,
 };
 
 let _cmd = ARGV[0] ?? '';
