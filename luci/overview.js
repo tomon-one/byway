@@ -175,6 +175,36 @@ function keyLabel(url) {
    ключа сменились только имя и path) -- активный ключ получает новую
    ссылку, а не остаётся вчерашним. Пропал из подписки -- прежний оставлен,
    говорим об этом. */
+/* Ключ одной строкой для списка «Ключи»: схема, сервер и имя. Ключ reality с
+   pqv весит ~3 КБ, и LuCI рисовал его целиком на пол-экрана (владелец
+   2026-10-18). Значение не меняется -- только видимый текст. */
+function keyShort(u) {
+	var b = (u || '').split('#')[0];
+	var m = b.match(/^([a-z0-9+.-]+):\/\/(?:[^@\/?]*@)?([^\/?#]+)/i);
+	var name = (u || '').indexOf('#') >= 0 ? keyLabel(u) : '';
+	if (!m) return b.length > 60 ? b.slice(0, 60) + '…' : b;
+	return m[1] + '://…@' + m[2] + (name ? ' · ' + name : '');
+}
+
+/* Переписать видимый текст элементов списка ключей; новые (ввод, подписка)
+   ловит наблюдатель. */
+function shortenKeys(node) {
+	var fix = function () {
+		node.querySelectorAll('.item').forEach(function (it) {
+			var inp = it.querySelector('input[type="hidden"]'), sp = it.querySelector('span');
+			if (!inp || !sp || sp.getAttribute('data-short') === inp.value) return;
+			sp.textContent = keyShort(inp.value);
+			sp.setAttribute('data-short', inp.value);
+			sp.title = inp.value;
+			sp.style.wordBreak = 'break-all';
+		});
+	};
+	fix();
+	if (window.MutationObserver)
+		new MutationObserver(fix).observe(node, { childList: true, subtree: true });
+	return node;
+}
+
 function keyId(u) {
 	var b = (u || '').split('#')[0];
 	var m = b.match(/^([a-z0-9+.-]+):\/\/([^@\/?]*@)?([^\/?]+)/i);
@@ -646,6 +676,10 @@ return view.extend({
 		keysOpt.depends('conn_mode', 'selector');
 		keysOpt.depends('conn_mode', 'urltest');
 		keysOpt.remove = function () {};
+		keysOpt.renderWidget = function () {
+			var w = form.DynamicList.prototype.renderWidget.apply(this, arguments);
+			return Promise.resolve(w).then(shortenKeys);
+		};
 		/* Загрузка подписки переписывает список в самом поле, иначе на экране
 		   и в выборе активного оставался прежний (KEYS_OPT не присваивался). */
 		KEYS_OPT = keysOpt;
