@@ -55,57 +55,6 @@ OUT=$LISTS/config.json
 # от byway, но заменить его ссылкой не может -- в общем /tmp подменённый на
 # ссылку журнал root обрезал бы и отдавал chown'ом по ссылке.
 ACCESS=/var/run/byway/access.log
-# Путь к движку -- из UCI, чтобы держать рядом пакетный Xray и свежий ручной
-# и переключаться одной командой.
-# Значение пришло снаружи (UCI правит панель): запускать от root по нему
-# нельзя без проверки (так устроены CVE luci-app-travelmate и samba4;
-# валидатор панели не защита). Порядок: каталог (в системные пишет только
-# root), исполняемость, и лишь затем версия.
-xray_ok() {
-    case "$1" in
-        /usr/bin/*|/usr/sbin/*|/usr/local/bin/*|/bin/*|/sbin/*) ;;
-        *) return 1 ;;
-    esac
-    case "$1" in *..*) return 1 ;; esac
-    [ -f "$1" ] && [ -x "$1" ] || return 1
-    # Имя xray* и ELF -- до запуска: xray_bin=/sbin/reboot с панели
-    # перезагружал роутер на каждом вызове byway.
-    case "${1##*/}" in xray*) ;; *) return 1 ;; esac
-    head -c 4 "$1" 2>/dev/null | grep -q ELF || return 1
-    "$1" version 2>/dev/null | head -1 | grep -qi "^Xray " || return 1
-}
-
-# || true обязателен: uci -q get на незаданной опции даёт 1, и под set -e
-# присваивание молча убивает скрипт.
-XRAY=$(uci -q get byway.main.xray_bin || true)
-# Жалоба отложена: путь проверяется раньше, чем заведён словарь (_t), и
-# напечатанное здесь осталось бы русским. Печатается в core/lang.sh.
-XRAY_REJECTED=""
-if [ -n "$XRAY" ] && ! xray_ok "$XRAY"; then
-    XRAY_REJECTED=$XRAY
-    XRAY=""
-fi
-
-# Версия движка числом: 26.7.28 -> 260728, 1.8.3 -> 10803. Нумерация Xray
-# менялась, сравнение по числам её переживает.
-# Нужна, потому что Go молча отбрасывает незнакомые поля JSON, и `run -test`
-# старого Xray (1.8.3 на OpenWrt 22.03) принимает конфиг с потерянным полем.
-# Звать только как команду, число читать из XRAYVER: в $(...) присваивание
-# кэша теряется в подоболочке, и бинарник запускается на каждый аутбаунд.
-XRAYVER=""
-xray_ver_num() {
-    if [ -z "$XRAYVER" ]; then
-        _xvs=$("$XRAY" version 2>/dev/null | head -1 | awk '{print $2}' | tr -cd '0-9.')
-        if [ -n "$_xvs" ]; then
-            XRAYVER=$(printf '%s' "$_xvs" | awk -F. '{ printf "%d", ($1 * 10000) + ($2 * 100) + $3 }')
-        fi
-        # Не определилась -- считаем современной, старую форму не пишем.
-        [ -n "$XRAYVER" ] || XRAYVER=999999
-    fi
-    printf '%s' "$XRAYVER"
-}
-[ -n "$XRAY" ] || XRAY=$(command -v xray || echo /usr/bin/xray)
-
 # apk с OpenWrt 25.12, opkg на прежних: подсказка не должна давать
 # команду чужого менеджера.
 PKG_FIX="apk update && apk add"

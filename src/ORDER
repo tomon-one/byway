@@ -6,7 +6,6 @@ core/uci.sh
 core/lang.sh
 core/ucode.sh
 core/util.sh
-keys/parse.sh
 config/proxies.sh
 config/gen.sh
 config/probe.sh

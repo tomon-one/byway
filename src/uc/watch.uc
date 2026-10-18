@@ -75,19 +75,6 @@ function wt_mins(s) {
 	return n + v;
 }
 
-// Путь к движку годен для запуска от root (xray_ok в core/head.sh): каталог,
-// куда пишет только root, имя xray*, ELF, отвечает как Xray.
-function wt_xray_ok(f) {
-	if (!match(f, /^\/(usr\/bin|usr\/sbin|usr\/local\/bin|bin|sbin)\//) || index(f, '..') >= 0) return false;
-	let s = fs.stat(f);
-	if (!s || s.type != 'file' || !(s.mode & 73)) return false;
-	if (substr(rindex(f, '/') >= 0 ? substr(f, rindex(f, '/') + 1) : f, 0, 4) != 'xray') return false;
-	let h = fs.open(f, 'r'), b = h ? h.read(4) : '';
-	if (h) h.close();
-	if (index(b ?? '', 'ELF') < 0) return false;
-	return match(split(run([ f, 'version' ]).out, '\n')[0] ?? '', /^Xray /i) != null;
-}
-
 // ── прогон ────────────────────────────────────────────────────────────────
 // Копия одного скрипта от автообновления 0.2.4: нужна ей полчаса, потом лишняя.
 function wt_prevbin() {
@@ -101,7 +88,7 @@ function wt_restore() {
 	let alt = false;
 	for (let f in fs.lsdir('/usr/local/bin') ?? [])
 		if (substr(f, 0, 5) == 'xray-' && (fs.stat('/usr/local/bin/' + f)?.mode & 73)) alt = true;
-	if (u('enabled') == '1' && !alt && !wt_xray_ok(getenv('BW_XRAY') || '/nonexistent') &&
+	if (u('enabled') == '1' && !alt && !x_ok(xray_bin()) &&
 	    !wt_fresh('/tmp/byway-engine-restore', 15)) {
 		fs.writefile('/tmp/byway-engine-restore', '');
 		logt('byway watch: ядра нет -- byway engine restore в фоне');

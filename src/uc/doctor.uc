@@ -160,7 +160,7 @@ function dr_needs() {
 	else
 		dbad(_t('firewall4 не найден — вероятно firewall3, 21.02 и старше'),
 		     _t('byway работает только на firewall4, это OpenWrt 22.03 и новее — на firewall3 правило по метке не встанет'));
-	let x = getenv('BW_XRAY');
+	let x = xray_bin();
 	if (run([ 'test', '-x', x ]).code == 0) {
 		dok(_f('движок: %s (%s)', join(' ', slice(split(dr_first([ x, 'version' ]), ' '), 0, 2)), x));
 		if (pid !== '') {

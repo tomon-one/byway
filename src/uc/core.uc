@@ -114,3 +114,61 @@ function run(argv, err) {
 	let out = p.read('all') ?? '';
 	return { code: p.close(), out: out };
 }
+
+// ── движок ─────────────────────────────────────────────────────────────────
+// Путь к Xray -- из UCI (xray_bin): рядом пакетный и свежий ручной, переключение
+// одной опцией. Значение пишет панель, а запускает root: без проверки нельзя
+// (так устроены CVE luci-app-travelmate и samba4; валидатор панели не защита).
+// Порядок: каталог (в системные пишет только root), исполняемость, имя xray*
+// и ELF -- и лишь затем запуск: xray_bin=/sbin/reboot с панели перезагружал
+// роутер на каждом вызове byway. Проверка -- только у команд, которым нужен
+// движок: `xray version` стоит ~0,05 с на роутере (2026-10-18).
+function x_ok(f) {
+	if (!match(f, /^\/(usr\/bin|usr\/sbin|usr\/local\/bin|bin|sbin)\//) || index(f, '..') >= 0) return false;
+	let s = fs.stat(f);
+	if (!s || s.type != 'file' || !(s.mode & 73)) return false;
+	if (substr(rindex(f, '/') >= 0 ? substr(f, rindex(f, '/') + 1) : f, 0, 4) != 'xray') return false;
+	let h = fs.open(f, 'r'), b = h ? h.read(4) : '';
+	if (h) h.close();
+	if (index(b ?? '', 'ELF') < 0) return false;
+	return match(split(run([ f, 'version' ]).out, '\n')[0] ?? '', /^Xray /i) != null;
+}
+
+// BW_GEN_XRAY -- замена ядра собирает конфиг под НОВЫМ движком (uc/engine.uc).
+// Негодный xray_bin -- жалоба в stderr (вывод разбирают панель и nft) и
+// движок из PATH.
+let X_BIN = null, X_VER = null;
+function xray_bin() {
+	if (X_BIN != null) return X_BIN;
+	X_BIN = getenv('BW_GEN_XRAY') ?? '';
+	if (X_BIN !== '') return X_BIN;
+	let x = u('xray_bin');
+	if (x !== '' && x_ok(x)) return X_BIN = x;
+	if (x !== '') {
+		let s = fs.stat(x), e = WARN_ERR;
+		WARN_ERR = fs.stderr;
+		// Файла нет или у него нет права запуска -- не «отклонён» (Ф-13).
+		if (s && s.type == 'file' && (s.mode & 73)) warnf('путь к движку отклонён: %s', x);
+		else warnf('движок не найден или не исполняемый: %s', x);
+		WARN_ERR = e;
+	}
+	for (let d in split(getenv('PATH') ?? '', ':')) {
+		let s = d !== '' ? fs.stat(d + '/xray') : null;
+		if (s && s.type == 'file' && (s.mode & 73)) return X_BIN = d + '/xray';
+	}
+	return X_BIN = '/usr/bin/xray';
+}
+
+// Версия движка числом: 26.7.28 -> 260728, 1.8.3 -> 10803 -- нумерация Xray
+// менялась, сравнение по числам её переживает. Нужна, потому что Go молча
+// отбрасывает незнакомые поля JSON, и `run -test` старого Xray (1.8.3 на
+// OpenWrt 22.03) принимает конфиг с потерянным полем. Не определилась --
+// считаем современной, старую форму не пишем.
+function _xv_n(s) { return match(s ?? '', /^[0-9]+$/) ? int(s) : 0; }
+function xray_ver() {
+	if (X_VER != null) return X_VER;
+	let v = replace(split(split(run([ xray_bin(), 'version' ]).out, '\n')[0], ' ')[1] ?? '', /[^0-9.]/g, '');
+	let p = split(v, '.');
+	X_VER = v === '' ? 999999 : _xv_n(p[0]) * 10000 + _xv_n(p[1]) * 100 + _xv_n(p[2]);
+	return X_VER;
+}

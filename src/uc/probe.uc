@@ -12,7 +12,7 @@ const PR_OUT = '/tmp/byway-probe.out';
 const PR_PID = '/var/run/byway/probe.pid';
 
 function pr_xray() {
-	let x = getenv('BW_XRAY') ?? '';
+	let x = xray_bin();
 	if (run([ 'test', '-x', x ]).code != 0)
 		dief('движка нет (%s) — ключ проверить нечем; сам ключ тут ни при чём', x);
 	return x;

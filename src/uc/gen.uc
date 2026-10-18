@@ -548,10 +548,11 @@ function g_report_bad() {
 
 // bw_uc gen: окружение -- от cmd_gen (config/gen.sh).
 function cmd_gen() {
+	if (run([ 'test', '-x', xray_bin() ]).code != 0) die('xray не найден');
 	G = { out: getenv('BW_OUT'), lists: getenv('BW_LISTS'), routes: getenv('BW_ROUTES'),
 	      merged: getenv('BW_MERGED'), subnets_file: getenv('BW_SUBNETS'), badlist: getenv('BW_BADLIST'),
-	      access_file: getenv('BW_ACCESS'), probe: getenv('BW_PROBE'), xray: getenv('BW_XRAY'),
-	      xver: int(getenv('BW_XRAYVER') || '999999'), psni: '', pws: '' };
+	      access_file: getenv('BW_ACCESS'), probe: getenv('BW_PROBE'), xray: xray_bin(),
+	      xver: xray_ver(), psni: '', pws: '' };
 	LJ_BAD = G.badlist;
 	LJ_BF = null;
 	let D = G.lists + '/domains.lst';

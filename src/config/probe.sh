@@ -3,13 +3,12 @@
 # ucode сигналы не ловит, и прерванная проба оставила бы движок и черновик с uuid.
 
 pr_env() {
-    xray_ver_num >/dev/null
     PR_MARK=$(ob_env_mark)
 }
 
 cmd_check() {
     pr_env
-    BW_XRAY=$XRAY BW_XRAYVER=$XRAYVER BW_SELFMARK=$PR_MARK bw_uc check "$@"
+    BW_SELFMARK=$PR_MARK bw_uc check "$@"
 }
 
 # PROBE_URL -- проверить через ноду конкретный сайт, а не только выход;
@@ -22,5 +21,5 @@ cmd_probe() {
               [ ! -f "$_pf" ] || : > "$_pf"
           done' EXIT INT TERM
     pr_env
-    BW_XRAY=$XRAY BW_XRAYVER=$XRAYVER BW_SELFMARK=$PR_MARK bw_uc probe "$@"
+    BW_SELFMARK=$PR_MARK bw_uc probe "$@"
 }

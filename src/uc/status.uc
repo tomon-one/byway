@@ -177,7 +177,7 @@ function cmd_status(arg) {
 	}
 	if (arg == '--short') return;
 
-	let x = getenv('BW_XRAY');
+	let x = xray_bin();
 	let vf = split(split(run([ x, 'version' ]).out, '\n')[0], ' ');
 	print(_f('движок      %s\n', join(' ', slice(vf, 0, 2)) + ' — ' + x));
 	if (xh && st_dial_bug(x))
@@ -261,7 +261,7 @@ function hl_key(url) {
 	let N = r.N;
 	// Версию ядра -- только для шифрования VLESS: запуск xray дорог.
 	if (N.ENC != '' && N.ENC != 'none') {
-		let v = split(split(split(run([ getenv('BW_XRAY'), 'version' ]).out, '\n')[0], ' ')[1] ?? '', '.');
+		let v = split(split(split(run([ xray_bin(), 'version' ]).out, '\n')[0], ' ')[1] ?? '', '.');
 		if (length(v) == 3 && int(v[0]) * 10000 + int(v[1]) * 100 + int(v[2]) < 250829) return null;
 	}
 	if (!g_port_ok(N.PORT)) return null;
@@ -388,6 +388,3 @@ function cmd_health() {
 	if (a !== '') print(_t('dns\tok\tотвечает\n'));
 	else hl_fail('dns', _t('не выдаёт адрес'));
 }
-
-// bw_uc rawok: свой конфиг -- один JSON-объект аутбаунда (для parse_node).
-function cmd_rawok() { exit(ob_raw('proxy') == null ? 1 : 0); }

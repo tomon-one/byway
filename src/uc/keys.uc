@@ -1,6 +1,6 @@
 // Разбор ключа (vless, vmess, trojan, ss, socks, hysteria2, wireguard).
-// Логика -- прежний keys/parse.uc без правок разбора: на выходе те же команды
-// sh (bw_uc parse -> eval в parse_node) и, для сборки на ucode, сам ключ
+// Логика -- прежний keys/parse.uc без правок разбора: на выходе команды sh
+// (bw_uc parse, по ним сверяет scripts/parse-check.sh) и, для сборки, сам ключ
 // объектом (N) с сообщениями (msgs, fatal). Выход из середины -- исключением
 // PARSE_STOP: die каркаса завершает программу.
 //
@@ -394,7 +394,7 @@ function parse_key(URL, prev_sni, prev_wshost) {
 		        if (pn != '' && !(pn in known))
 		            pk_warnf("параметр ссылки «%s» byway в конфиг не переносит — стоит проверить, важен ли он", pn);
 
-		// Шифрование VLESS: форма -- образцом, версию ядра проверяет parse_node.
+		// Шифрование VLESS: форма -- образцом, версию ядра -- ob_key (uc/outbound.uc).
 		if (PK_N.ENC != '' && PK_N.ENC != 'none') {
 		    if (PK_N.PROTO != 'vless') { pk_flush(); pk_dief("encryption=%s бывает только у vless", PK_N.ENC); }
 		    if (!pk_grepq(/^mlkem768x25519plus\.[A-Za-z0-9._+\/=-]+$/, PK_N.ENC)) {

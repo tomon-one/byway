@@ -399,7 +399,7 @@ function en_local(f) {
 	if (!fs.stat(f)) dief('нет файла %s', f);
 	if (run([ 'sh', '-c', 'command -v unzip' ]).code != 0) dief('нет unzip — поставить: %s unzip', getenv('BW_PKGFIX'));
 	E.asset = en_asset() ?? '';
-	E.old = getenv('BW_XRAY') ?? '';
+	E.old = xray_bin();
 	E.ov = en_ver(E.old);
 	E.pkg = f;
 	E.sz = en_size(f);
@@ -425,7 +425,7 @@ function cmd_engine(arg) {
 		dief('на этом процессоре сборки Xray-core с GitHub не запускаются — движок ставится и обновляется пакетом OpenWrt: %s xray-core', pf);
 	E.asset = en_asset();
 	if (!E.asset) dief('неизвестно, какой файл выпуска брать для %s', en_uname());
-	E.old = getenv('BW_XRAY') ?? '';
+	E.old = xray_bin();
 	E.ov = en_ver(E.old);
 
 	if (arg === '' || arg == '--check') {
@@ -488,7 +488,7 @@ function cmd_engine(arg) {
 	E.new = '/usr/local/bin/xray-' + E.nw;
 	en_workdir();
 	// Нужная версия уже лежит рядом -- переключение без загрузки.
-	if (E.ov !== '' && E.new != E.old && wt_xray_ok(E.new)) { en_switch(); return; }
+	if (E.ov !== '' && E.new != E.old && x_ok(E.new)) { en_switch(); return; }
 	// Архив в память: ~14 МБ. Меньше 40 МБ -- живой движок рядом с ним
 	// рискует OOM, а он и есть туннель.
 	if (en_mem_kb() < 40960) dief('памяти доступно %s МБ, для замены нужно не меньше 40 — ничего не тронуто', en_mb(en_mem_kb()));

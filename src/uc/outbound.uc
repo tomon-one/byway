@@ -6,8 +6,8 @@
 // Функции -- верхнего уровня, состояние -- OB_* (см. uc/keys.uc о ucode 22.03).
 
 const OB_STOP = '__byway_outbound_stop__';
-// OB_QUIET_PARSE: сообщения разбора не выводить (направления: прежде
-// parse_node шёл в >/dev/null, а сообщения транспорта -- на экран).
+// OB_QUIET_PARSE: сообщения разбора не выводить (направления: сообщения
+// разбора молчат, сообщения транспорта -- на экран).
 let OB_OUT = [], OB_QUIET_PARSE = false, OB_FATAL = null;
 
 // Сообщение -- записью { c: warn|warnf|die|dief, f, a, e: в stderr }; в тихом
@@ -33,11 +33,11 @@ function ob_val_or(name, val, re, def, where) {
 	return def;
 }
 
-function ob_xver() { let v = getenv('BW_XRAYVER'); return v ? int(v) : 999999; }
+function ob_xver() { return xray_ver(); }
 
 // Версия ядра для сообщения: первая строка `xray version`, поля как у cut.
 function ob_xrayv(fields) {
-	let r = run([ getenv('BW_XRAY') ?? 'xray', 'version' ]);
+	let r = run([ xray_bin(), 'version' ]);
 	let f = split(split(r.out, '\n')[0], ' ');
 	return fields == 2 ? (f[1] ?? '') : join(' ', slice(f, 0, 2));
 }
@@ -238,7 +238,7 @@ function ob_raw_hosts(o) {
 	return seen.__list;
 }
 
-// Разбор ключа (как parse_node) и блок аутбаунда (как build_stream +
+// Разбор ключа (parse_key) и блок аутбаунда (как build_stream +
 // proxy_block). url пуст -- ключ или свой конфиг из настроек. Итог --
 // { N, block, host, raw }; отказ -- исключение OB_STOP.
 function ob_key(url, tag, prev_sni, prev_wshost) {

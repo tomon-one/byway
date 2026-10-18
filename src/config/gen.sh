@@ -11,11 +11,9 @@ cmd_gen() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
 
-    # Замена ядра проверяет конфиг под новым движком до переключения на него
-    # (uc/engine.uc): путь -- окружением.
-    if [ -n "${BW_GEN_XRAY:-}" ]; then XRAY=$BW_GEN_XRAY; XRAYVER=""; fi
+    # Путь к движку и его версию берёт ucode (xray_bin, xray_ver в uc/core.uc);
+    # замена ядра подставляет новый окружением BW_GEN_XRAY.
     [ -f "$CONF" ] || dief "нет %s" "$CONF"
-    [ -x "$XRAY" ] || die "xray не найден"
     mkdir -p "$LISTS"
     # Каталог root для журнала обращений и рабочих файлов stat: в общем /tmp
     # движок не от root (ujail) мог бы занять имя заранее (Д-7).
@@ -28,12 +26,11 @@ cmd_gen() {
     D=$LISTS/domains.lst
     S=$(merged_subnets)
     MERGED=$(merged_domains)
-    xray_ver_num >/dev/null
     _gm=$(ob_env_mark)
     _grc=0
     BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_MERGED=$MERGED BW_SUBNETS=$S \
     BW_BADLIST=$BADLIST BW_ACCESS=$ACCESS BW_PROBE=$PROBE_DOMAIN BW_POOL6_DEF=$POOL6_DEF \
-    BW_XRAY=$XRAY BW_XRAYVER=$XRAYVER BW_SELFMARK=$_gm \
+    BW_SELFMARK=$_gm \
         bw_uc gen || _grc=$?
     rm -rf "$_lock" 2>/dev/null || true
     [ "$_grc" = 0 ] || exit "$_grc"
