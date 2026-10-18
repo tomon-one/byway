@@ -636,9 +636,9 @@ redir_port() {
     printf '%s' "$_rdp"
 }
 
-# Аутбаунды: разбор ключа, транспорт, защита и блок JSON -- в ucode
-# (uc/outbound.uc); здесь вызов и eval его команд: N_*, блок, сообщения по
-# порядку (как у разбора ключа).
+# Аутбаунд одного ключа для пробы (config/probe.sh): разбор, транспорт, защита
+# и блок JSON -- в ucode (uc/outbound.uc); здесь вызов и eval его команд: N_*,
+# блок, сообщения по порядку (как у разбора ключа). gen собирает аутбаунды сам.
 
 # Метка исходящих для «VPN для программ на роутере» -- числом, пока перехват
 # на shell. Последняя строка: self_mark печатает жалобы в тот же вывод.
@@ -658,35 +658,15 @@ ob_eval() {
     eval "$_obo"
 }
 
-# Аутбаунды целиком: PROXIES, VPN_HOSTS, OBSERVATORY, BALANCERS,
-# PROXY_TARGET, LAST_TARGET, PROXY_KEYIDX, _n, N_*. SKIP_KEYS -- ключи
-# автовыбора, которые отверг сам движок (повтор сборки в cmd_gen).
-build_proxies() {
-    xray_ver_num >/dev/null
-    _obm=$(ob_env_mark)
-    _obo=$(BW_SKIP=${SKIP_KEYS:-} BW_SNI=${N_SNI:-} BW_WSHOST=${N_WSHOST:-} \
-           BW_XRAYVER=$XRAYVER BW_XRAY=$XRAY BW_SELFMARK=$_obm \
-           bw_uc proxies) || die "аутбаунд не собрался: сбой ucode"
-    eval "$_obo"
-}
-
-# Сборка конфига Xray: cmd_gen и его шаги gen_*. $OUT меняется, только если
-# ядро приняло конфиг (run -test).
-
-# Список -> строки JSON-массива: проверка формы записи и вывод -- в ucode
-# (uc/lists.uc, list_json), отброшенное -- в $BADLIST, его называет cmd_gen.
-list_to_json() {
-    bw_uc listjson "$1" "${2:-}" "$BADLIST"
-}
+# Сборка конфига Xray: cmd_gen готовит окружение, конфиг собирает ucode
+# (uc/gen.uc). $OUT меняется, только если ядро приняло конфиг (run -test).
 
 cmd_gen() {
     # Замок: панель и cron могут позвать gen одновременно, а черновик один.
     _lock=/var/run/byway-gen.lock
     take_lock "$_lock" "$(_t 'сборка конфига')" || die "другая сборка конфига не закончилась за 30 секунд"
-    # Ловушка -- подстраховка: замок снимается явно в конце каждой ветки (в
-    # живом gen EXIT-ловушка его не снимала, и следующая сборка ждала 30 с).
-    # INT/TERM -- выйти (EXIT снимет): ловушка без exit оставляла процесс
-    # идти дальше после Ctrl+C уже без рабочего каталога.
+    # Ловушка снимает замок на любом выходе, в том числе на отказе ucode.
+    # INT/TERM -- выйти (EXIT снимет).
     trap 'rm -rf "$_lock" 2>/dev/null; true' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -694,694 +674,26 @@ cmd_gen() {
     [ -f "$CONF" ] || dief "нет %s" "$CONF"
     [ -x "$XRAY" ] || die "xray не найден"
     mkdir -p "$LISTS"
-    # Черновики частей конфига -- в каталоге root, не в общем /tmp: их пишет
-    # root, а потом вставляет в конфиг движка; движок не от root (ujail) мог
-    # занять имя в /tmp заранее и подменить содержимое (Д-7). Тот же каталог,
-    # что у журнала обращений и рабочих файлов stat.
-    GEN_WORK=/var/run/byway
-    [ -d "$GEN_WORK" ] || { mkdir -p "$GEN_WORK" && chmod 755 "$GEN_WORK"; } 2>/dev/null || true
-    # Список негодных строк -- до сборки списков и направлений: прежде его
-    # обнуляли после, и строки с пробелом из направлений терялись молча.
+    # Каталог root для журнала обращений и рабочих файлов stat: в общем /tmp
+    # движок не от root (ujail) мог бы занять имя заранее (Д-7).
+    [ -d /var/run/byway ] || { mkdir -p /var/run/byway && chmod 755 /var/run/byway; } 2>/dev/null || true
+    # Список негодных строк -- до сборки списков и направлений.
     : > "$BADLIST" 2>/dev/null || true
 
+    # Слияние списков с пресетами и метка сокетов -- пока на shell (списки,
+    # перехват): ucode получает готовое.
     D=$LISTS/domains.lst
     S=$(merged_subnets)
-    # Объединённый список -- один раз на сборку: читается трижды (DNS, маршрут,
-    # отчёт).
     MERGED=$(merged_domains)
-    gen_routes
-    [ -f "$D" ] || dief "нет списка доменов %s" "$D"
-    [ -f "$S" ] || warnf "нет списка подсетей %s — правило по адресам не будет создано" "$S"
-    gen_dns
-    gen_inbounds
-    gen_log
-    gen_outbounds
-    _dsave=$DIRECT_SET
-    gen_dns_route
-
-    # Черновик в память, не во флеш (43.7 МБ): живёт секунды, а на неудачной
-    # сборке оставался бы файл с uuid и правами 0644.
-    TMP=/tmp/byway-config.new.json
-    # Сначала rm, потом создание под umask 077: `: >` усекал бы существующий
-    # файл с его правами и чужими открытыми дескрипторами. Имя предсказуемо,
-    # /tmp общий, внутри uuid: сосед (dnsmasq) мог создать файл 0666 заранее и
-    # читать конфиг; chmod после записи не спасает.
-    rm -f "$TMP" 2>/dev/null || true
-    (umask 077; : > "$TMP") 2>/dev/null || true
-    # Движок не от root читает конфиг группой byway (init, xray_user_prep);
-    # нет группы -- остаётся 600.
-    chgrp byway "$TMP" 2>/dev/null && chmod 640 "$TMP" 2>/dev/null || true
-    gen_json
-
-    # Один прогон движка, не три: из вывода берутся и предупреждения, и причина
-    # отказа.
-    # Каталог журнала обращений: движок при проверке открывает файл и без
-    # каталога отвергает конфиг (первый gen при обновлении с 0.2.4 -- служба
-    # ещё не стартовала и каталог не создавала). Права те же, что у init.
-    [ -d /var/run/byway ] || { mkdir -p /var/run/byway && chmod 755 /var/run/byway; } 2>/dev/null || true
-    _test=$("$XRAY" run -test -c "$TMP" 2>&1) && _testok=1 || _testok=0
-    # Автовыбор: ключ, который отвергает только сам движок (vless без TLS к
-    # публичному адресу на ядре 26.7.11+, byway такое пропускает), не должен
-    # валить сборку целиком -- как и тот, что отверг разбор (Ф-3). Движок
-    # называет outbound proxy-N: ключ снимается, сборка повторяется. Хотя бы
-    # один ключ остаётся.
-    _gtry=0
-    SKIP_KEYS=""
-    while [ "$_testok" = "0" ] && [ "$_gtry" -lt 6 ] && [ "$(u conn_mode)" = "urltest" ] && [ "${_n:-0}" -gt 1 ]; do
-        _bk=$(printf '%s' "$_test" | sed -n 's/.*proxy-\([0-9][0-9]*\).*/\1/p' | head -1)
-        [ -n "$_bk" ] || break
-        _bki=$(printf '%s' "$PROXY_KEYIDX" | awk -v n="$_bk" '{print $(n + 1)}')
-        [ -n "$_bki" ] || break
-        warnf "ключ %s отвергнут движком — пропущен: %s" "$(( _bki + 1 ))" "$(printf '%s\n' "$_test" | grep "proxy-$_bk" | head -1 | awk -F'> ' '{print $NF}' | cut -c1-120)"
-        SKIP_KEYS="$SKIP_KEYS $_bki"
-        build_proxies
-        VPN_HOSTS="$VPN_HOSTS $ROUTE_HOSTS"
-        DIRECT_SET=$_dsave
-        gen_dns_route
-        gen_json
-        _gtry=$((_gtry + 1))
-        _test=$("$XRAY" run -test -c "$TMP" 2>&1) && _testok=1 || _testok=0
-    done
-    if [ "$_testok" = "1" ]; then
-        # Предупреждения движка не глотать: Xray помечает транспорт устаревшим
-        # за версию-другую до удаления, другого заблаговременного сигнала нет.
-        # h2 и quic прошли путь warning -> удаление; ws и httpupgrade сейчас в
-        # warning. Предупреждение может касаться части транспорта (kcp: только
-        # поля) -- читать целиком.
-        printf '%s\n' "$_test" |
-          grep -i "deprecated\|will be removed\|migrate to" |
-          sed 's/.*errors: //' | cut -c1-96 | sort -u |
-          while IFS= read -r _w; do warnf "движок: %s" "$_w"; done
-
-        # Отброшенные записи называем вслух и до сравнения с рабочим:
-        # молчаливая потеря выглядит как «byway не работает с этим доменом».
-        # Считаем уникальные: список читается дважды (DNS и маршрут).
-        _bad=$(sort -u "$BADLIST" 2>/dev/null | grep -c . || true)
-        if [ "${_bad:-0}" -gt 0 ]; then
-            warnf "записей отброшено как неподходящие: %s" "$_bad"
-            # Через warnf: панель показывает только строки с [!], а голые
-            # записи терялись (Д-5).
-            sort -u "$BADLIST" 2>/dev/null | head -10 |
-                while IFS= read -r _bw; do warnf "    %s" "$_bw"; done
-            [ "$_bad" -le 10 ] || warnf "    … и ещё %s (весь список: sort -u %s)" "$(( _bad - 10 ))" "$BADLIST"
-            warn "  причина: не похоже ни на домен (буквы, цифры, дефис и точки; последняя часть — не короче двух букв), ни на подсеть IPv4, либо длиннее 253 знаков"
-        fi
-        # Не изменилось -- рабочий не трогаем: панель и procd зовут gen при
-        # каждом «Сохранить и применить», это две записи во флеш на нажатие.
-        if cmp -s "$TMP" "$OUT"; then
-            rm -f "$TMP" 2>/dev/null || true
-            rm -rf "$_lock" 2>/dev/null || true
-            say "конфиг не изменился, рабочий оставлен как есть"
-            sayf "  доменов %s, подсетей %s" "$(count_list "$MERGED")" "$(count_list "$S")"
-            return 0
-        fi
-        # Место -- до подмены: обрыв записи оставил бы на месте рабочего
-        # половину конфига.
-        _need=$(( $(wc -c < "$TMP") / 1024 + 32 ))
-        _have=$(df -k "$LISTS" 2>/dev/null | awk 'NR==2{print $4}')
-        [ "${_have:-999999}" -ge "$_need" ] ||
-            dief "на флеше свободно %s КБ, для конфига нужно %s -- рабочий не тронут" \
-                 "${_have:-0}" "$_need"
-        mv "$TMP" "$OUT"
-        # В конфиге uuid ключа: читают root и, когда движок идёт не от root
-        # (то же условие, что у xray_user_prep в init), группа byway. Голый
-        # 600 оставлял следующий respawn движка без права прочитать конфиг.
-        if [ "$(u xray_root)" != "1" ] && [ -x /sbin/ujail ] &&
-           chgrp byway "$OUT" 2>/dev/null; then
-            chmod 640 "$OUT" 2>/dev/null || true
-        else
-            chmod 600 "$OUT" 2>/dev/null || true
-        fi
-        sayf "конфиг собран и проверен движком: %s (%s байт)" "$OUT" "$(wc -c < "$OUT")"
-        _own=$(count_list "$D")
-        _all=$(count_list "$MERGED")
-        if [ "$_all" -gt "$_own" ]; then
-            sayf "  доменов %s (свои %s + пресеты), подсетей %s" "$_all" "$_own" "$(count_list "$S")"
-        else
-            sayf "  доменов %s, подсетей %s" "$_own" "$(count_list "$S")"
-        fi
-        if [ "$(u conn_mode)" = "urltest" ]; then
-            sayf "  подключение: %s — Xray-core выбирает рабочий ключ по задержке" "${N_LABEL}"
-        else
-            _lb=${N_LABEL:-$N_HOST}
-            sayf "  подключение: %s (%s:%s), транспорт %s, защита %s" "$_lb" "$N_HOST" "$N_PORT" "$N_TYPE" "$N_SEC"
-        fi
-        # Ширина -- по объединённому списку: одна строка 0.0.0.0/0 молча
-        # превращает режим «по спискам» в полный туннель, да ещё хуже all --
-        # правило «русские зоны напрямую» есть только в нём.
-        net_warn "$(merged_subnets)"
-        sayf "  пул fakeip %s, DNS-вход %s:53, tproxy %s, прокси роутера 127.0.0.1:%s" "$POOL" "$DNS_LISTEN" "$TP_PORT" "$LOCAL_PORT"
-        rm -rf "$_lock" 2>/dev/null || true
-    else
-        warnf "движок отверг конфиг, черновик остался в %s:" "$TMP"
-        printf '%s\n' "$_test" | tail -5 | sed 's/^/    /'
-        xray_hint "$_test"
-        rm -rf "$_lock" 2>/dev/null || true
-        exit 1
-    fi
-}
-
-# Направления со своим выходом: ноды, правила и хосты (ROUTE_*), общий список
-# MAINDOM без их доменов.
-gen_routes() {
-    # До главного ключа: разбор ссылки пишет в общие N_*, и главный должен
-    # разобраться последним, иначе сводка расскажет про чужую ноду. Пояснение
-    # внутри ROUTE_RULES: без направлений оно не должно попасть в конфиг.
-    ROUTE_OUT=""; ROUTE_HOSTS=""; ROUTE_N=0; ROUTE_OK=""
-    ROUTE_RULES="
-      // Направления идут ПЕРЕД общими правилами: Xray берёт первое
-      // совпавшее, и домен, попавший и сюда, и в общий список, уходит
-      // в свою ноду, а не в основную."
-    for _rn in $(route_names); do
-        [ "$(uci -q get "byway.$_rn.enabled")" = "0" ] && continue
-        _rlb=$(uci -q get "byway.$_rn.label" || true)
-        _rf=$ROUTES_DIR/$_rn.lst
-        if [ ! -s "$_rf" ]; then
-            warnf "направление «%s»: список %s пуст, пропущено" "$_rn" "$_rf"
-            continue
-        fi
-        _rurl=$(route_key "$_rlb" || true)
-        if [ -z "$_rurl" ]; then
-            warnf "направление «%s»: ключа с меткой «%s» среди добавленных нет" "$_rn" "$_rlb"
-            continue
-        fi
-        # Подоболочка: негодный ключ не должен ронять сборку остальных.
-        if ! ( ob_eval "route-$_rn" "$_rurl" ) >/dev/null 2>&1; then
-            warnf "направление «%s»: ключ не разбирается, пропущено" "$_rn"
-            continue
-        fi
-        ob_eval "route-$_rn" "$_rurl" quiet
-        ROUTE_OUT="$ROUTE_OUT
-$PB,"
-        ROUTE_HOSTS="$ROUTE_HOSTS $N_HOST"
-
-        # Через list_to_json, как главный список: route_list отсеивает только
-        # «не IPv4», и кавычка внутри записи закрывала бы массив domain и
-        # дописывала правила в конфиг движка (JSON верен, run -test принимает).
-        # Файлы направлений пишет роль панели, а конфиг исполняет root.
-        _rdt=/tmp/byway-route-dom.$$
-        route_list "$_rf" dom > "$_rdt" 2>/dev/null || : > "$_rdt"
-        _rd=$(list_to_json "$_rdt" "domain:")
-        rm -f "$_rdt" 2>/dev/null || true
-        [ -n "$_rd" ] && ROUTE_RULES="$ROUTE_RULES
-      { \"type\": \"field\", \"domain\": [
-$_rd
-        ], \"outboundTag\": \"route-$_rn\" },"
-        # Подсети тоже через list_to_json: прямая печать не проверяла октеты и
-        # маску, а 10.0.0.0/33 останавливала gen -- и не применялась ни одна
-        # настройка.
-        _rst=/tmp/byway-route-net.$$
-        route_list "$_rf" net > "$_rst" 2>/dev/null || : > "$_rst"
-        _rs=$(list_to_json "$_rst" "")
-        rm -f "$_rst" 2>/dev/null || true
-        [ -n "$_rs" ] && ROUTE_RULES="$ROUTE_RULES
-      { \"type\": \"field\", \"ip\": [
-$_rs
-        ], \"outboundTag\": \"route-$_rn\" },"
-        ROUTE_N=$((ROUTE_N + 1))
-        ROUTE_OK="$ROUTE_OK $_rn"
-    done
-    [ "$ROUTE_N" = 0 ] && ROUTE_RULES=""
-
-    # Общее правило -- без доменов направлений (в fakedns они нужны, во втором
-    # правиле лишние). grep -Fvxf, не comm: comm в busybox нет.
-    MAINDOM=$MERGED
-    if [ "$ROUTE_N" -gt 0 ]; then
-        MAINDOM=/tmp/byway-domains-main.lst
-        _rall=/tmp/byway-domains-routes.lst
-        : > "$_rall"
-        # Только направления, получившие правило: домены пропущенного
-        # (нет ключа, негодный ключ) остаются в общем и идут в основной
-        # туннель, а не повисают без правила.
-        for _rn2 in $ROUTE_OK; do
-            [ -f "$ROUTES_DIR/$_rn2.lst" ] && route_list "$ROUTES_DIR/$_rn2.lst" dom >> "$_rall"
-        done
-        grep -Fvxf "$_rall" "$MERGED" > "$MAINDOM" 2>/dev/null || cp "$MERGED" "$MAINDOM"
-        : > "$_rall"
-    fi
-    [ "$ROUTE_N" -gt 0 ] && sayf "направлений со своим выходом: %s" "$ROUTE_N"
-    return 0
-}
-
-# Резолверы: пул fakeip, основной и запасной upstream, bootstrap.
-gen_dns() {
-    # val_or: эти настройки уходили в конфиг движка сырыми (`"port": $TP_PORT`
-    # даже без кавычек), входят в EXPORT_KEYS, и значением с `", ...` можно
-    # было задать всю конфигурацию Xray, исполняемую от root; `run -test`
-    # проверяет только синтаксис. Описка в порте расходила конфиг движка и nft.
-    POOL=$(eff_pool loud)
-    DNS_UP=$(val_or dns_upstream "$(u dns_upstream)" \
-             '^(https|tcp|udp|tls|quic)://[A-Za-z0-9._:/?=&%+-]+$' \
-             https://8.8.8.8/dns-query "$(_t 'конфига движка')")
-
-    # Запасной резолвер: Xray идёт к следующему серверу по порядку, когда
-    # предыдущий молчит или отказал. С одним молчащим запрос гибнет. Стоит выше
-    # fakedns: пустой ответ DoH считается неудачей. Домен без A-записи (_dmarc)
-    # всё равно получает fakeip -- пусты оба. Умолчание -- другой провайдер
-    # (8.8.8.8 и 8.8.4.4 за одним AS), отключает none.
-    _du2=$(u dns_upstream2)
-    case "$_du2" in
-      none|off|-)
-        DNS_UP2="" ;;
-      *)
-        DNS_UP2=$(val_or dns_upstream2 "$_du2" \
-                  '^(https|tcp|udp|tls|quic)://[A-Za-z0-9._:/?=&%+-]+$' \
-                  https://1.1.1.1/dns-query "$(_t 'конфига движка')") ;;
-    esac
-    # Тот же адрес дважды -- не запас, а лишняя строка в конфиге.
-    [ "$DNS_UP2" = "$DNS_UP" ] && DNS_UP2=""
-
-    # bootstrap: кем разрешать имя самого резолвера. Имя DoH-сервера byway
-    # умеет спросить только у него же: круг, дом без DNS молча. Bootstrap --
-    # простой резолвер строго для этих имён (domains); skipFallback не пускает
-    # спрашивать сам сервер. Имя нужно провайдерам с anycast (dns.nextdns.io).
-    _bh=""
-    for _u in "$DNS_UP" "$DNS_UP2"; do
-        [ -n "$_u" ] || continue
-        _h=$(dns_host "$_u")
-        [ -n "$_h" ] && _bh="$_bh${_bh:+, }\"full:$_h\""
-    done
-    DNSBOOT=""
-    if [ -n "$_bh" ]; then
-        _bs=$(val_or dns_bootstrap "$(u dns_bootstrap)" \
-              '^([0-9]{1,3}(\.[0-9]{1,3}){3}|(tcp|udp)://[0-9.]{7,15})(:[0-9]{1,5})?$' \
-              "" "$(_t 'конфига движка')")
-        if [ -n "$_bs" ]; then
-            DNSBOOT='
-      { "address": "'"$_bs"'", "domains": [ '"$_bh"' ], "skipFallback": true },'
-        else
-            # Громкий отказ с возвратом к рабочему: имя без bootstrap -- дом
-            # без DNS при зелёном отчёте.
-            warn "резолвер задан именем, а bootstrap не задан — разрешать имя нечем, взяты адреса по умолчанию"
-            warn "  вписать: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway"
-            DNS_UP=https://8.8.8.8/dns-query
-            DNS_UP2=https://1.1.1.1/dns-query
-        fi
-    fi
-
-    DNS_UP2LINE=""
-    [ -n "$DNS_UP2" ] && DNS_UP2LINE='
-      "'"$DNS_UP2"'",'
-    return 0
-}
-
-# Адреса и порты входов, вход собственного трафика роутера (redir-in), развилка
-# direct по версии Xray.
-gen_inbounds() {
-    DNS_LISTEN=$(val_or dns_listen "$(dns_addr)" \
-                 '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' 127.0.0.42 "$(_t 'конфига движка')")
-    TP_PORT=$(val_or tproxy_port "$(u tproxy_port)" '^[0-9]{1,5}$' 1602 "$(_t 'конфига движка')")
-    port_ok "$TP_PORT" || TP_PORT=1602
-    # Порт прокси для самого роутера. Слушает только петлю.
-    LOCAL_PORT=$(val_or local_proxy_port "$(u local_proxy_port)" \
-                 '^[0-9]{1,5}$' 1603 "$(_t 'конфига движка')")
-    port_ok "$LOCAL_PORT" || LOCAL_PORT=1603
-    # Вход для собственного трафика роутера: prerouting ловит только мосты, а
-    # то, что роутер шлёт сам, идёт через output мимо, хотя резолвер уже отдал
-    # fakeip («Operation not permitted»: byway update тянет файлы с github).
-    # redirect, не tproxy: tproxy в output ядро не умеет; исходный адрес движок
-    # берёт через SO_ORIGINAL_DST. Только TCP: у UDP исходный адрес после
-    # подмены не узнать.
-    # Петлю закрывает метка на исходящих сокетах движка (self_mark):
-    # неопознанный пакет движок выпускает на тот же fakeip, и правило
-    # заворачивало бы его обратно.
-    REDIR_IN=""
-    # Метка на исходящих direct и dns-out; пусто при выключенном заворачивании.
-    SELFSO=""
-    [ "$(u router_via_vpn)" = "1" ] && SELFSO=", \"streamSettings\": { \"sockopt\": { \"mark\": $(self_mark_dec) } }"
-    # С 26.9.8 domainStrategy у direct живёт в sockopt (freedom.domainStrategy
-    # движок переносит сам с «deprecated»). Удалят -- поле отбросится молча, и
-    # direct отдаст домен системному резолверу, то есть обратно в dnsmasq.
-    # Старым движкам sockopt-поле не заменяло своё, отсюда развилка.
     xray_ver_num >/dev/null
-    DIRECT_SET=", \"settings\": { \"domainStrategy\": \"UseIP\" }"
-    _dso=""
-    if [ "$XRAYVER" -ge 260908 ]; then
-        DIRECT_SET=""
-        _dso="\"domainStrategy\": \"UseIP\""
-    fi
-    [ "$(u router_via_vpn)" = "1" ] && _dso="${_dso:+$_dso, }\"mark\": $(self_mark_dec)"
-    DIRECTSO=""
-    [ -n "$_dso" ] && DIRECTSO=", \"streamSettings\": { \"sockopt\": { $_dso } }"
-    RD_PORT=$(redir_port "$(_t 'конфига движка')")
-    # Вход двухсемейный, пока в output есть правило для fakeip6: ядро
-    # подставляет ::1 для локального пакета, и на [::1]:1604 никто не слушал
-    # (busybox wget падал, а на нём обновление списков).
-    if v6on; then RD_LISTEN="::"; else RD_LISTEN=127.0.0.1; fi
-    if [ -n "$RD_PORT" ]; then
-        REDIR_IN=',
-    {
-      "tag": "redir-in",
-      "listen": "'"$RD_LISTEN"'",
-      "port": '"$RD_PORT"',
-      "protocol": "dokodemo-door",
-      "settings": { "network": "tcp", "followRedirect": true },
-      "sniffing": { "enabled": true, "destOverride": [ "fakedns", "http", "tls" ], "metadataOnly": false, "routeOnly": false }
-    }'
-    fi
-    return 0
-}
-
-# Уровень журнала и журнал обращений Xray.
-gen_log() {
-    LOGLVL=$(u log_level)
-    case "$LOGLVL" in
-      debug|info|warning|error|none) ;;
-      *) [ -n "$LOGLVL" ] && warnf "уровень журнала «%s» не годится, взят warning" "$LOGLVL"
-         LOGLVL=warning ;;
-    esac
-
-    # Журнал обращений Xray отдельный от журнала ошибок и включён по умолчанию,
-    # поэтому свой файл в памяти, а не syslog: буфер 256 КБ держал 20 минут,
-    # cmd_stat раз в час недосчитывал две трети соединений. syslog -- для жалоб
-    # движка, hostapd и netifd.
-    case "$LOGLVL" in
-      # Подробные уровни тоже в файл: отладку начинают, когда нужна история, а
-      # syslog её вытесняет первой.
-      info|debug) ACCESSLOG=', "access": "'"$ACCESS"'"' ;;
-      # Для cmd_stat («чем пользуются»): при выключенном сборе журнал не нужен,
-      # при включённом без него экран пуст. В режиме «всё через VPN» сбора нет:
-      # журнал писал бы адрес каждого соединения дома.
-      *)          if [ "$(u show_usage)" = "1" ] && [ "$(u list_mode)" != "all" ]; then
-                      ACCESSLOG=', "access": "'"$ACCESS"'"'
-                  else
-                      ACCESSLOG=', "access": "none"'
-                      # Усекаем, не удаляем: движок держит файл открытым и
-                      # писал бы в удалённый невидимо. Через проверку, не
-                      # `2>/dev/null || true`: у `:` (особая встроенная) ошибка
-                      # перенаправления роняет весь скрипт, а каталога до
-                      # первого старта после загрузки нет.
-                      [ ! -f "$ACCESS" ] || : > "$ACCESS"
-                  fi ;;
-    esac
-    return 0
-}
-
-# Размер пула fakedns, предупреждение о длинном списке, аутбаунды.
-gen_outbounds() {
-    # poolSize -- потолок пар «домен-адрес». Литерал 65535 при настраиваемом
-    # пуле: у /15 (131 070 адресов) половина не использовалась, а список
-    # длиннее 65 535 не помещался. Вытесненная из LRU пара отдаёт адрес другому
-    # домену: соединение уходит к чужому хосту без ошибки.
-    POOL_SIZE=$(pool_size "$POOL")
-    _dcount=$(count_list "$MERGED"); _dcount=${_dcount:-0}
-    if [ "$_dcount" -gt "$POOL_SIZE" ]; then
-        warnf "доменов %s, а адресов в пуле %s — часть будет вытесняться и уводить соединения к чужому хосту. Расширить пул (byway.main.fakeip_pool) либо укоротить список" \
-              "$_dcount" "$POOL_SIZE"
-    fi
-
-    build_proxies
-    # Ноды направлений тоже в исключения: иначе петля.
-    VPN_HOSTS="$VPN_HOSTS $ROUTE_HOSTS"
-    return 0
-}
-
-# Пул fakeip для v6, стратегия запросов, DNS через туннель.
-gen_dns_route() {
-    # Домены списка на резолвер не попадают: их отдаёт fakedns локально,
-    # настоящий адрес узнаёт нода. Настройка решает судьбу остальных запросов:
-    # с домашнего адреса или через ноду.
-    # Пул массивом: FakeDnsObject принимает и объект, и список
-    # (infra/conf/fakedns.go). При v6 стратегия обязана быть UseIP: UseIPv4v6 у
-    # Xray нет, UseIPv4 не отдаёт AAAA.
-    FAKEDNS6=""; QSTRAT=UseIPv4; BLOCK6=""; TP_LISTEN=0.0.0.0
-    if v6on; then
-        _p6=$(val_or fakeip6_pool "$(u fakeip6_pool)" \
-              '^[0-9a-fA-F:]+/[0-9]{1,3}$' "$POOL6_DEF" "$(_t 'конфига движка')")
-        FAKEDNS6=", { \"ipPool\": \"$_p6\", \"poolSize\": $POOL_SIZE }"
-        QSTRAT=UseIP
-        TP_LISTEN="::"
-        # Тот же пул -- и в правило блокировки, по той же причине, что и у v4.
-        BLOCK6=", \"$_p6\""
-    fi
-    # Частные v6 -- всегда, не только при ipv6=1: сниффер берёт имя из Host,
-    # а там бывает и литерал [::1] (П1, 2026-10-04). fc00::/7 -- адреса
-    # домашней сети (ULA), как 192.168/16 у v4. ::ffff:0:0/96 сюда не
-    # кладём: матчер, приводящий v4 к этой форме, закрыл бы весь direct.
-    BLOCK6=", \"::/128\", \"::1/128\", \"fc00::/7\", \"fe80::/10\"$BLOCK6"
-    # Приватное, зарезервированное и пулы fakeip одним списком: правило
-    # маршрута и итоговые правила direct обязаны совпадать.
-    PRIVNETS="\"0.0.0.0/8\", \"10.0.0.0/8\", \"100.64.0.0/10\", \"127.0.0.0/8\", \"169.254.0.0/16\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"$POOL\", \"224.0.0.0/4\", \"240.0.0.0/4\"$BLOCK6"
-    # Правило маршрута сверяет адрес, а сниффер подставляет ИМЯ из Host или
-    # SNI: имя правило пропускает, и direct разрешает его сам -- в том числе
-    # в адрес роутера или домашней сети. Итоговые правила freedom (Xray
-    # 26.5.9+) сверяют уже разрешённый адрес. blockDelay 0: по умолчанию движок
-    # держит отказанное соединение 30-90 с, на роутере это дескрипторы.
-    # Движку старше поле незнакомо и молча отбрасывается -- там имя разрешает
-    # сам маршрут (IPOnDemand), а в режиме «всё через VPN» правило блокировки
-    # встаёт до правил, отправляющих в direct.
-    ROUTE_STRAT=IPIfNonMatch
-    if [ "$XRAYVER" -ge 260509 ]; then
-        _fr="\"finalRules\": [ { \"action\": \"block\", \"blockDelay\": 0, \"ip\": [ $PRIVNETS ] } ]"
-        if [ -n "$DIRECT_SET" ]; then
-            DIRECT_SET=", \"settings\": { \"domainStrategy\": \"UseIP\", $_fr }"
-        else
-            DIRECT_SET=", \"settings\": { $_fr }"
-        fi
-    else
-        ROUTE_STRAT=IPOnDemand
-    fi
-    # Запросы встроенного DNS идут через маршрутизацию, как любой трафик.
-    # Без своего правила при «Напрямую» их уносило последнее: в режиме «всё
-    # через VPN» -- в туннель, и имя сервера из ключа разрешалось через сам
-    # ещё не поднятый туннель. Тег и правило -- всегда, меняется цель.
-    DNSTAG=', "tag": "dns-query"'; DNSHOSTS=""
-    DNSRULE='
-      { "type": "field", "inboundTag": [ "dns-query" ], "outboundTag": "direct" },'
-    case "$(u dns_route)" in
-      ''|direct|tunnel) ;;
-      *) warnf "dns_route=%s не понят — DNS идёт напрямую; допустимо direct или tunnel" "$(u dns_route)" ;;
-    esac
-    if [ "$(u dns_route)" = "tunnel" ]; then
-        # Круг: чтобы открыть соединение к ноде, Xray узнаёт её адрес, а запрос
-        # ушёл бы в ещё не существующий туннель. Поэтому адрес ноды разрешается
-        # при сборке и кладётся в конфиг статически (смена адреса --
-        # пересборка, сказано в панели). Ключу с адресом вместо имени это не
-        # нужно.
-        _hh=""
-        for _h in $VPN_HOSTS; do
-            case "$_h" in *[a-zA-Z]*) ;; *) continue ;; esac
-            # Три попытки: при рестарте системный резолвер указывает на наш
-            # вход (BYWAY_KEEP_DNS), а движок уже остановлен. Один nslookup с
-            # dief ронял gen, start_service поднимал прежний конфиг, а plumb on
-            # клал правила по новым настройкам -- половины расходились молча
-            # при зелёных проверках.
-            _ip=$(server_addr "$_h")
-            # Последняя опора -- адрес из прежнего конфига: устаревший лучше
-            # несобравшегося.
-            [ -n "$_ip" ] || _ip=$(sed -n 's/.*"'"$_h"'"[[:space:]]*:[[:space:]]*"\([0-9.]*\)".*/\1/p' \
-                                   "$OUT" 2>/dev/null | head -1)
-            if [ -z "$_ip" ]; then
-                # Свой конфиг: в JSON бывают запасные и посторонние адреса
-                # (Д-4), пропуск лучше отказа сборки. Ключ byway -- как было.
-                if [ "$N_PROTO" = "raw" ]; then
-                    warnf "адрес %s из своего конфига не разрешился — пропущен" "$_h"
-                    continue
-                fi
-                dief "адрес сервера %s не разрешился — без него DNS через туннель не собрать (запросы к серверу ушли бы в сам туннель); проверить интернет и DNS роутера" "$_h"
-            fi
-            _hh="$_hh${_hh:+, }\"$_h\": \"$_ip\""
-        done
-        [ -n "$_hh" ] && DNSHOSTS="\"hosts\": { $_hh },"
-        DNSRULE='
-      { "type": "field", "inboundTag": [ "dns-query" ], '"$PROXY_TARGET"' },'
-    fi
-    return 0
-}
-
-# Шаблон конфига Xray целиком, запись в $TMP.
-gen_json() {
-    {
-      cat <<HEAD
-{
-  "log": { "loglevel": "$LOGLVL"$ACCESSLOG },
-
-  "fakedns": [ { "ipPool": "$POOL", "poolSize": $POOL_SIZE }$FAKEDNS6 ],
-
-  "dns": {
-    $DNSHOSTS
-    "servers": [$DNSBOOT
-      "$DNS_UP",$DNS_UP2LINE
-      {
-        "address": "fakedns",
-        "skipFallback": true,
-        "domains": [
-HEAD
-      # Через файл: список в переменной ash -- 9,5 МБ на потолке пресета (200
-      # 000 доменов), при подстановке вдвое больше, а на 240 МБ рядом работает
-      # движок, и OOM убил бы его.
-      _fdf=$GEN_WORK/fakedns.json
-      list_to_json "$MERGED" "domain:" > "$_fdf" 2>/dev/null || : > "$_fdf"
-      # Запятая -- только если перед ней что-то есть: на пустом списке «[ ,
-      # "full:…" ]» движок отвергал конфиг целиком.
-      [ -s "$_fdf" ] && { cat "$_fdf"; printf ',\n'; } || true
-      rm -f "$_fdf" 2>/dev/null || true
-      # Проба -- и сюда: без fakeip клиент ушёл бы мимо перехвата, и проверка
-      # судила бы не о туннеле.
-      printf '          "full:%s"' "$PROBE_DOMAIN"
-      cat <<MID
-
-        ]
-      }
-    ],
-    "queryStrategy": "$QSTRAT"$DNSTAG
-  },
-
-  "inbounds": [
-    {
-      "tag": "dns-in",
-      "listen": "$DNS_LISTEN",
-      "port": 53,
-      "protocol": "dokodemo-door",
-      "settings": { "address": "$DNS_LISTEN", "port": 53, "network": "tcp,udp" }
-    },
-    {
-      "tag": "tproxy-in",
-      // 0.0.0.0, а не петля: tproxy НЕ переписывает адрес назначения, пакет
-      // доходит до сокета с исходным 198.18.x.x. Сокет, привязанный к
-      // 127.0.0.1, такой пакет не поймает никогда — правила срабатывают,
-      // счётчик растёт, наружу не идёт ничего. Стоило часа 2026-09-03.
-      // При включённом IPv6 -- "::" вместо "0.0.0.0": отсутствие поля и
-      // "0.0.0.0" у Xray значат СТРОГО IPv4 (infra/conf/xray.go, AnyIP), и
-      // пакет v6 до сокета не дошёл бы вовсе. Сокет на "::" двухсемейный,
-      // пока sockopt.V6Only не выставлен, -- перехват IPv4 не теряется.
-      "listen": "$TP_LISTEN",
-      "port": $TP_PORT,
-      "protocol": "dokodemo-door",
-      "settings": { "network": "tcp,udp", "followRedirect": true },
-      "streamSettings": { "sockopt": { "tproxy": "tproxy" } },
-      "sniffing": { "enabled": true, "destOverride": [ "fakedns", "http", "tls", "quic" ], "metadataOnly": false, "routeOnly": false }
-    },
-    {
-      // Прокси для САМОГО РОУТЕРА. Правила nft стоят в prerouting и ловят
-      // только трафик из мостов; собственный трафик роутера идёт через
-      // output и до tproxy не доходит. Значит роутер не может достучаться
-      // ни до одного домена из списка -- его резолвер честно отдаёт адрес
-      // из пула, а маршрута туда нет.
-      //
-      // Ломало это не абстракцию, а дело: zms-pin.sh и штатные обновлялки
-      // списков zapret тянут файлы с github, а github в списке.
-      //
-      // Вход остаётся и при включённом заворачивании (router_via_vpn): он
-      // работает без единого правила в ядре и потому годится там, где
-      // правил ещё нет или они запрещены -- в том числе самому обновлению
-      // byway, которому надо скачать себя новым до того, как правила
-      // переложат.
-      //
-      // ⚠️ Обратных кавычек в этом комментарии быть не может. Он идёт в
-      // конфиг из heredoc БЕЗ кавычек у метки, то есть оболочка разбирает
-      // его как обычную строку: команду в обратных кавычках она ВЫПОЛНИТ, и
-      // вывод команды уедет в середину JSON. Так и вышло 2026-09-07 --
-      // движок отверг конфиг с «invalid character », а byway при каждой
-      // сборке лез в сеть за новой версией себя.
-      //
-      // Пользоваться так:
-      //   https_proxy=http://127.0.0.1:$LOCAL_PORT curl ...
-      //   busybox wget по https через прокси не ходит
-      // Маршрутизация обычная: домен из списка уйдёт через ноду, прочее
-      // напрямую.
-      "tag": "local-in",
-      "listen": "127.0.0.1",
-      "port": $LOCAL_PORT,
-      "protocol": "http",
-      "sniffing": { "enabled": true, "destOverride": [ "http", "tls" ], "metadataOnly": false, "routeOnly": false }
-    }$REDIR_IN
-  ],
-
-  "outbounds": [
-$PROXIES,$ROUTE_OUT
-    { "tag": "direct", "protocol": "freedom"$DIRECT_SET$DIRECTSO },
-    { "tag": "dns-out", "protocol": "dns"$SELFSO },
-    { "tag": "block", "protocol": "blackhole" }
-  ],
-
-  $OBSERVATORY
-
-  "routing": {
-    $BALANCERS
-    "domainStrategy": "$ROUTE_STRAT",
-    "rules": [
-      { "type": "field", "inboundTag": [ "dns-in" ], "outboundTag": "dns-out" },$DNSRULE$ROUTE_RULES
-MID
-      if [ "$(u list_mode)" = "all" ]; then
-        # Режим «всё через VPN»: списки не участвуют, направление задаёт
-        # последнее правило, исключение одно -- сам сервер VPN: иначе его адрес
-        # ушёл бы в тот же ещё не поднятый VPN, и соединение не встаёт без
-        # ошибки в журнале.
-        # Русские зоны мимо туннеля: банки, госуслуги и маркетплейсы через VPN
-        # ломаются. .рф -- пуникодом (xn--p1ai): в DNS и SNI идёт он.
-        if [ "$ROUTE_STRAT" = "IPOnDemand" ]; then
-          printf '      { "type": "field", "ip": [ %s ], "outboundTag": "block" },\n' "$PRIVNETS"
-        fi
-        if [ "$(u ru_direct)" = "1" ]; then
-          printf '      { "type": "field", "domain": [ "domain:ru", "domain:su", "domain:xn--p1ai" ], "outboundTag": "direct" },\n'
-        fi
-
-        for _h in $VPN_HOSTS; do
-          # Не похожее на имя или адрес движок отвергнет вместе со всем
-          # конфигом.
-          case "$_h" in
-            ''|-|*[!A-Za-z0-9.:_-]*) continue ;;
-          esac
-          case "$_h" in
-            *[a-zA-Z]*) printf '      { "type": "field", "domain": [ "full:%s" ], "outboundTag": "direct" },\n' "$_h" ;;
-            *)          printf '      { "type": "field", "ip": [ "%s/32" ], "outboundTag": "direct" },\n' "$_h" ;;
-          esac
-        done
-      else
-        # Пустой список -- не повод писать правило с пустым массивом: Xray
-        # такой конфиг отвергает.
-        # Через файл: список печатается дважды (fakedns и здесь), а в
-        # переменной ash на потолке пресета это 9,5 МБ, при подстановке вдвое
-        # больше -- на 240 МБ, где рядом работает движок.
-        _djf=$GEN_WORK/dom.json
-        list_to_json "$MAINDOM" "domain:" > "$_djf" 2>/dev/null || : > "$_djf"
-        # Домен-проба -- всегда, даже при пустом списке: через него проверка
-        # «трафик проходит» смотрит всю цепочку и не зависит от меняющегося
-        # списка. example.com закреплён IANA под примеры, заворот его ничего не
-        # стоит.
-        printf '      { "type": "field", "domain": [\n'
-        [ -s "$_djf" ] && { cat "$_djf"; printf ',\n'; }
-        printf '          "full:%s"\n' "$PROBE_DOMAIN"
-        printf '        ], %s },\n' "$PROXY_TARGET"
-        rm -f "$_djf" 2>/dev/null || true
-        # Через файл, как домены: список из одних негодных строк давал бы
-        # «"ip": [ ]», и движок отвергал весь конфиг без имени виновной строки.
-        _sjf=$GEN_WORK/sub.json
-        if [ -f "$S" ]; then list_to_json "$S" "" > "$_sjf" 2>/dev/null || : > "$_sjf"; else : > "$_sjf"; fi
-        if [ -s "$_sjf" ]; then
-          printf '      { "type": "field", "ip": [\n'
-          cat "$_sjf"
-          printf '\n        ], %s },\n' "$PROXY_TARGET"
-        fi
-        rm -f "$_sjf" 2>/dev/null || true
-      fi
-      cat <<MID2
-MID2
-      cat <<END
-      // Приватное и зарезервированное -- в блок, и ОБЯЗАТЕЛЬНО до direct.
-      // Без этого вход tproxy работал открытым форвардером: клиент из
-      // гостевой сети открывал соединение на любой адрес пула и первым же
-      // пакетом слал «Host: 192.168.1.1». Сниффер подменял назначение на
-      // то, что написал клиент, а наружу шёл САМ РОУТЕР -- то есть мимо
-      // forward-цепочки, где гостей режет reject. Изоляция гостевой сети
-      // обходилась целиком.
-      //
-      // Сюда же входит сам пул fakeip: соединение на порт входа замыкалось
-      // на этот же вход и порождало витки без ограничителя, пока не кончатся
-      // дескрипторы.
-      // Пул подставляется переменной, а не литералом: он настраивается в
-      // панели, и со своим значением защита от петли перечисляла бы чужой
-      // диапазон, а нужный оставляла открытым.
-      // Имя вместо адреса это правило не ловит -- см. PRIVNETS выше.
-      { "type": "field", "ip": [ $PRIVNETS ], "outboundTag": "block" },
-      { "type": "field", "network": "tcp,udp", $LAST_TARGET }
-    ]
-  }
-}
-END
-    } > "$TMP"
-    return 0
+    _gm=$(ob_env_mark)
+    _grc=0
+    BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_MERGED=$MERGED BW_SUBNETS=$S \
+    BW_BADLIST=$BADLIST BW_ACCESS=$ACCESS BW_PROBE=$PROBE_DOMAIN BW_POOL6_DEF=$POOL6_DEF \
+    BW_XRAY=$XRAY BW_XRAYVER=$XRAYVER BW_SELFMARK=$_gm \
+        bw_uc gen || _grc=$?
+    rm -rf "$_lock" 2>/dev/null || true
+    [ "$_grc" = 0 ] || exit "$_grc"
 }
 
 # Настоящий адрес сервера для DNS через туннель. Местный резолвер в этом
@@ -6918,10 +6230,10 @@ function run(argv, err) {
 	return { code: p.close(), out: out };
 }
 
-// Записи списков -> строки JSON-массива. Перенос list_to_json (config/gen.sh)
-// один в один: та же форма записи и тот же вывод до байта. Файл читается по
-// строке и печатается сразу: на потолке пресета (200 000 доменов) список в
-// памяти занял бы десятки МБ рядом с движком.
+// Записи списков -> строки JSON-массива (бывший list_to_json): та же форма
+// записи, что прежде. Файл читается по строке и пишется в конфиг сразу: на
+// потолке пресета (200 000 доменов) список в памяти занял бы десятки МБ рядом
+// с движком.
 
 // Строка из списка попадает в конфиг как есть, поэтому для домена -- только
 // буквы, цифры, точка и дефис, последняя часть -- не короче двух букв либо
@@ -6971,79 +6283,121 @@ function lj_reject(s) {
 	if (LJ_BF) LJ_BF.write(s + '\n');
 }
 
-function list_json(file, pfx, bad) {
-	let f = fs.open(file, 'r');
-	// Нет файла -- как busybox awk: жалоба в stderr, код 1, в вывод ничего (вывод --
-	// сам JSON, вызывающий решает, что делать).
-	if (!f) {
-		fs.stderr.write(sprintf('list_json: %s: %s\n', file, fs.error()));
-		exit(1);
-	}
-	LJ_BAD = bad;
-	LJ_BF = null;
-	let dom = substr(pfx, 0, 7) == 'domain:';
-	let n = 0;
-	let buf = [];
-	let l;
-	// Регулярки в ucode дороги (см. _domain_ok): обрезка -- trim с набором
-	// [[:space:]], комментарий -- сравнением начала, домен -- без регулярок.
-	while ((l = f.read('line')) != null && l !== '') {
-		l = trim(l, WS);
-		if (l === '' || substr(l, 0, 1) == '#' || substr(l, 0, 2) == '//')
-			continue;
-		if (length(l) > 253) { lj_reject(l); continue; }
-		let out;
-		if (dom) {
-			let v = l, pre = '';
-			let c = index(v, ':');
-			if (c > 0) {
-				let p0 = substr(v, 0, c);
-				if (p0 == 'geosite' || p0 == 'ext') { lj_reject(l); continue; }
-				if (p0 == 'domain' || p0 == 'full' || p0 == 'keyword' || p0 == 'regexp') {
-					pre = p0 + ':';
-					v = substr(v, c + 1);
-					if (!length(v)) { lj_reject(l); continue; }
-				}
+// Одна запись (уже обрезанная, не пустая, не комментарий) -> строка для
+// массива; негодная -- null, сама строка -- в список отброшенных.
+function lj_entry(l, dom, pfx) {
+	if (length(l) > 253) { lj_reject(l); return null; }
+	if (dom) {
+		let v = l, pre = '';
+		let c = index(v, ':');
+		if (c > 0) {
+			let p0 = substr(v, 0, c);
+			if (p0 == 'geosite' || p0 == 'ext') { lj_reject(l); return null; }
+			if (p0 == 'domain' || p0 == 'full' || p0 == 'keyword' || p0 == 'regexp') {
+				pre = p0 + ':';
+				v = substr(v, c + 1);
+				if (!length(v)) { lj_reject(l); return null; }
 			}
-			if (pre == 'regexp:') {
-				v = replace(replace(v, '\\', '\\\\'), '"', '\\"');
-			} else if (pre == 'keyword:') {
-				if (!_only(v, ALNUM + '._-')) { lj_reject(l); continue; }
-			} else {
-				if (!_domain_ok(v)) { lj_reject(l); continue; }
-				if (pre == '') pre = pfx;
-			}
-			out = pre + v;
-		} else {
-			// Подсети: та же форма, что у set_elements для nft, с проверкой
-			// чисел -- одна регулярка пропускает и 999.1.2.3, и /33. IPv6 --
-			// грубо: строгую форму проверяет set_elements6, дальше строку
-			// разбирает сам Xray.
-			if (index(l, ':') >= 0) {
-				if (!match(l, /^[0-9a-fA-F:]+(\/[0-9]{1,3})?$/)) { lj_reject(l); continue; }
-			} else {
-				let ok = match(l, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/) != null;
-				if (ok) {
-					let oc = split(l, /[.\/]/);
-					for (let i = 0; i < 4; i++)
-						if (_numgt(oc[i], 255)) ok = false;
-					if (length(oc) == 5 && _numgt(oc[4], 32)) ok = false;
-				}
-				if (!ok) { lj_reject(l); continue; }
-			}
-			out = pfx + l;
 		}
-		push(buf, '        "' + out + '"');
+		if (pre == 'regexp:') {
+			v = replace(replace(v, '\\', '\\\\'), '"', '\\"');
+		} else if (pre == 'keyword:') {
+			if (!_only(v, ALNUM + '._-')) { lj_reject(l); return null; }
+		} else {
+			if (!_domain_ok(v)) { lj_reject(l); return null; }
+			if (pre == '') pre = pfx;
+		}
+		return pre + v;
+	}
+	// Подсети: та же форма, что у set_elements для nft, с проверкой чисел --
+	// одна регулярка пропускает и 999.1.2.3, и /33. IPv6 -- грубо: строгую
+	// форму проверяет set_elements6, дальше строку разбирает сам Xray.
+	if (index(l, ':') >= 0) {
+		if (!match(l, /^[0-9a-fA-F:]+(\/[0-9]{1,3})?$/)) { lj_reject(l); return null; }
+	} else {
+		let ok = match(l, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/) != null;
+		if (ok) {
+			let oc = split(l, /[.\/]/);
+			for (let i = 0; i < 4; i++)
+				if (_numgt(oc[i], 255)) ok = false;
+			if (length(oc) == 5 && _numgt(oc[4], 32)) ok = false;
+		}
+		if (!ok) { lj_reject(l); return null; }
+	}
+	return pfx + l;
+}
+
+// Строка списка без пробелов по краям; пустая и комментарий -- null.
+// Регулярки в ucode дороги (см. _domain_ok): обрезка -- trim с набором
+// [[:space:]], комментарий -- сравнением начала.
+function lj_line(l) {
+	l = trim(l, WS);
+	if (l === '' || substr(l, 0, 1) == '#' || substr(l, 0, 2) == '//') return null;
+	return l;
+}
+
+// Записи файла -- в открытый файл out, по строке массива на запись: перед
+// каждой ",\n" (перед первой -- "\n", если first). skip -- записи, которых в
+// массиве быть не должно (домены направлений в общем правиле). Итог -- число
+// записанных; нет файла -- 0.
+function lj_stream(out, file, pfx, skip, ind, first) {
+	let f = fs.open(file, 'r');
+	if (!f) return 0;
+	let dom = substr(pfx, 0, 7) == 'domain:';
+	let n = 0, buf = [], l;
+	while ((l = f.read('line')) != null && l !== '') {
+		l = lj_line(l);
+		if (l == null || (skip && skip[l])) continue;
+		let e = lj_entry(l, dom, pfx);
+		if (e == null) continue;
+		push(buf, ind + '"' + e + '"');
 		if (length(buf) >= 2000) {
-			print((n ? ',\n' : '') + join(',\n', buf));
+			out.write(((n || !first) ? ',\n' : '\n') + join(',\n', buf));
 			n += length(buf);
 			buf = [];
 		}
 	}
-	if (length(buf))
-		print((n ? ',\n' : '') + join(',\n', buf));
+	if (length(buf)) {
+		out.write(((n || !first) ? ',\n' : '\n') + join(',\n', buf));
+		n += length(buf);
+	}
 	f.close();
-	if (LJ_BF) LJ_BF.close();
+	return n;
+}
+
+// Записи небольшого списка -- массивом строк (подсети, направления).
+function lj_items(lines, pfx) {
+	let dom = substr(pfx, 0, 7) == 'domain:';
+	let r = [];
+	for (let l in lines) {
+		let e = lj_entry(l, dom, pfx);
+		if (e != null) push(r, e);
+	}
+	return r;
+}
+
+// Строки файла без пустых и комментариев -- массивом (небольшие списки).
+function lj_lines(file) {
+	let f = fs.open(file, 'r');
+	let r = [], l;
+	if (!f) return r;
+	while ((l = f.read('line')) != null && l !== '') {
+		l = lj_line(l);
+		if (l != null) push(r, l);
+	}
+	f.close();
+	return r;
+}
+
+// Число записей, как count_list: непустые строки без комментариев.
+function lj_count(file) {
+	let f = fs.open(file, 'r');
+	let n = 0, l;
+	if (!f) return 0;
+	while ((l = f.read('line')) != null && l !== '')
+		if (lj_line(l) != null) n++;
+	f.close();
+	return n;
 }
 
 // Разбор ключа (vless, vmess, trojan, ss, socks, hysteria2, wireguard).
@@ -7464,8 +6818,8 @@ function cmd_parse() {
 // Аутбаунд Xray из разобранного ключа: транспорт, защита (tls, reality), flow,
 // mux, протокол -- перенос build_stream, build_outbound, proxy_block и
 // build_proxies из shell. JSON собирается объектами, не склейкой строк.
-// Пока gen на shell, наружу идут команды sh (как у bw_uc parse): сообщения по
-// порядку, N_*, готовый блок JSON. Тексты сообщений -- прежние ключи перевода.
+// Сообщения копятся записями по порядку: gen (uc/gen.uc) печатает их сам,
+// проба ключа (bw_uc outbound) получает командами sh вместе с N_* и блоком.
 // Функции -- верхнего уровня, состояние -- OB_* (см. uc/keys.uc о ucode 22.03).
 
 const OB_STOP = '__byway_outbound_stop__';
@@ -7473,16 +6827,17 @@ const OB_STOP = '__byway_outbound_stop__';
 // parse_node шёл в >/dev/null, а сообщения транспорта -- на экран).
 let OB_OUT = [], OB_QUIET_PARSE = false, OB_FATAL = null;
 
-// Сообщения -- командами sh; в тихом прогоне (проба ключа автовыбора)
-// копятся, отказ запоминается текстом для «ключ пропущен».
+// Сообщение -- записью { c: warn|warnf|die|dief, f, a, e: в stderr }; в тихом
+// прогоне (проба ключа автовыбора) копятся, отказ запоминается текстом для
+// «ключ пропущен».
 function ob_cmd(name, fmt, args, err) {
-	push(OB_OUT, name + ' ' + join(' ', map([ fmt, ...args ], pk_q)) + (err ? ' >&2' : ''));
+	push(OB_OUT, { c: name, f: fmt, a: args, e: err });
 }
 function ob_warn(m)          { ob_cmd('warn', m, []); }
 function ob_warnf(m, ...a)   { ob_cmd('warnf', m, a); }
 function ob_die(m)           { OB_FATAL = _t(m); ob_cmd('die', m, []); raise(OB_STOP); }
 function ob_dief(m, ...a)    { OB_FATAL = _pf(_t(m), a); ob_cmd('dief', m, a); raise(OB_STOP); }
-function ob_put(n, v)        { push(OB_OUT, n + '=' + pk_q(v)); }
+function ob_put(n, v)        { push(OB_OUT, { p: n, v: v }); }
 
 // val_or: значение настройки по образцу, иначе умолчание с жалобой в stderr.
 function ob_val_or(name, val, re, def, where) {
@@ -7771,7 +7126,23 @@ function ob_put_n(N) {
 	for (let k in [ 'PASS', 'USER', 'OBFSPW' ]) ob_put('J_' + k, pk_jstr(N[k] ?? ''));
 }
 
-function ob_flush() { print(join('\n', OB_OUT), '\n'); }
+// Записи -- командами sh (как у bw_uc parse).
+function ob_flush() {
+	let r = [];
+	for (let m in OB_OUT)
+		push(r, m.p != null ? m.p + '=' + pk_q(m.v) :
+			m.c + ' ' + join(' ', map([ m.f, ...m.a ], pk_q)) + (m.e ? ' >&2' : ''));
+	print(join('\n', r), '\n');
+}
+
+// Записи -- печатью здесь же (gen): отказ -- [x] и выход, как die в shell.
+function ob_emit(list) {
+	for (let m in list) {
+		if (m.p != null) continue;
+		if (m.c == 'warn' || m.c == 'warnf') _warn(_pf(_t(m.f), m.a));
+		else die_raw(_pf(_t(m.f), m.a));
+	}
+}
 
 // bw_uc outbound ТЕГ: ключ из BW_URL (пусто -- из настроек), N_* и блок (PB).
 function cmd_outbound(tag, quiet) {
@@ -7788,82 +7159,743 @@ function cmd_outbound(tag, quiet) {
 	ob_flush();
 }
 
-// bw_uc proxies: аутбаунды целиком (build_proxies). Обычные режимы -- один
-// с тегом proxy; urltest -- по одному на ключ (proxy-N) и балансировщик
-// leastPing. Негодный ключ автовыбора пропускается с причиной.
-function cmd_proxies() {
-	OB_OUT = [];
-	let mode = u('conn_mode');
+// Аутбаунды целиком (бывший build_proxies). Обычные режимы -- один с тегом
+// proxy; urltest -- по одному на ключ (proxy-N) и балансировщик leastPing.
+// Негодный ключ автовыбора пропускается с причиной. skip -- номера ключей,
+// которые отверг сам движок (повтор сборки в gen). psni, pws -- sni и host
+// прежнего ключа (у ss своих нет). Сообщения -- в OB_OUT, отказ -- OB_STOP.
+function ob_proxies(skip, psni, pws) {
 	let all = u('list_mode') == 'all';
-	let tgt = '"outboundTag": "proxy"';
-	ob_put('OBSERVATORY', '');
-	ob_put('BALANCERS', '');
-	try {
-		if (mode != 'urltest') {
-			let k = ob_key('', 'proxy', getenv('BW_SNI') ?? '', getenv('BW_WSHOST') ?? '');
-			ob_put_n(k.N);
-			ob_put('PROXIES', sprintf('%J', k.block));
-			ob_put('PROXY_TARGET', tgt);
-			ob_put('LAST_TARGET', all ? tgt : '"outboundTag": "direct"');
-			if (k.raw) {
-				let hs = ob_raw_hosts(k.block);
-				ob_put('VPN_HOSTS', join(' ', hs));
-				if (!length(hs))
-					ob_warn('свой конфиг: адрес сервера лежит внутри чужого JSON, byway его не знает и из перехвата не исключит — проверить, что адрес сервера не попал в списки, иначе туннель замкнётся сам на себя');
-				if (u('router_via_vpn') == '1' && index(k.N.RAW, '"mark"') < 0)
-					ob_warnf('свой конфиг: включено «VPN для программ на роутере», а метки в нём нет — если адрес сервера попадёт в списки, соединение движка к нему уйдёт в перехват по кругу; дописать в streamSettings поле sockopt.mark = %s', getenv('BW_SELFMARK') ?? '');
-			} else {
-				ob_put('VPN_HOSTS', k.N.HOST);
-			}
+	let R = { blocks: [], hosts: [], keyidx: [], n: 0, N: null,
+	          target: { outboundTag: 'proxy' }, last: null, observatory: null, balancers: null };
+	if (u('conn_mode') != 'urltest') {
+		let k = ob_key('', 'proxy', psni, pws);
+		R.N = k.N;
+		push(R.blocks, k.block);
+		R.last = all ? R.target : { outboundTag: 'direct' };
+		if (k.raw) {
+			R.hosts = ob_raw_hosts(k.block);
+			if (!length(R.hosts))
+				ob_warn('свой конфиг: адрес сервера лежит внутри чужого JSON, byway его не знает и из перехвата не исключит — проверить, что адрес сервера не попал в списки, иначе туннель замкнётся сам на себя');
+			if (u('router_via_vpn') == '1' && index(k.N.RAW, '"mark"') < 0)
+				ob_warnf('свой конфиг: включено «VPN для программ на роутере», а метки в нём нет — если адрес сервера попадёт в списки, соединение движка к нему уйдёт в перехват по кругу; дописать в streamSettings поле sockopt.mark = %s', getenv('BW_SELFMARK') ?? '');
 		} else {
-			let keys = split(trim(u('node_urls')), /[ \t\n]+/);
-			if (keys[0] == '') ob_die('выбран автовыбор, но ни одного ключа не добавлено');
-			let skip = ' ' + (getenv('BW_SKIP') ?? '') + ' ';
-			let blocks = [], idx = '', hosts = '', n = 0, last = null;
-			let psni = getenv('BW_SNI') ?? '', pws = getenv('BW_WSHOST') ?? '';
-			for (let ki = 0; ki < length(keys); ki++) {
-				if (index(skip, ' ' + ki + ' ') >= 0) continue;
-				// Тихий прогон: сообщения ключа -- только если он годен.
-				let saved = OB_OUT;
-				OB_OUT = [];
-				OB_FATAL = null;
-				let k = null;
-				try {
-					k = ob_key(keys[ki], 'proxy-' + n, psni, pws);
-				} catch (e) {
-					if (e.message !== OB_STOP) raise(e.message);
-				}
-				let msgs = OB_OUT;
-				OB_OUT = saved;
-				if (k == null) {
-					ob_warnf('ключ пропущен: %s', OB_FATAL ?? '');
-					continue;
-				}
-				for (let m in msgs) push(OB_OUT, m);
-				psni = k.N.SNI; pws = k.N.WSHOST;
-				push(blocks, sprintf('%J', k.block));
-				idx += ' ' + ki;
-				hosts += ' ' + k.N.HOST;
-				last = k.N;
-				n++;
-			}
-			if (!n) ob_die('ни один ключ не разобрался');
-			ob_put_n(last);
-			let iv = ob_val_or('probe_interval', u('probe_interval'), /^[0-9]{1,4}[smh]$/, '3m', _t('конфига движка'));
-			ob_put('PROXIES', '    ' + join(',\n    ', blocks));
-			ob_put('PROXY_KEYIDX', idx);
-			ob_put('VPN_HOSTS', hosts);
-			ob_put('_n', n);
-			ob_put('OBSERVATORY', '"observatory": { "subjectSelector": [ "proxy-" ], "probeUrl": "https://www.google.com/generate_204", "probeInterval": "' + iv + '" },');
-			ob_put('BALANCERS', '"balancers": [ { "tag": "auto", "selector": [ "proxy-" ], "strategy": { "type": "leastPing" } } ],');
-			ob_put('PROXY_TARGET', '"balancerTag": "auto"');
-			ob_put('LAST_TARGET', all ? '"balancerTag": "auto"' : '"outboundTag": "direct"');
-			ob_put('N_LABEL', _f('автовыбор из %s', n));
+			R.hosts = [ k.N.HOST ];
 		}
+		return R;
+	}
+	let keys = split(trim(u('node_urls')), /[ \t\n]+/);
+	if (keys[0] == '') ob_die('выбран автовыбор, но ни одного ключа не добавлено');
+	skip = ' ' + (skip ?? '') + ' ';
+	for (let ki = 0; ki < length(keys); ki++) {
+		if (index(skip, ' ' + ki + ' ') >= 0) continue;
+		// Тихий прогон: сообщения ключа -- только если он годен.
+		let saved = OB_OUT;
+		OB_OUT = [];
+		OB_FATAL = null;
+		let k = null;
+		try {
+			k = ob_key(keys[ki], 'proxy-' + R.n, psni, pws);
+		} catch (e) {
+			if (e.message !== OB_STOP) raise(e.message);
+		}
+		let msgs = OB_OUT;
+		OB_OUT = saved;
+		if (k == null) {
+			ob_warnf('ключ пропущен: %s', OB_FATAL ?? '');
+			continue;
+		}
+		for (let m in msgs) push(OB_OUT, m);
+		psni = k.N.SNI; pws = k.N.WSHOST;
+		push(R.blocks, k.block);
+		push(R.keyidx, ki);
+		push(R.hosts, k.N.HOST);
+		R.N = k.N;
+		R.n++;
+	}
+	if (!R.n) ob_die('ни один ключ не разобрался');
+	let iv = ob_val_or('probe_interval', u('probe_interval'), /^[0-9]{1,4}[smh]$/, '3m', _t('конфига движка'));
+	R.observatory = { subjectSelector: [ 'proxy-' ], probeUrl: 'https://www.google.com/generate_204', probeInterval: iv };
+	R.balancers = [ { tag: 'auto', selector: [ 'proxy-' ], strategy: { type: 'leastPing' } } ];
+	R.target = { balancerTag: 'auto' };
+	R.last = all ? R.target : { outboundTag: 'direct' };
+	R.N.LABEL = _f('автовыбор из %s', R.n);
+	return R;
+}
+
+// Сборка конфига Xray (бывшие gen_* из config/gen.sh). Замок, слияние списков
+// и метку сокетов готовит shell (cmd_gen) и отдаёт в BW_*; здесь -- настройки,
+// направления, конфиг объектом, проверка движком и подмена рабочего. Рабочий
+// меняется, только если ядро приняло конфиг (run -test).
+
+const G_WHERE = 'конфига движка';
+const G_TMP = '/tmp/byway-config.new.json';
+
+// Состояние сборки -- глобальное: функции верхнего уровня (см. uc/keys.uc).
+let G = null;
+
+// ── проверка значений ─────────────────────────────────────────────────────
+// val_or: значение настройки по образцу, иначе умолчание и слово вслух. Эти
+// настройки прежде уходили в конфиг движка сырыми, и значением с `", ...`
+// можно было задать всю конфигурацию Xray, исполняемую от root.
+function g_val_or(name, val, re, def) {
+	if (val === '') return def;
+	if (match(val, /[\x01-\x1f\x7f]/)) {
+		warnf('настройка %s содержит управляющие знаки и не годится для %s, взято %s', name, _t(G_WHERE), def);
+		return def;
+	}
+	if (match(val, re)) return val;
+	warnf('настройка %s = «%s» не годится для %s, взято %s', name, val, _t(G_WHERE), def);
+	return def;
+}
+
+function g_port_ok(s) {
+	return match(s, /^[0-9]{1,5}$/) != null && int(s) >= 1 && int(s) <= 65535;
+}
+
+// Ведущие цифры числом, как «+ 0» в awk: «24abc» -- 24, «abc» -- 0.
+function g_lead_int(s) {
+	let d = substr(s, 0, length(s) - length(ltrim(s, '0123456789')));
+	return d === '' ? 0 : int(d);
+}
+
+// ── адреса ────────────────────────────────────────────────────────────────
+// Пул в приватном или зарезервированном диапазоне мёртв молча: цепочка nft
+// отсекает такие адреса первым правилом. Список тот же, что в RESERVED и в
+// правиле блокировки: править вместе (config/addr.sh, pool_sane).
+function g_pool_sane(p) {
+	let s = index(p, '/');
+	let pl = s < 0 ? p : substr(p, s + 1);
+	if (pl === '' || ltrim(pl, '0123456789') !== '') {
+		warnf('пул %s без длины маски -- взято умолчание', p);
+		return false;
+	}
+	if (int(pl) < 8 || int(pl) > 30) {
+		warnf('пул %s: маска /%s не годится -- взято умолчание', p, pl);
+		return false;
+	}
+	let o = split(substr(p, 0, s), '.');
+	let o1 = int(o[0]), o2 = int(o[1]);
+	// Как case в shell: 224-255, не «от 224» -- иначе nft и конфиг разошлись бы.
+	if (o1 == 0 || o1 == 10 || o1 == 127 || (o1 >= 224 && o1 <= 255)) {
+		warnf('пул %s лежит в приватном или зарезервированном -- он мёртв: цепочка nft отсекает такие адреса первым же правилом', p);
+		return false;
+	}
+	if (o1 == 172 && o2 >= 16 && o2 <= 31) { warnf('пул %s лежит в 172.16/12 -- он мёртв', p); return false; }
+	if (o1 == 192 && o2 == 168) { warnf('пул %s лежит в 192.168/16 -- он мёртв', p); return false; }
+	if (o1 == 169 && o2 == 254) { warnf('пул %s лежит в 169.254/16 -- он мёртв', p); return false; }
+	if (o1 == 100 && o2 >= 64 && o2 <= 127) { warnf('пул %s лежит в 100.64/10 -- он мёртв', p); return false; }
+	return true;
+}
+
+// Число адресов пула: для poolSize и для «список длиннее пула». Нижнего
+// ограничителя нет: на /29 и /30 он завышал ёмкость, и защита молчала.
+function g_pool_size(p) {
+	let l = substr(p, index(p, '/') + 1);
+	l = (l === '' || ltrim(l, '0123456789') !== '') ? 15 : int(l);
+	if (l < 1 || l > 32) l = 15;
+	let n = (1 << (32 - l)) - 2;
+	return n < 1 ? 1 : n;
+}
+
+// Имя хоста из строки резолвера, пусто для адреса и литерала [IPv6].
+function g_dns_host(s) {
+	let h = pk_after(s, '://');
+	h = pk_before(h, '/');
+	if (substr(h, 0, 1) == '[') return '';
+	h = pk_before(h, ':');
+	return ltrim(h, '0123456789.') === '' ? '' : h;
+}
+
+// Порт входа для собственного трафика роутера; пусто -- не заворачивать
+// (выключено или порт занят другим входом byway). Та же логика у nft
+// (config/addr.sh, redir_port): при расхождении правила вели бы в никуда.
+function g_redir_port() {
+	if (u('router_via_vpn') != '1') return '';
+	let p = g_val_or('redirect_port', u('redirect_port'), /^[0-9]{1,5}$/, '1604');
+	if (!g_port_ok(p)) p = '1604';
+	let t = u('tproxy_port') || '1602', l = u('local_proxy_port') || '1603';
+	if (p == t || p == l) {
+		warnf('порт %s занят другим входом byway — свой трафик роутер в туннель не пошлёт', p);
+		return '';
+	}
+	return p;
+}
+
+// Адрес IPv4 имени через nslookup; res -- резолвер или пусто.
+function g_a_of(name, res) {
+	let argv = [ 'nslookup', name ];
+	if (res) push(argv, res);
+	let on = false;
+	for (let l in split(run(argv).out, '\n')) {
+		if (substr(l, 0, 5) == 'Name:') on = true;
+		if (!on || substr(l, 0, 7) != 'Address') continue;
+		let f = split(trim(l), /[ \t]+/);
+		let a = f[length(f) - 1];
+		if (match(a, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/)) return a;
+	}
+	return '';
+}
+
+// Настоящий адрес сервера для DNS через туннель: пин /etc/hosts, потом
+// внешние резолверы, потом местный (он в этом режиме отдаёт прежний адрес).
+function g_server_addr(h) {
+	for (let l in split(fs.readfile('/etc/hosts') ?? '', '\n')) {
+		let f = split(trim(l), /[ \t]+/);
+		if (f[0] == '' || substr(f[0], 0, 1) == '#') continue;
+		for (let i = 1; i < length(f); i++)
+			if (f[i] == h) {
+				if (match(f[0], /^[0-9]+(\.[0-9]+){3}$/)) return f[0];
+				break;
+			}
+	}
+	return g_a_of(h, '8.8.8.8') || g_a_of(h, '1.1.1.1') || g_a_of(h, '');
+}
+
+// Подсказки к отказам движка, текст которых не говорит, что делать.
+function g_xray_hint(t) {
+	if (index(t, 'without TLS') >= 0) {
+		warn('  Xray-core с 26.7.11 не пускает vless и trojan без TLS или reality к публичному адресу');
+		warn('  нужен ключ с security=tls или reality; без шифрования транспорта — только сервер в частной сети');
+	} else if (index(t, '"allowInsecure"') >= 0) {
+		warn('  Xray-core с 26.3.27 не даёт отключать проверку сертификата сервера (allowInsecure)');
+		warn('  нужен отпечаток сертификата в ключе (pcs= или pinSHA256=) либо настоящий сертификат на сервере');
+	}
+}
+
+// Ширина списка подсетей (net_warn в lists/presets.sh): миллион адресов
+// суммарно или блок шире /12 -- сказать.
+function g_net_warn(file) {
+	let tot = 0, big = 33, f = fs.open(file, 'r'), l;
+	if (f) {
+		while ((l = f.read('line')) != null && l !== '') {
+			l = replace(l, /[ \t\n\r\x0b\x0c]/g, '');
+			if (l === '' || substr(l, 0, 1) == '#' || substr(l, 0, 2) == '//') continue;
+			let s = index(l, '/');
+			let p = s < 0 ? 32 : g_lead_int(substr(l, s + 1));
+			let n = 1;
+			for (let i = 0; i < 32 - p; i++) n *= 2;
+			tot += n;
+			if (p < big) big = p;
+		}
+		f.close();
+	}
+	if (big == 33) big = 32;
+	if (tot > 1000000 || big <= 12)
+		warnf('  ВНИМАНИЕ: %s адресов, крупнейший блок /%s — в туннель уйдёт и чужой трафик, и скорость упадёт', tot, big);
+}
+
+// ── части конфига ─────────────────────────────────────────────────────────
+// Ключ: аутбаунд и сообщения; отказ -- null (сообщения разбора тогда не
+// печатаются). Направления и автовыбор не должны ронять сборку остальных.
+function g_key(url, tag) {
+	OB_OUT = [];
+	OB_FATAL = null;
+	let k = null;
+	try {
+		k = ob_key(url, tag, G.psni, G.pws);
 	} catch (e) {
 		if (e.message !== OB_STOP) raise(e.message);
 	}
-	ob_flush();
+	if (k) { G.psni = k.N.SNI; G.pws = k.N.WSHOST; }
+	return k;
+}
+
+// Направления со своим выходом: ноды, правила, хосты; домены направлений,
+// получивших правило, в общее правило не идут (в fakedns -- идут).
+function g_routes() {
+	G.route_out = []; G.route_hosts = []; G.route_rules = []; G.route_skip = null;
+	let secs = [], all = cursor().get_all('byway') ?? {};
+	for (let n in all) if (all[n]['.type'] == 'route') push(secs, all[n]);
+	secs = sort(secs, (a, b) => a['.index'] - b['.index']);
+	let urls = split(trim(u('node_urls')), /[ \t\n]+/), skip = {}, nok = 0;
+	OB_QUIET_PARSE = true;
+	for (let sec in secs) {
+		let rn = sec['.name'];
+		if (sec.enabled == '0') continue;
+		let lb = sec.label ?? '';
+		let rf = G.routes + '/' + rn + '.lst';
+		let st = fs.stat(rf);
+		if (!st || !st.size) { warnf('направление «%s»: список %s пуст, пропущено', rn, rf); continue; }
+		let url = null;
+		for (let k in urls) {
+			if (k === '') continue;
+			let h = index(k, '#');
+			if ((h < 0 ? '' : pk_pctd(substr(k, h + 1))) == lb) { url = k; break; }
+		}
+		if (url == null) { warnf('направление «%s»: ключа с меткой «%s» среди добавленных нет', rn, lb); continue; }
+		let k = g_key(url, 'route-' + rn);
+		if (!k) { warnf('направление «%s»: ключ не разбирается, пропущено', rn); continue; }
+		ob_emit(OB_OUT);
+		push(G.route_out, k.block);
+		push(G.route_hosts, k.N.HOST);
+		// Пробел внутри строки -- не запись, а строка формата hosts
+		// («0.0.0.0 example.com»): в отброшенные, не склеивать.
+		let dom = [], net = [];
+		for (let l in lj_lines(rf)) {
+			if (match(l, /[ \t\n\r\x0b\x0c]/)) { lj_reject(l); continue; }
+			if (match(l, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/)) push(net, l);
+			else { push(dom, l); skip[l] = true; }
+		}
+		let d = lj_items(dom, 'domain:'), s = lj_items(net, '');
+		if (length(d)) push(G.route_rules, { type: 'field', domain: { __bw_list: d }, outboundTag: 'route-' + rn });
+		if (length(s)) push(G.route_rules, { type: 'field', ip: { __bw_list: s }, outboundTag: 'route-' + rn });
+		nok++;
+	}
+	OB_QUIET_PARSE = false;
+	if (nok) {
+		G.route_skip = skip;
+		sayf('направлений со своим выходом: %s', nok);
+	}
+}
+
+// Резолверы: пул fakeip, основной и запасной upstream, bootstrap.
+function g_dns() {
+	let p = g_val_or('fakeip_pool', u('fakeip_pool'), /^[0-9]{1,3}(\.[0-9]{1,3}){3}\/[0-9]{1,2}$/, '198.18.0.0/15');
+	G.pool = g_pool_sane(p) ? p : '198.18.0.0/15';
+	let re = /^(https|tcp|udp|tls|quic):\/\/[A-Za-z0-9._:\/?=&%+-]+$/;
+	G.up = g_val_or('dns_upstream', u('dns_upstream'), re, 'https://8.8.8.8/dns-query');
+	// Запасной: Xray идёт к следующему серверу, когда предыдущий молчит.
+	// Умолчание -- другой провайдер, отключает none.
+	let u2 = u('dns_upstream2');
+	G.up2 = (u2 == 'none' || u2 == 'off' || u2 == '-') ? '' : g_val_or('dns_upstream2', u2, re, 'https://1.1.1.1/dns-query');
+	if (G.up2 == G.up) G.up2 = '';
+	// bootstrap: имя DoH-сервера byway умеет спросить только у него же --
+	// круг. Простой резолвер строго для этих имён.
+	let bh = [];
+	for (let x in [ G.up, G.up2 ]) {
+		if (x === '') continue;
+		let h = g_dns_host(x);
+		if (h !== '') push(bh, 'full:' + h);
+	}
+	G.boot = null;
+	if (length(bh)) {
+		let bs = g_val_or('dns_bootstrap', u('dns_bootstrap'),
+			/^([0-9]{1,3}(\.[0-9]{1,3}){3}|(tcp|udp):\/\/[0-9.]{7,15})(:[0-9]{1,5})?$/, '');
+		if (bs !== '') {
+			G.boot = { address: bs, domains: bh, skipFallback: true };
+		} else {
+			warn('резолвер задан именем, а bootstrap не задан — разрешать имя нечем, взяты адреса по умолчанию');
+			warn('  вписать: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway');
+			G.up = 'https://8.8.8.8/dns-query';
+			G.up2 = 'https://1.1.1.1/dns-query';
+		}
+	}
+}
+
+// Входы: DNS, tproxy, прокси роутера, redir-in; метка и развилка direct по
+// версии Xray.
+function g_inbounds() {
+	G.dns_listen = g_val_or('dns_listen', u('dns_listen') || '127.0.0.42', /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/, '127.0.0.42');
+	G.tp = g_val_or('tproxy_port', u('tproxy_port'), /^[0-9]{1,5}$/, '1602');
+	if (!g_port_ok(G.tp)) G.tp = '1602';
+	G.lp = g_val_or('local_proxy_port', u('local_proxy_port'), /^[0-9]{1,5}$/, '1603');
+	if (!g_port_ok(G.lp)) G.lp = '1603';
+	// Метка на исходящих сокетах движка при «VPN для программ на роутере»:
+	// иначе петля через цепочку output.
+	G.mark = (u('router_via_vpn') == '1' && getenv('BW_SELFMARK')) ? int(getenv('BW_SELFMARK')) : null;
+	// С 26.9.8 domainStrategy у direct живёт в sockopt; старым ядрам -- в settings.
+	G.direct_ds = G.xver < 260908;
+	G.rd = g_redir_port();
+	// Двухсемейный вход, пока в output есть правило для fakeip6: ядро
+	// подставляет ::1 для локального пакета.
+	G.rd_listen = u('ipv6') == '1' ? '::' : '127.0.0.1';
+}
+
+// Уровень журнала и журнал обращений.
+function g_log() {
+	let l = u('log_level');
+	if (l != 'debug' && l != 'info' && l != 'warning' && l != 'error' && l != 'none') {
+		if (l !== '') warnf('уровень журнала «%s» не годится, взят warning', l);
+		l = 'warning';
+	}
+	G.loglevel = l;
+	// Журнал обращений -- для «чем пользуются» и для отладки; в режиме «всё
+	// через VPN» сбора нет: журнал писал бы адрес каждого соединения дома.
+	if (l == 'info' || l == 'debug' || (u('show_usage') == '1' && u('list_mode') != 'all')) {
+		G.access = G.access_file;
+	} else {
+		G.access = 'none';
+		// Усекаем, не удаляем: движок держит файл открытым.
+		if (fs.stat(G.access_file)) fs.writefile(G.access_file, '');
+	}
+}
+
+// Аутбаунды; сообщения -- печатью, отказ -- выход.
+function g_outbounds(skip) {
+	OB_OUT = [];
+	let R = null;
+	try {
+		R = ob_proxies(skip, G.psni, G.pws);
+	} catch (e) {
+		if (e.message !== OB_STOP) raise(e.message);
+	}
+	ob_emit(OB_OUT);
+	G.psni = R.N.SNI; G.pws = R.N.WSHOST;
+	G.R = R;
+	// Ноды направлений тоже в исключения: иначе петля.
+	G.vpn_hosts = [ ...R.hosts, ...G.route_hosts ];
+}
+
+// Пул v6, правило блокировки приватного, DNS через туннель.
+function g_dns_route() {
+	G.fake6 = null; G.qstrat = 'UseIPv4'; G.tp_listen = '0.0.0.0';
+	let b6 = [ '::/128', '::1/128', 'fc00::/7', 'fe80::/10' ];
+	if (u('ipv6') == '1') {
+		let p6 = g_val_or('fakeip6_pool', u('fakeip6_pool'), /^[0-9a-fA-F:]+\/[0-9]{1,3}$/, getenv('BW_POOL6_DEF'));
+		G.fake6 = { ipPool: p6, poolSize: G.pool_size };
+		G.qstrat = 'UseIP';
+		G.tp_listen = '::';
+		push(b6, p6);
+	}
+	// Приватное, зарезервированное и пулы fakeip одним списком: правило
+	// маршрута и итоговые правила direct обязаны совпадать.
+	G.privnets = [ '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16',
+	               '172.16.0.0/12', '192.168.0.0/16', G.pool, '224.0.0.0/4', '240.0.0.0/4', ...b6 ];
+	// Итоговые правила freedom (26.5.9+) сверяют уже разрешённый адрес: имя
+	// из Host не уведёт direct в домашнюю сеть. blockDelay 0: иначе движок
+	// держит отказанное соединение 30-90 с.
+	G.route_strat = 'IPIfNonMatch';
+	G.final = null;
+	if (G.xver >= 260509) G.final = [ { action: 'block', blockDelay: 0, ip: G.privnets } ];
+	else G.route_strat = 'IPOnDemand';
+	// Запросы встроенного DNS идут через маршрутизацию: своё правило всегда,
+	// меняется цель.
+	let dr = u('dns_route');
+	if (dr !== '' && dr != 'direct' && dr != 'tunnel')
+		warnf('dns_route=%s не понят — DNS идёт напрямую; допустимо direct или tunnel', dr);
+	G.dns_hosts = null;
+	G.dns_rule = { type: 'field', inboundTag: [ 'dns-query' ], outboundTag: 'direct' };
+	if (dr == 'tunnel') {
+		// Адрес ноды разрешается при сборке и кладётся статически: иначе
+		// запрос ушёл бы в ещё не поднятый туннель.
+		let hh = {}, any = false;
+		for (let h in G.vpn_hosts) {
+			if (!match(h, /[a-zA-Z]/)) continue;
+			let ip = g_server_addr(h);
+			// Последняя опора -- адрес из прежнего конфига.
+			if (ip === '')
+				ip = split(run([ 'sed', '-n', 's/.*"' + h + '"[[:space:]]*:[[:space:]]*"\\([0-9.]*\\)".*/\\1/p', G.out ]).out, '\n')[0] ?? '';
+			if (ip === '') {
+				if (G.R.N.PROTO == 'raw') {
+					warnf('адрес %s из своего конфига не разрешился — пропущен', h);
+					continue;
+				}
+				dief('адрес сервера %s не разрешился — без него DNS через туннель не собрать (запросы к серверу ушли бы в сам туннель); проверить интернет и DNS роутера', h);
+			}
+			hh[h] = ip; any = true;
+		}
+		if (any) G.dns_hosts = hh;
+		G.dns_rule = { type: 'field', inboundTag: [ 'dns-query' ], ...G.R.target };
+	}
+}
+
+// Конфиг объектом. Большие списки -- маркерами { __bw_list }: файл пишется в
+// конфиг потоком при выводе, не через память.
+function g_config() {
+	let R = G.R;
+	let fake = [ { ipPool: G.pool, poolSize: G.pool_size } ];
+	if (G.fake6) push(fake, G.fake6);
+	let servers = [];
+	if (G.boot) push(servers, G.boot);
+	push(servers, G.up);
+	if (G.up2 !== '') push(servers, G.up2);
+	// Проба -- и в fakedns: без fakeip клиент ушёл бы мимо перехвата.
+	push(servers, { address: 'fakedns', skipFallback: true,
+	                domains: [ { __bw_list: G.merged, pfx: 'domain:' }, 'full:' + G.probe ] });
+	let dns = {};
+	if (G.dns_hosts) dns.hosts = G.dns_hosts;
+	dns.servers = servers;
+	dns.queryStrategy = G.qstrat;
+	dns.tag = 'dns-query';
+
+	let sniff = { enabled: true, destOverride: [ 'fakedns', 'http', 'tls', 'quic' ], metadataOnly: false, routeOnly: false };
+	let inb = [
+		{ tag: 'dns-in', listen: G.dns_listen, port: 53, protocol: 'dokodemo-door',
+		  settings: { address: G.dns_listen, port: 53, network: 'tcp,udp' } },
+		// Не петля, а 0.0.0.0 (или "::"): tproxy не переписывает адрес
+		// назначения, сокет на 127.0.0.1 пакет с 198.18.x.x не поймает.
+		{ tag: 'tproxy-in', listen: G.tp_listen, port: int(G.tp), protocol: 'dokodemo-door',
+		  settings: { network: 'tcp,udp', followRedirect: true },
+		  streamSettings: { sockopt: { tproxy: 'tproxy' } }, sniffing: sniff },
+		// Прокси для самого роутера: его трафик идёт через output мимо tproxy.
+		// Вход нужен и при заворачивании: им byway скачивает себя до правил.
+		{ tag: 'local-in', listen: '127.0.0.1', port: int(G.lp), protocol: 'http',
+		  sniffing: { enabled: true, destOverride: [ 'http', 'tls' ], metadataOnly: false, routeOnly: false } },
+	];
+	// redirect, не tproxy: tproxy в output ядро не умеет. Только TCP.
+	if (G.rd !== '')
+		push(inb, { tag: 'redir-in', listen: G.rd_listen, port: int(G.rd), protocol: 'dokodemo-door',
+		            settings: { network: 'tcp', followRedirect: true },
+		            sniffing: { enabled: true, destOverride: [ 'fakedns', 'http', 'tls' ], metadataOnly: false, routeOnly: false } });
+
+	let direct = { tag: 'direct', protocol: 'freedom' }, set = {}, so = {};
+	if (G.direct_ds) set.domainStrategy = 'UseIP'; else so.domainStrategy = 'UseIP';
+	if (G.final) set.finalRules = G.final;
+	if (G.mark != null) so.mark = G.mark;
+	if (length(keys(set))) direct.settings = set;
+	if (length(keys(so))) direct.streamSettings = { sockopt: so };
+	let dnsout = { tag: 'dns-out', protocol: 'dns' };
+	if (G.mark != null) dnsout.streamSettings = { sockopt: { mark: G.mark } };
+	let outb = [ ...R.blocks, ...G.route_out, direct, dnsout, { tag: 'block', protocol: 'blackhole' } ];
+
+	let rules = [ { type: 'field', inboundTag: [ 'dns-in' ], outboundTag: 'dns-out' }, G.dns_rule ];
+	// Направления -- ПЕРЕД общими правилами: Xray берёт первое совпавшее.
+	for (let r in G.route_rules) push(rules, r);
+	if (u('list_mode') == 'all') {
+		// «Всё через VPN»: исключение -- сам сервер VPN, иначе его адрес ушёл
+		// бы в ещё не поднятый туннель. Русские зоны мимо (.рф -- пуникодом).
+		if (G.route_strat == 'IPOnDemand')
+			push(rules, { type: 'field', ip: G.privnets, outboundTag: 'block' });
+		if (u('ru_direct') == '1')
+			push(rules, { type: 'field', domain: [ 'domain:ru', 'domain:su', 'domain:xn--p1ai' ], outboundTag: 'direct' });
+		for (let h in G.vpn_hosts) {
+			if (h === '' || h == '-' || ltrim(h, ALNUM + '.:_-') !== '') continue;
+			if (match(h, /[a-zA-Z]/))
+				push(rules, { type: 'field', domain: [ 'full:' + h ], outboundTag: 'direct' });
+			else
+				push(rules, { type: 'field', ip: [ h + '/32' ], outboundTag: 'direct' });
+		}
+	} else {
+		// Домен-проба -- всегда: проверка «трафик проходит» смотрит через него
+		// всю цепочку. Пустой список подсетей -- без правила: Xray отвергает
+		// пустой массив.
+		push(rules, { type: 'field', domain: [ { __bw_list: G.merged, pfx: 'domain:', skip: G.route_skip }, 'full:' + G.probe ], ...R.target });
+		if (length(G.subnets))
+			push(rules, { type: 'field', ip: { __bw_list: G.subnets }, ...R.target });
+	}
+	// Приватное, зарезервированное и пул -- в блок, и ОБЯЗАТЕЛЬНО до direct:
+	// иначе вход tproxy -- открытый форвардер («Host: 192.168.1.1» от гостя),
+	// а соединение на сам пул порождает витки без ограничителя.
+	push(rules, { type: 'field', ip: G.privnets, outboundTag: 'block' });
+	push(rules, { type: 'field', network: 'tcp,udp', ...R.last });
+
+	let routing = {};
+	if (R.balancers) routing.balancers = R.balancers;
+	routing.domainStrategy = G.route_strat;
+	routing.rules = rules;
+
+	let c = { log: { loglevel: G.loglevel, access: G.access }, fakedns: fake, dns: dns,
+	          inbounds: inb, outbounds: outb };
+	if (R.observatory) c.observatory = R.observatory;
+	c.routing = routing;
+	return c;
+}
+
+// ── вывод ─────────────────────────────────────────────────────────────────
+// Раскладка как прежде: объекты верхних уровней по строке на поле, правила и
+// аутбаунды -- строкой, списки -- по записи на строку.
+const G_DEPTH = { log: 0, fakedns: 0, dns: 2, inbounds: 2, outbounds: 1, observatory: 0, routing: 2 };
+
+function g_is_list(v) { return type(v) == 'object' && v.__bw_list != null; }
+
+function g_has_list(v) {
+	let t = type(v);
+	if (g_is_list(v)) return true;
+	if (t == 'array') { for (let x in v) if (g_has_list(x)) return true; }
+	else if (t == 'object') { for (let k in v) if (g_has_list(v[k])) return true; }
+	return false;
+}
+
+// Записи маркера -- в массив: из памяти (массив строк) или потоком из файла.
+function g_write_list(f, m, ind, first) {
+	if (type(m.__bw_list) == 'array') {
+		if (!length(m.__bw_list)) return 0;
+		let a = [];
+		for (let x in m.__bw_list) push(a, ind + sprintf('%J', x));
+		f.write((first ? '\n' : ',\n') + join(',\n', a));
+		return length(a);
+	}
+	// Отступ большого списка -- постоянный, как прежде: по строке на запись, и
+	// два лишних пробела на 200 000 записей -- 0,8 МБ флеша.
+	return lj_stream(f, m.__bw_list, m.pfx ?? '', m.skip, '        ', first);
+}
+
+function g_write(f, v, ind, n) {
+	let t = type(v);
+	if ((t != 'object' && t != 'array') || (n <= 0 && !g_has_list(v))) {
+		f.write(sprintf('%J', v));
+		return;
+	}
+	let ni = ind + '  ';
+	if (g_is_list(v)) v = [ v ];
+	if (type(v) == 'object') {
+		let ks = keys(v);
+		if (!length(ks)) { f.write('{ }'); return; }
+		f.write('{\n');
+		for (let i = 0; i < length(ks); i++) {
+			f.write(ni + sprintf('%J', ks[i]) + ': ');
+			g_write(f, v[ks[i]], ni, n - 1);
+			f.write(i < length(ks) - 1 ? ',\n' : '\n');
+		}
+		f.write(ind + '}');
+		return;
+	}
+	f.write('[');
+	let first = true;
+	for (let x in v) {
+		if (g_is_list(x)) {
+			if (g_write_list(f, x, ni, first)) first = false;
+			continue;
+		}
+		f.write(first ? '\n' : ',\n');
+		first = false;
+		f.write(ni);
+		g_write(f, x, ni, n - 1);
+	}
+	f.write(first ? ' ]' : '\n' + ind + ']');
+}
+
+// Черновик в память (/tmp), не во флеш: живёт секунды, а на неудачной сборке
+// оставался бы файл с uuid. Права 600 до записи; движок не от root читает
+// конфиг группой byway.
+function g_write_tmp(c) {
+	// Сперва удалить: имя предсказуемо, /tmp общий -- сосед мог создать файл
+	// 0666 заранее и читать конфиг.
+	fs.unlink(G_TMP);
+	let f = fs.open(G_TMP, 'w', 0600);
+	if (!f) dief('черновик конфига %s не записан: %s', G_TMP, fs.error());
+	if (run([ 'chgrp', 'byway', G_TMP ]).code == 0) fs.chmod(G_TMP, 0640);
+	f.write('{\n');
+	let ks = keys(c);
+	for (let i = 0; i < length(ks); i++) {
+		f.write('  ' + sprintf('%J', ks[i]) + ': ');
+		g_write(f, c[ks[i]], '  ', G_DEPTH[ks[i]] ?? 1);
+		f.write(i < length(ks) - 1 ? ',\n\n' : '\n');
+	}
+	f.write('}\n');
+	f.close();
+}
+
+function g_test() {
+	let r = run([ G.xray, 'run', '-test', '-c', G_TMP ], true);
+	return { ok: r.code == 0, out: rtrim(r.out, '\n') };
+}
+
+// Отброшенные записи -- вслух: молчаливая потеря выглядит как «byway не
+// работает с этим доменом». Уникальные: список читается дважды.
+function g_report_bad() {
+	if (LJ_BF) { LJ_BF.close(); LJ_BF = null; }
+	let seen = {}, bad = [];
+	for (let l in split(fs.readfile(G.badlist) ?? '', '\n'))
+		if (l !== '' && !seen[l]) { seen[l] = true; push(bad, l); }
+	if (!length(bad)) return;
+	bad = sort(bad);
+	warnf('записей отброшено как неподходящие: %s', length(bad));
+	for (let i = 0; i < length(bad) && i < 10; i++) warnf('    %s', bad[i]);
+	if (length(bad) > 10)
+		warnf('    … и ещё %s (весь список: sort -u %s)', length(bad) - 10, G.badlist);
+	warn('  причина: не похоже ни на домен (буквы, цифры, дефис и точки; последняя часть — не короче двух букв), ни на подсеть IPv4, либо длиннее 253 знаков');
+}
+
+// bw_uc gen: окружение -- от cmd_gen (config/gen.sh).
+function cmd_gen() {
+	G = { out: getenv('BW_OUT'), lists: getenv('BW_LISTS'), routes: getenv('BW_ROUTES'),
+	      merged: getenv('BW_MERGED'), subnets_file: getenv('BW_SUBNETS'), badlist: getenv('BW_BADLIST'),
+	      access_file: getenv('BW_ACCESS'), probe: getenv('BW_PROBE'), xray: getenv('BW_XRAY'),
+	      xver: int(getenv('BW_XRAYVER') || '999999'), psni: '', pws: '' };
+	LJ_BAD = G.badlist;
+	LJ_BF = null;
+	let D = G.lists + '/domains.lst';
+
+	g_routes();
+	if (!fs.stat(D)) dief('нет списка доменов %s', D);
+	if (!fs.stat(G.subnets_file))
+		warnf('нет списка подсетей %s — правило по адресам не будет создано', G.subnets_file);
+	g_dns();
+	g_inbounds();
+	g_log();
+	// poolSize -- потолок пар «домен-адрес»; вытесненная пара отдаёт адрес
+	// другому домену, и соединение уходит к чужому хосту без ошибки.
+	G.pool_size = g_pool_size(G.pool);
+	let dcount = lj_count(G.merged);
+	if (dcount > G.pool_size)
+		warnf('доменов %s, а адресов в пуле %s — часть будет вытесняться и уводить соединения к чужому хосту. Расширить пул (byway.main.fakeip_pool) либо укоротить список', dcount, G.pool_size);
+	g_outbounds('');
+	g_dns_route();
+	G.subnets = (u('list_mode') != 'all' && fs.stat(G.subnets_file)) ?
+		lj_items(lj_lines(G.subnets_file), '') : [];
+	g_write_tmp(g_config());
+
+	// Каталог журнала обращений: движок при проверке открывает файл.
+	if (!fs.stat('/var/run/byway')) { fs.mkdir('/var/run/byway', 0755); fs.chmod('/var/run/byway', 0755); }
+	let t = g_test();
+	// Автовыбор: ключ, который отвергает только сам движок, снимается, и
+	// сборка повторяется; хотя бы один ключ остаётся.
+	let tries = 0, skip = '';
+	while (!t.ok && tries < 6 && u('conn_mode') == 'urltest' && G.R.n > 1) {
+		let bk = null, line = null;
+		for (let l in split(t.out, '\n')) {
+			let m = match(l, /.*proxy-([0-9]+)/);
+			if (m) { bk = int(m[1]); break; }
+		}
+		if (bk == null || G.R.keyidx[bk] == null) break;
+		let bki = G.R.keyidx[bk];
+		for (let l in split(t.out, '\n')) if (index(l, 'proxy-' + bk) >= 0) { line = l; break; }
+		warnf('ключ %s отвергнут движком — пропущен: %s', bki + 1, substr(pk_lastafter(line ?? '', '> '), 0, 120));
+		skip += ' ' + bki;
+		g_outbounds(skip);
+		g_dns_route();
+		g_write_tmp(g_config());
+		tries++;
+		t = g_test();
+	}
+	if (!t.ok) {
+		warnf('движок отверг конфиг, черновик остался в %s:', G_TMP);
+		let ls = split(t.out, '\n');
+		for (let l in slice(ls, length(ls) > 5 ? length(ls) - 5 : 0)) print('    ', l, '\n');
+		g_xray_hint(t.out);
+		exit(1);
+	}
+	// Предупреждения движка не глотать: транспорт помечают устаревшим за
+	// версию-другую до удаления.
+	let dw = {}, dl = [];
+	for (let l in split(t.out, '\n')) {
+		if (!match(l, /deprecated|will be removed|migrate to/i)) continue;
+		let i = rindex(l, 'errors: ');
+		let w = substr(i < 0 ? l : substr(l, i + 8), 0, 96);
+		if (!dw[w]) { dw[w] = true; push(dl, w); }
+	}
+	for (let w in sort(dl)) warnf('движок: %s', w);
+	g_report_bad();
+
+	let R = G.R, N = R.N;
+	// Не изменилось -- рабочий не трогаем: панель и procd зовут gen при каждом
+	// «Сохранить и применить».
+	if (run([ 'cmp', '-s', G_TMP, G.out ]).code == 0) {
+		fs.unlink(G_TMP);
+		say('конфиг не изменился, рабочий оставлен как есть');
+		sayf('  доменов %s, подсетей %s', dcount, lj_count(G.subnets_file));
+		return;
+	}
+	// Место -- до подмены: обрыв записи оставил бы половину конфига.
+	let need = int(fs.stat(G_TMP).size / 1024) + 32;
+	let df = split(split(run([ 'df', '-k', G.lists ]).out, '\n')[1] ?? '', /[ \t]+/);
+	let have = df[3] ?? '';
+	if (have !== '' && int(have) < need)
+		dief('на флеше свободно %s КБ, для конфига нужно %s -- рабочий не тронут', have, need);
+	let mv = run([ 'mv', G_TMP, G.out ], true);
+	if (mv.code != 0) dief('конфиг не перенесён на место: %s', trim(mv.out));
+	// В конфиге uuid ключа: root и, когда движок не от root, группа byway.
+	if (u('xray_root') != '1' && run([ 'test', '-x', '/sbin/ujail' ]).code == 0 &&
+	    run([ 'chgrp', 'byway', G.out ]).code == 0)
+		fs.chmod(G.out, 0640);
+	else
+		fs.chmod(G.out, 0600);
+	sayf('конфиг собран и проверен движком: %s (%s байт)', G.out, fs.stat(G.out).size);
+	let own = lj_count(D), ns = lj_count(G.subnets_file);
+	if (dcount > own)
+		sayf('  доменов %s (свои %s + пресеты), подсетей %s', dcount, own, ns);
+	else
+		sayf('  доменов %s, подсетей %s', own, ns);
+	if (u('conn_mode') == 'urltest')
+		sayf('  подключение: %s — Xray-core выбирает рабочий ключ по задержке', N.LABEL);
+	else
+		sayf('  подключение: %s (%s:%s), транспорт %s, защита %s', N.LABEL || N.HOST, N.HOST, N.PORT, N.TYPE, N.SEC);
+	// Ширина -- по объединённому списку: 0.0.0.0/0 молча делает из «по
+	// спискам» полный туннель.
+	g_net_warn(G.subnets_file);
+	sayf('  пул fakeip %s, DNS-вход %s:53, tproxy %s, прокси роутера 127.0.0.1:%s', G.pool, G.dns_listen, G.tp, G.lp);
 }
 
 // Разбор команды. Сюда попадают только перенесённые на ucode команды: прочие
@@ -7880,10 +7912,9 @@ function cmd_xlat(fmt, ...args) {
 const CMDS = {
 	version: function () { print('byway ', getenv('BW_VERSION'), '\n'); },
 	xlat: cmd_xlat,
-	listjson: list_json,
 	parse: cmd_parse,
 	outbound: cmd_outbound,
-	proxies: cmd_proxies,
+	gen: cmd_gen,
 };
 
 let _cmd = ARGV[0] ?? '';

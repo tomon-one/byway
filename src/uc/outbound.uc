@@ -1,8 +1,8 @@
 // Аутбаунд Xray из разобранного ключа: транспорт, защита (tls, reality), flow,
 // mux, протокол -- перенос build_stream, build_outbound, proxy_block и
 // build_proxies из shell. JSON собирается объектами, не склейкой строк.
-// Пока gen на shell, наружу идут команды sh (как у bw_uc parse): сообщения по
-// порядку, N_*, готовый блок JSON. Тексты сообщений -- прежние ключи перевода.
+// Сообщения копятся записями по порядку: gen (uc/gen.uc) печатает их сам,
+// проба ключа (bw_uc outbound) получает командами sh вместе с N_* и блоком.
 // Функции -- верхнего уровня, состояние -- OB_* (см. uc/keys.uc о ucode 22.03).
 
 const OB_STOP = '__byway_outbound_stop__';
@@ -10,16 +10,17 @@ const OB_STOP = '__byway_outbound_stop__';
 // parse_node шёл в >/dev/null, а сообщения транспорта -- на экран).
 let OB_OUT = [], OB_QUIET_PARSE = false, OB_FATAL = null;
 
-// Сообщения -- командами sh; в тихом прогоне (проба ключа автовыбора)
-// копятся, отказ запоминается текстом для «ключ пропущен».
+// Сообщение -- записью { c: warn|warnf|die|dief, f, a, e: в stderr }; в тихом
+// прогоне (проба ключа автовыбора) копятся, отказ запоминается текстом для
+// «ключ пропущен».
 function ob_cmd(name, fmt, args, err) {
-	push(OB_OUT, name + ' ' + join(' ', map([ fmt, ...args ], pk_q)) + (err ? ' >&2' : ''));
+	push(OB_OUT, { c: name, f: fmt, a: args, e: err });
 }
 function ob_warn(m)          { ob_cmd('warn', m, []); }
 function ob_warnf(m, ...a)   { ob_cmd('warnf', m, a); }
 function ob_die(m)           { OB_FATAL = _t(m); ob_cmd('die', m, []); raise(OB_STOP); }
 function ob_dief(m, ...a)    { OB_FATAL = _pf(_t(m), a); ob_cmd('dief', m, a); raise(OB_STOP); }
-function ob_put(n, v)        { push(OB_OUT, n + '=' + pk_q(v)); }
+function ob_put(n, v)        { push(OB_OUT, { p: n, v: v }); }
 
 // val_or: значение настройки по образцу, иначе умолчание с жалобой в stderr.
 function ob_val_or(name, val, re, def, where) {
@@ -308,7 +309,23 @@ function ob_put_n(N) {
 	for (let k in [ 'PASS', 'USER', 'OBFSPW' ]) ob_put('J_' + k, pk_jstr(N[k] ?? ''));
 }
 
-function ob_flush() { print(join('\n', OB_OUT), '\n'); }
+// Записи -- командами sh (как у bw_uc parse).
+function ob_flush() {
+	let r = [];
+	for (let m in OB_OUT)
+		push(r, m.p != null ? m.p + '=' + pk_q(m.v) :
+			m.c + ' ' + join(' ', map([ m.f, ...m.a ], pk_q)) + (m.e ? ' >&2' : ''));
+	print(join('\n', r), '\n');
+}
+
+// Записи -- печатью здесь же (gen): отказ -- [x] и выход, как die в shell.
+function ob_emit(list) {
+	for (let m in list) {
+		if (m.p != null) continue;
+		if (m.c == 'warn' || m.c == 'warnf') _warn(_pf(_t(m.f), m.a));
+		else die_raw(_pf(_t(m.f), m.a));
+	}
+}
 
 // bw_uc outbound ТЕГ: ключ из BW_URL (пусто -- из настроек), N_* и блок (PB).
 function cmd_outbound(tag, quiet) {
@@ -325,80 +342,66 @@ function cmd_outbound(tag, quiet) {
 	ob_flush();
 }
 
-// bw_uc proxies: аутбаунды целиком (build_proxies). Обычные режимы -- один
-// с тегом proxy; urltest -- по одному на ключ (proxy-N) и балансировщик
-// leastPing. Негодный ключ автовыбора пропускается с причиной.
-function cmd_proxies() {
-	OB_OUT = [];
-	let mode = u('conn_mode');
+// Аутбаунды целиком (бывший build_proxies). Обычные режимы -- один с тегом
+// proxy; urltest -- по одному на ключ (proxy-N) и балансировщик leastPing.
+// Негодный ключ автовыбора пропускается с причиной. skip -- номера ключей,
+// которые отверг сам движок (повтор сборки в gen). psni, pws -- sni и host
+// прежнего ключа (у ss своих нет). Сообщения -- в OB_OUT, отказ -- OB_STOP.
+function ob_proxies(skip, psni, pws) {
 	let all = u('list_mode') == 'all';
-	let tgt = '"outboundTag": "proxy"';
-	ob_put('OBSERVATORY', '');
-	ob_put('BALANCERS', '');
-	try {
-		if (mode != 'urltest') {
-			let k = ob_key('', 'proxy', getenv('BW_SNI') ?? '', getenv('BW_WSHOST') ?? '');
-			ob_put_n(k.N);
-			ob_put('PROXIES', sprintf('%J', k.block));
-			ob_put('PROXY_TARGET', tgt);
-			ob_put('LAST_TARGET', all ? tgt : '"outboundTag": "direct"');
-			if (k.raw) {
-				let hs = ob_raw_hosts(k.block);
-				ob_put('VPN_HOSTS', join(' ', hs));
-				if (!length(hs))
-					ob_warn('свой конфиг: адрес сервера лежит внутри чужого JSON, byway его не знает и из перехвата не исключит — проверить, что адрес сервера не попал в списки, иначе туннель замкнётся сам на себя');
-				if (u('router_via_vpn') == '1' && index(k.N.RAW, '"mark"') < 0)
-					ob_warnf('свой конфиг: включено «VPN для программ на роутере», а метки в нём нет — если адрес сервера попадёт в списки, соединение движка к нему уйдёт в перехват по кругу; дописать в streamSettings поле sockopt.mark = %s', getenv('BW_SELFMARK') ?? '');
-			} else {
-				ob_put('VPN_HOSTS', k.N.HOST);
-			}
+	let R = { blocks: [], hosts: [], keyidx: [], n: 0, N: null,
+	          target: { outboundTag: 'proxy' }, last: null, observatory: null, balancers: null };
+	if (u('conn_mode') != 'urltest') {
+		let k = ob_key('', 'proxy', psni, pws);
+		R.N = k.N;
+		push(R.blocks, k.block);
+		R.last = all ? R.target : { outboundTag: 'direct' };
+		if (k.raw) {
+			R.hosts = ob_raw_hosts(k.block);
+			if (!length(R.hosts))
+				ob_warn('свой конфиг: адрес сервера лежит внутри чужого JSON, byway его не знает и из перехвата не исключит — проверить, что адрес сервера не попал в списки, иначе туннель замкнётся сам на себя');
+			if (u('router_via_vpn') == '1' && index(k.N.RAW, '"mark"') < 0)
+				ob_warnf('свой конфиг: включено «VPN для программ на роутере», а метки в нём нет — если адрес сервера попадёт в списки, соединение движка к нему уйдёт в перехват по кругу; дописать в streamSettings поле sockopt.mark = %s', getenv('BW_SELFMARK') ?? '');
 		} else {
-			let keys = split(trim(u('node_urls')), /[ \t\n]+/);
-			if (keys[0] == '') ob_die('выбран автовыбор, но ни одного ключа не добавлено');
-			let skip = ' ' + (getenv('BW_SKIP') ?? '') + ' ';
-			let blocks = [], idx = '', hosts = '', n = 0, last = null;
-			let psni = getenv('BW_SNI') ?? '', pws = getenv('BW_WSHOST') ?? '';
-			for (let ki = 0; ki < length(keys); ki++) {
-				if (index(skip, ' ' + ki + ' ') >= 0) continue;
-				// Тихий прогон: сообщения ключа -- только если он годен.
-				let saved = OB_OUT;
-				OB_OUT = [];
-				OB_FATAL = null;
-				let k = null;
-				try {
-					k = ob_key(keys[ki], 'proxy-' + n, psni, pws);
-				} catch (e) {
-					if (e.message !== OB_STOP) raise(e.message);
-				}
-				let msgs = OB_OUT;
-				OB_OUT = saved;
-				if (k == null) {
-					ob_warnf('ключ пропущен: %s', OB_FATAL ?? '');
-					continue;
-				}
-				for (let m in msgs) push(OB_OUT, m);
-				psni = k.N.SNI; pws = k.N.WSHOST;
-				push(blocks, sprintf('%J', k.block));
-				idx += ' ' + ki;
-				hosts += ' ' + k.N.HOST;
-				last = k.N;
-				n++;
-			}
-			if (!n) ob_die('ни один ключ не разобрался');
-			ob_put_n(last);
-			let iv = ob_val_or('probe_interval', u('probe_interval'), /^[0-9]{1,4}[smh]$/, '3m', _t('конфига движка'));
-			ob_put('PROXIES', '    ' + join(',\n    ', blocks));
-			ob_put('PROXY_KEYIDX', idx);
-			ob_put('VPN_HOSTS', hosts);
-			ob_put('_n', n);
-			ob_put('OBSERVATORY', '"observatory": { "subjectSelector": [ "proxy-" ], "probeUrl": "https://www.google.com/generate_204", "probeInterval": "' + iv + '" },');
-			ob_put('BALANCERS', '"balancers": [ { "tag": "auto", "selector": [ "proxy-" ], "strategy": { "type": "leastPing" } } ],');
-			ob_put('PROXY_TARGET', '"balancerTag": "auto"');
-			ob_put('LAST_TARGET', all ? '"balancerTag": "auto"' : '"outboundTag": "direct"');
-			ob_put('N_LABEL', _f('автовыбор из %s', n));
+			R.hosts = [ k.N.HOST ];
 		}
-	} catch (e) {
-		if (e.message !== OB_STOP) raise(e.message);
+		return R;
 	}
-	ob_flush();
+	let keys = split(trim(u('node_urls')), /[ \t\n]+/);
+	if (keys[0] == '') ob_die('выбран автовыбор, но ни одного ключа не добавлено');
+	skip = ' ' + (skip ?? '') + ' ';
+	for (let ki = 0; ki < length(keys); ki++) {
+		if (index(skip, ' ' + ki + ' ') >= 0) continue;
+		// Тихий прогон: сообщения ключа -- только если он годен.
+		let saved = OB_OUT;
+		OB_OUT = [];
+		OB_FATAL = null;
+		let k = null;
+		try {
+			k = ob_key(keys[ki], 'proxy-' + R.n, psni, pws);
+		} catch (e) {
+			if (e.message !== OB_STOP) raise(e.message);
+		}
+		let msgs = OB_OUT;
+		OB_OUT = saved;
+		if (k == null) {
+			ob_warnf('ключ пропущен: %s', OB_FATAL ?? '');
+			continue;
+		}
+		for (let m in msgs) push(OB_OUT, m);
+		psni = k.N.SNI; pws = k.N.WSHOST;
+		push(R.blocks, k.block);
+		push(R.keyidx, ki);
+		push(R.hosts, k.N.HOST);
+		R.N = k.N;
+		R.n++;
+	}
+	if (!R.n) ob_die('ни один ключ не разобрался');
+	let iv = ob_val_or('probe_interval', u('probe_interval'), /^[0-9]{1,4}[smh]$/, '3m', _t('конфига движка'));
+	R.observatory = { subjectSelector: [ 'proxy-' ], probeUrl: 'https://www.google.com/generate_204', probeInterval: iv };
+	R.balancers = [ { tag: 'auto', selector: [ 'proxy-' ], strategy: { type: 'leastPing' } } ];
+	R.target = { balancerTag: 'auto' };
+	R.last = all ? R.target : { outboundTag: 'direct' };
+	R.N.LABEL = _f('автовыбор из %s', R.n);
+	return R;
 }
