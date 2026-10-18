@@ -22,11 +22,11 @@ function _only(s, set) { return ltrim(s, set) === ''; }
 // против 17 у awk), а ltrim/index работают на C. Равносильно паре
 //   ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$  и
 //   \.([A-Za-z][A-Za-z]+|xn--[A-Za-z0-9-]+)$
-// плюс отказ на «..».
-function _domain_ok(v) {
+// плюс отказ на «..» (dots -- без него: так судит plain_domains).
+function _domain_ok(v, dots) {
 	let n = length(v);
 	if (!n || !_only(v, ALNUM + '.-') || index(ALNUM, substr(v, 0, 1)) < 0 ||
-	    index(ALNUM, substr(v, n - 1, 1)) < 0 || index(v, '..') >= 0)
+	    index(ALNUM, substr(v, n - 1, 1)) < 0 || (!dots && index(v, '..') >= 0))
 		return false;
 	let d = rindex(v, '.');
 	if (d < 0) return false;
@@ -166,4 +166,14 @@ function lj_count(file) {
 		if (lj_line(l) != null) n++;
 	f.close();
 	return n;
+}
+
+// Запись, которую можно спросить у резолвера (plain_domains в lists/merge.sh):
+// без regexp:/keyword:, префиксы domain:/full: сняты; иначе null.
+function lj_plain(l) {
+	l = trim(replace(l, '\r', ''), WS);
+	if (l === '' || substr(l, 0, 1) == '#' || substr(l, 0, 2) == '//') return null;
+	if (substr(l, 0, 7) == 'domain:') l = substr(l, 7);
+	if (substr(l, 0, 5) == 'full:') l = substr(l, 5);
+	return _domain_ok(l, true) ? l : null;
 }

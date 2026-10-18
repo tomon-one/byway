@@ -5068,201 +5068,23 @@ import_routes() {
     return 0
 }
 
-# Учёт обращений по журналу Xray (stat из cron) и top -- чем пользуются.
+# Учёт обращений (stat из cron) и top -- в ucode (uc/stat.uc). Здесь пути,
+# которые читают и другие команды (clear в data/transfer.sh), и склейка
+# списков, пока она на shell.
 
-# ── учёт использования ─────────────────────────────────────────────────────
-#
-# Xray пишет строку в момент приёма, до сниффинга: в ней адрес из пула, не
-# имя (`accepted tcp:198.19.14.63:443 [tproxy-in -> proxy]`). FakeDNS отдаёт
-# домену один адрес до рестарта Xray -- раз за PID строим таблицу адрес ->
-# имя. logqueries у dnsmasq отвергнут: раздувает буфер журнала (256 КБ) и
-# чаще пишет во флеш. Подсети идут по настоящим адресам -- строка «(по IP)».
-
-# Рабочие файлы учёта -- в каталоге root (/var/run/byway, 755), а не в общем
-# /tmp: движок от пользователя byway мог подложить туда карту «адрес -> домен»
-# или метку, и root записал бы её в usage.tsv.
 STATDIR=/var/run/byway
 STAT=$LISTS/usage.tsv        # домен, обращений, последний раз
-
-MAP=$STATDIR/fakemap       # адрес -> домен, живёт в памяти как и сам Xray
-
-MARK=$STATDIR/statmark     # PID и метка времени последней обработанной строки
-
-MAPPOS=$STATDIR/fakemap.pos # докуда дошли, строя карту порциями
-
-# Журнал обращений, из которого считается учёт, движок пишет только при
-# show_usage=1 (или уровне info/debug).
-stat_all() { [ "$(u list_mode)" = "all" ]; }
-stat_off() {
-    stat_all && return 0
-    [ "$(u show_usage)" = "1" ] && return 1
-    case "$(u log_level)" in info|debug) return 1 ;; esac
-    return 0
-}
+MAP=$STATDIR/fakemap         # адрес -> домен, живёт в памяти как и сам Xray
+MARK=$STATDIR/statmark       # PID и метка времени последней обработанной строки
+MAPPOS=$STATDIR/fakemap.pos  # докуда дошли, строя карту порциями
 
 cmd_stat() {
-    mkdir -p "$STATDIR" 2>/dev/null || true
-    stat_all && { warn "в режиме «всё через VPN» журнал обращений не ведётся — статистики нет"; return 0; }
-    stat_off && warn "сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)"
-    _p=$(xray_pid)
-    [ -n "$_p" ] || { warn "xray не запущен, считать нечего"; return 0; }
-    _l=$(dns_addr)
-
-    _oldpid=$(sed -n 1p "$MARK" 2>/dev/null || true)
-    stat_map
-    stat_collect
-    stat_count
-    : > "$_tmp"
+    BW_OUT=$OUT BW_LISTS=$LISTS BW_ACCESS=$ACCESS BW_ROUTES=$ROUTES_DIR \
+    BW_MERGED=$(merged_domains) bw_uc stat
 }
 
-# Карта адрес -> домен через FakeDNS, порциями.
-# Домены для карты адрес -> домен: общий список и списки включённых
-# направлений (их соединения идут в учёт наравне с основными).
-stat_domains() {
-    {
-        cat "$(merged_domains)" 2>/dev/null || true
-        for _rn in $(route_names); do
-            [ "$(uci -q get "byway.$_rn.enabled")" = "0" ] && continue
-            route_list "$ROUTES_DIR/$_rn.lst" dom
-        done
-    } > $STATDIR/stat-doms
-    plain_domains $STATDIR/stat-doms
-}
-
-stat_map() {
-    # Таблица привязана к PID: после рестарта прежние адреса недействительны.
-    # Порциями (_MSTEP доменов за прогон, позиция в MAPPOS): полный обход --
-    # около семи форков на домен, при 200 000 доменов прогон длиннее часа, и
-    # следующий cron стартовал бы поверх. Неназванный адрес -- «(по IP)».
-    _MSTEP=200
-    _newmap=0
-    if [ "$_oldpid" != "$_p" ]; then : > "$MAP"; : > "$MAPPOS"; _newmap=1; fi
-    _mpos=$(cat "$MAPPOS" 2>/dev/null || echo 0)
-    case "$_mpos" in ''|*[!0-9]*) _mpos=0 ;; esac
-    stat_domains > $STATDIR/stat-doms.plain
-    _mall=$(grep -c . $STATDIR/stat-doms.plain || true); _mall=${_mall:-0}
-    if [ "$_newmap" = 1 ] || [ "$_mpos" -lt "$_mall" ]; then
-        _fre=$(fakeip_re)
-        sed -n "$((_mpos + 1)),$((_mpos + _MSTEP))p" $STATDIR/stat-doms.plain |
-        while IFS= read -r _d; do
-            _a=$(nslookup "$_d" "$_l" 2>/dev/null |
-                 sed -n 's/^Address: *//p' | grep -E "^$_fre" | head -1)
-            [ -n "$_a" ] && printf '%s\t%s\n' "$_a" "$_d" >> "$MAP"
-        done || true
-        # `|| true`: последним в теле цикла AND-список, домен без подставного
-        # адреса даёт 1, и под set -e весь учёт умер бы.
-        _mpos=$((_mpos + _MSTEP))
-        [ "$_mpos" -gt "$_mall" ] && _mpos=$_mall || true
-        printf '%s' "$_mpos" > "$MAPPOS" 2>/dev/null || true
-        # Отсечка времени -- по сборке таблицы: в буфере строки прежних
-        # запусков Xray, их адреса из пула недействительны. Только при смене
-        # pid, иначе учёт обнулялся бы каждый час, пока карта достраивается.
-        # Время в UTC: Xray пишет в нём, syslog -- в местном.
-        if [ "$_newmap" = 1 ]; then
-            printf '%s\n%s\n' "$_p" "$(date -u '+%Y/%m/%d %H:%M:%S')" > "$MARK"
-        fi
-        sayf "карта: %s из %s доменов, адресов %s" \
-             "$_mpos" "$_mall" "$(grep -c . "$MAP" || true)"
-    fi
-    return 0
-}
-
-# Отбор строк журнала обращений после последней учтённой.
-stat_collect() {
-    _since=$(sed -n 2p "$MARK" 2>/dev/null || true)
-    _tmp=$STATDIR/stat.tmp
-
-    # Метка -- время Xray из начала строки (монотонно в журнале, у syslog
-    # другой пояс). Ветка logread -- для конфига версии до 2026-09-05, где
-    # обращения шли в syslog: без неё учёт обнулился бы до пересборки.
-    if [ -s "$ACCESS" ]; then
-        grep -E 'tproxy-in -> (proxy|route-)' "$ACCESS" > "$_tmp" 2>/dev/null || true
-        # Обрезаем сразу, оставляя хвост 50 строк: из него cmd_status берёт имя
-        # работающего ключа. Двойного счёта нет: метка по последней учтённой.
-        # cat, а не mv: движок держит файл открытым, подмена уведёт запись в
-        # удалённый. Строки между grep и обрезкой теряются -- единицы.
-        tail -50 "$ACCESS" > "$ACCESS.n" 2>/dev/null &&
-            cat "$ACCESS.n" > "$ACCESS" && rm -f "$ACCESS.n" || true
-    else
-        logread -e xray 2>/dev/null |
-          sed -n 's/.*xray[^:]*\[[0-9]*\]: //p' |
-          grep -E 'tproxy-in -> (proxy|route-)' > "$_tmp" || true
-    fi
-    if [ -n "$_since" ]; then
-        # substr: метка -- ровно 19 знаков, строка с той же секундой строго
-        # больше неё, а хвост в 50 строк содержит последнюю учтённую: без
-        # substr она засчитывалась бы заново каждый час.
-        awk -v s="$_since" 'substr($0,1,19) > s' "$_tmp" > "$_tmp.new" && mv "$_tmp.new" "$_tmp"
-    fi
-    return 0
-}
-
-# Подсчёт обращений по таблице и запись итога.
-stat_count() {
-    _last=$(tail -1 "$_tmp" 2>/dev/null | cut -d' ' -f1-2 || true)
-    # grep -c при нуле совпадений даёт 1 -- под set -e смерть, а ноль здесь
-    # штатен.
-    _n=$(grep -c . "$_tmp" 2>/dev/null || true); _n=${_n:-0}
-
-    if [ "${_n:-0}" -gt 0 ]; then
-        _today=$(date '+%Y-%m-%d')
-        # Всё в awk одним проходом: дешевле shell-цикла по тысяче строк.
-        awk -v map="$MAP" -v stat="$STAT" -v today="$_today" '
-          BEGIN {
-            while ((getline l < map) > 0) { split(l, a, "\t"); name[a[1]] = a[2] }
-            close(map)
-            while ((getline l < stat) > 0) {
-              split(l, b, "\t"); cnt[b[1]] = b[2]; seen[b[1]] = b[3]
-            }
-            close(stat)
-          }
-          {
-            if (match($0, /tcp:[0-9.]+:/) || match($0, /udp:[0-9.]+:/)) {
-              s = substr($0, RSTART + 4, RLENGTH - 5)
-              d = (s in name) ? name[s] : "(по IP)"
-              cnt[d]++; seen[d] = today
-            }
-          }
-          END { for (d in cnt) printf "%s\t%d\t%s\n", d, cnt[d], seen[d] }
-        ' "$_tmp" | sort > $STATDIR/stat.new
-        # Во флеш -- только если итог изменился.
-        if ! cmp -s $STATDIR/stat.new "$STAT"; then
-            mv $STATDIR/stat.new "$STAT"
-            chmod 600 "$STAT" 2>/dev/null || true
-        else
-            rm -f $STATDIR/stat.new
-        fi
-        [ -n "$_last" ] && printf '%s\n%s\n' "$_p" "$_last" > "$MARK"
-        sayf "учтено соединений: %s, всего доменов в учёте: %s" "$_n" "$(grep -c . "$STAT")"
-    else
-        say "новых соединений в журнале нет"
-    fi
-    return 0
-}
-
-# Показать накопленное. Без аргумента — двадцать самых частых.
 cmd_top() {
-    if [ ! -s "$STAT" ]; then
-        stat_all && die "в режиме «всё через VPN» журнал обращений не ведётся — статистики нет"
-        stat_off && die "сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)"
-        die "учёт пуст. Собирается задачей cron; вручную: byway stat"
-    fi
-    _n=${1:-20}
-    # Ширина колонки -- в символах: printf в busybox считает байты, и
-    # кириллица сдвигала колонку. Всё печатает один awk (`_len` на строку --
-    # сотня процессов, 0.15 с из 0.29 с, замер 2026-09-05); ширина -- байты
-    # минус продолжающие байты UTF-8, как в _len. Отступ циклом: busybox awk
-    # не поддерживает %*s.
-    sort -t"$(printf '\t')" -k2 -rn "$STAT" | head -"$_n" |
-      awk -F'\t' -v h1="$(_t домен)" -v h2="$(_t обращений)" \
-              -v h3="$(_t 'последний раз')" -v cont='[\200-\277]' '
-        function w(s,   t) { t = s; gsub(cont, "", t); return length(t) }
-        function pad(n,   s) { s = ""; while (n-- > 0) s = s " "; return s }
-        function row(a, b, c) { printf "  %s%s%8s  %s\n", a, pad(42 - w(a)), b, c }
-        BEGIN { row(h1, h2, h3) }
-        { row($1, $2, $3) }'
-    printf "$(_t '\n  всего в учёте %s доменов из %s в списке\n')" \
-      "$(grep -c . "$STAT")" "$(count_list "$(merged_domains)")"
+    BW_LISTS=$LISTS BW_MERGED=$(merged_domains) bw_uc top "$@"
 }
 
 # Текстовое меню (byway menu) поверх тех же команд.
@@ -5817,11 +5639,11 @@ function _only(s, set) { return ltrim(s, set) === ''; }
 // против 17 у awk), а ltrim/index работают на C. Равносильно паре
 //   ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$  и
 //   \.([A-Za-z][A-Za-z]+|xn--[A-Za-z0-9-]+)$
-// плюс отказ на «..».
-function _domain_ok(v) {
+// плюс отказ на «..» (dots -- без него: так судит plain_domains).
+function _domain_ok(v, dots) {
 	let n = length(v);
 	if (!n || !_only(v, ALNUM + '.-') || index(ALNUM, substr(v, 0, 1)) < 0 ||
-	    index(ALNUM, substr(v, n - 1, 1)) < 0 || index(v, '..') >= 0)
+	    index(ALNUM, substr(v, n - 1, 1)) < 0 || (!dots && index(v, '..') >= 0))
 		return false;
 	let d = rindex(v, '.');
 	if (d < 0) return false;
@@ -5961,6 +5783,16 @@ function lj_count(file) {
 		if (lj_line(l) != null) n++;
 	f.close();
 	return n;
+}
+
+// Запись, которую можно спросить у резолвера (plain_domains в lists/merge.sh):
+// без regexp:/keyword:, префиксы domain:/full: сняты; иначе null.
+function lj_plain(l) {
+	l = trim(replace(l, '\r', ''), WS);
+	if (l === '' || substr(l, 0, 1) == '#' || substr(l, 0, 2) == '//') return null;
+	if (substr(l, 0, 7) == 'domain:') l = substr(l, 7);
+	if (substr(l, 0, 5) == 'full:') l = substr(l, 5);
+	return _domain_ok(l, true) ? l : null;
 }
 
 // Разбор ключа (vless, vmess, trojan, ss, socks, hysteria2, wireguard).
@@ -7688,14 +7520,8 @@ function st_plain_first(file) {
 	let f = fs.open(file, 'r'), l;
 	if (!f) return '';
 	while ((l = f.read('line')) != null && l !== '') {
-		l = lj_line(replace(l, '\r', ''));
-		if (l == null) continue;
-		if (substr(l, 0, 7) == 'domain:') l = substr(l, 7);
-		else if (substr(l, 0, 5) == 'full:') l = substr(l, 5);
-		if (match(l, /^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/) && match(l, /\.([A-Za-z][A-Za-z]+|xn--[A-Za-z0-9-]+)$/)) {
-			f.close();
-			return l;
-		}
+		l = lj_plain(l);
+		if (l != null) { f.close(); return l; }
 	}
 	f.close();
 	return '';
@@ -8014,6 +7840,199 @@ function cmd_health() {
 // bw_uc rawok: свой конфиг -- один JSON-объект аутбаунда (для parse_node).
 function cmd_rawok() { exit(ob_raw('proxy') == null ? 1 : 0); }
 
+// Учёт обращений по журналу Xray (stat из cron) и top -- чем пользуются
+// (бывший data/stat.sh).
+//
+// Xray пишет строку в момент приёма, до сниффинга: в ней адрес из пула, не
+// имя (`accepted tcp:198.19.14.63:443 [tproxy-in -> proxy]`). FakeDNS отдаёт
+// домену один адрес до рестарта Xray -- раз за PID строится таблица адрес ->
+// имя. Подсети идут по настоящим адресам -- строка «(по IP)».
+//
+// Рабочие файлы -- в каталоге root (/var/run/byway, 755), а не в общем /tmp:
+// движок от пользователя byway мог подложить туда карту или метку.
+
+const SA_DIR = '/var/run/byway';
+const SA_MAP = SA_DIR + '/fakemap';        // адрес -> домен, живёт как и сам Xray
+const SA_MARK = SA_DIR + '/statmark';      // PID и метка последней учтённой строки
+const SA_POS = SA_DIR + '/fakemap.pos';    // докуда дошли, строя карту порциями
+// Доменов за прогон: nslookup на домен, при 200 000 доменов полный обход
+// длиннее часа, и следующий cron стартовал бы поверх.
+const SA_STEP = 200;
+
+function sa_file() { return getenv('BW_LISTS') + '/usage.tsv'; }
+
+// Журнал обращений движок пишет только при show_usage=1 (или info/debug), в
+// режиме «всё через VPN» -- никогда.
+function sa_all() { return u('list_mode') == 'all'; }
+function sa_off() {
+	if (sa_all()) return true;
+	if (u('show_usage') == '1') return false;
+	let l = u('log_level');
+	return l != 'info' && l != 'debug';
+}
+
+function sa_lines(s) {
+	let r = [];
+	for (let l in split(s ?? '', '\n')) if (l !== '') push(r, l);
+	return r;
+}
+
+function sa_date(fmt, utc) {
+	return rtrim(run(utc ? [ 'date', '-u', fmt ] : [ 'date', fmt ]).out, '\n');
+}
+
+// Домены для карты: общий список и списки включённых направлений (их
+// соединения идут в учёт наравне с основными) -- те, что можно спросить.
+function sa_domains() {
+	let r = [], f = fs.open(getenv('BW_MERGED') ?? '', 'r'), l;
+	if (f) {
+		while ((l = f.read('line')) != null && l !== '') {
+			l = lj_plain(l);
+			if (l != null) push(r, l);
+		}
+		f.close();
+	}
+	let all = cursor().get_all('byway') ?? {}, secs = [];
+	for (let n in all) if (all[n]['.type'] == 'route' && all[n].enabled != '0') push(secs, all[n]);
+	secs = sort(secs, (a, b) => a['.index'] - b['.index']);
+	for (let s in secs)
+		for (let x in lj_lines(getenv('BW_ROUTES') + '/' + s['.name'] + '.lst')) {
+			// Как route_list dom: без строк с пробелом и без подсетей.
+			if (match(x, /[ \t]/) || match(x, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/)) continue;
+			x = lj_plain(x);
+			if (x != null) push(r, x);
+		}
+	return r;
+}
+
+// Карта адрес -> домен через FakeDNS, порциями; привязана к PID.
+function sa_map(pid, oldpid) {
+	let fresh = oldpid != pid;
+	if (fresh) { fs.writefile(SA_MAP, ''); fs.writefile(SA_POS, ''); }
+	let pos = trim(fs.readfile(SA_POS) ?? '');
+	pos = (pos === '' || ltrim(pos, '0123456789') !== '') ? 0 : int(pos);
+	let doms = sa_domains(), n = length(doms);
+	if (!fresh && pos >= n) return;
+	let pool = st_pool(), dns = u('dns_listen') || '127.0.0.42', add = '';
+	for (let i = pos; i < n && i < pos + SA_STEP; i++)
+		for (let l in split(run([ 'nslookup', doms[i], dns ]).out, '\n'))
+			if (substr(l, 0, 8) == 'Address:') {
+				let a = ltrim(substr(l, 8), ' ');
+				if (st_in_pool(a, pool)) { add += a + '\t' + doms[i] + '\n'; break; }
+			}
+	if (add !== '') { let f = fs.open(SA_MAP, 'a'); if (f) { f.write(add); f.close(); } }
+	pos += SA_STEP;
+	if (pos > n) pos = n;
+	fs.writefile(SA_POS, '' + pos);
+	// Отсечка -- по сборке таблицы: в журнале строки прежних запусков Xray, их
+	// адреса недействительны. Только при смене pid. Время -- UTC, как у Xray.
+	if (fresh) fs.writefile(SA_MARK, pid + '\n' + sa_date('+%Y/%m/%d %H:%M:%S', true) + '\n');
+	sayf('карта: %s из %s доменов, адресов %s', pos, n, length(sa_lines(fs.readfile(SA_MAP))));
+}
+
+// Строки журнала после последней учтённой; журнал обрезается до 50 строк (из
+// хвоста status берёт имя работающего ключа).
+function sa_collect(since) {
+	let acc = getenv('BW_ACCESS'), r = [];
+	let f = fs.open(acc, 'r'), l;
+	if (!f) return r;
+	while ((l = f.read('line')) != null && l !== '') {
+		if (index(l, 'tproxy-in -> proxy') < 0 && index(l, 'tproxy-in -> route-') < 0) continue;
+		l = rtrim(l, '\n');
+		// Метка -- ровно 19 знаков времени Xray: строка той же секунды строго
+		// больше неё, а хвост в 50 строк содержит последнюю учтённую.
+		if (since !== '' && !(substr(l, 0, 19) > since)) continue;
+		push(r, l);
+	}
+	f.close();
+	// Перезапись на месте, не mv: движок держит файл открытым.
+	let t = run([ 'tail', '-50', acc ]);
+	if (t.code == 0) fs.writefile(acc, t.out);
+	return r;
+}
+
+// Подсчёт по таблице и запись итога; во флеш -- только если итог изменился.
+function sa_count(lines, pid) {
+	let file = sa_file();
+	if (!length(lines)) { say('новых соединений в журнале нет'); return; }
+	let name = {}, cnt = {}, seen = {}, today = sa_date('+%Y-%m-%d', false);
+	for (let l in sa_lines(fs.readfile(SA_MAP))) {
+		let t = split(l, '\t');
+		name[t[0]] = t[1];
+	}
+	for (let l in sa_lines(fs.readfile(file))) {
+		let t = split(l, '\t');
+		cnt[t[0]] = int(t[1] ?? '0');
+		seen[t[0]] = t[2] ?? '';
+	}
+	for (let l in lines) {
+		let m = match(l, /tcp:([0-9.]+):/) ?? match(l, /udp:([0-9.]+):/);
+		if (!m) continue;
+		let d = name[m[1]] ?? '(по IP)';
+		cnt[d] = (cnt[d] ?? 0) + 1;
+		seen[d] = today;
+	}
+	let out = [];
+	for (let d in cnt) push(out, d + '\t' + cnt[d] + '\t' + seen[d]);
+	let s = join('\n', sort(out)) + '\n';
+	if (s != (fs.readfile(file) ?? '')) {
+		let tmp = SA_DIR + '/stat.new';
+		fs.writefile(tmp, s);
+		fs.chmod(tmp, 0600);
+		run([ 'mv', tmp, file ]);
+	}
+	let last = split(lines[length(lines) - 1], ' ');
+	fs.writefile(SA_MARK, pid + '\n' + last[0] + ' ' + (last[1] ?? '') + '\n');
+	sayf('учтено соединений: %s, всего доменов в учёте: %s', length(lines), length(out));
+}
+
+// bw_uc stat: учёт за прошедшее (cron раз в час).
+function cmd_stat() {
+	if (!fs.stat(SA_DIR)) fs.mkdir(SA_DIR, 0755);
+	if (sa_all()) { warn('в режиме «всё через VPN» журнал обращений не ведётся — статистики нет'); return; }
+	if (sa_off())
+		warn('сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)');
+	let pid = st_xray_pid();
+	if (pid === '') { warn('xray не запущен, считать нечего'); return; }
+	let mk = split(fs.readfile(SA_MARK) ?? '', '\n');
+	sa_map(pid, mk[0] ?? '');
+	// Метка -- после карты: новая карта ставит новую отсечку.
+	mk = split(fs.readfile(SA_MARK) ?? '', '\n');
+	sa_count(sa_collect(mk[1] ?? ''), pid);
+}
+
+// Ширина в символах, не байтах: кириллица сдвигала бы колонку.
+function sa_width(s) { return length(replace(s, /[\x80-\xbf]/g, '')); }
+
+function sa_row(a, b, c) {
+	let pad = '';
+	for (let i = sa_width(a); i < 42; i++) pad += ' ';
+	print(sprintf('  %s%s%8s  %s\n', a, pad, b, c));
+}
+
+// bw_uc top [N]: накопленное, N самых частых (по умолчанию 20).
+function cmd_top(n) {
+	let st = fs.stat(sa_file());
+	if (!st || !st.size) {
+		if (sa_all()) die('в режиме «всё через VPN» журнал обращений не ведётся — статистики нет');
+		if (sa_off()) die('сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)');
+		die('учёт пуст. Собирается задачей cron; вручную: byway stat');
+	}
+	let rows = [];
+	for (let l in sa_lines(fs.readfile(sa_file()))) push(rows, [ l, split(l, '\t') ]);
+	// Как sort -k2 -rn: по числу обращений, равные -- по всей строке, обратно.
+	rows = sort(rows, (x, y) => {
+		let a = int(x[1][1] ?? '0'), b = int(y[1][1] ?? '0');
+		if (a != b) return b - a;
+		return x[0] < y[0] ? 1 : (x[0] > y[0] ? -1 : 0);
+	});
+	n = (n && ltrim(n, '0123456789') === '') ? int(n) : 20;
+	sa_row(_t('домен'), _t('обращений'), _t('последний раз'));
+	for (let i = 0; i < length(rows) && i < n; i++)
+		sa_row(rows[i][1][0] ?? '', rows[i][1][1] ?? '', rows[i][1][2] ?? '');
+	print(_f('\n  всего в учёте %s доменов из %s в списке\n', length(rows), lj_count(getenv('BW_MERGED'))));
+}
+
 // Разбор команды. Сюда попадают только перенесённые на ucode команды: прочие
 // разбирает shell (ui/main.sh) и зовёт bw_uc лишь для этих.
 
@@ -8035,6 +8054,8 @@ const CMDS = {
 	status: cmd_status,
 	health: cmd_health,
 	rawok: cmd_rawok,
+	stat: cmd_stat,
+	top: cmd_top,
 	gen: cmd_gen,
 };
 

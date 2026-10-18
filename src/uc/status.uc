@@ -72,14 +72,8 @@ function st_plain_first(file) {
 	let f = fs.open(file, 'r'), l;
 	if (!f) return '';
 	while ((l = f.read('line')) != null && l !== '') {
-		l = lj_line(replace(l, '\r', ''));
-		if (l == null) continue;
-		if (substr(l, 0, 7) == 'domain:') l = substr(l, 7);
-		else if (substr(l, 0, 5) == 'full:') l = substr(l, 5);
-		if (match(l, /^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/) && match(l, /\.([A-Za-z][A-Za-z]+|xn--[A-Za-z0-9-]+)$/)) {
-			f.close();
-			return l;
-		}
+		l = lj_plain(l);
+		if (l != null) { f.close(); return l; }
 	}
 	f.close();
 	return '';

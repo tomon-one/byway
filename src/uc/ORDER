@@ -6,4 +6,5 @@ outbound.uc
 gen.uc
 probe.uc
 status.uc
+stat.uc
 main.uc
