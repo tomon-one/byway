@@ -32,20 +32,20 @@ BYWAY_REPO="tomon-one/byway"
 BYWAY_PUBKEY="RWQ9r7vQihS1LvQHytsWrPqBkUalRDrj6JBUInbi7KXlUUPHBMzFmvJl"
 # Версия Xray-core, на которой byway прогнан целиком: её ставит `byway engine
 # tested`. Та же в install.sh (XRAY_TESTED) -- править парой.
-XRAY_TESTED=26.9.30
+XRAY_TESTED=26.10.17
 # Суммы SHA2-256 архивов этой версии по сборкам: .dgst лежит рядом с архивом
 # на GitHub, а эти -- в подписанном выпуске byway. Вписывает
 # scripts/pc/xray-sums.py; тот же блок -- в install.sh.
-XRAY_TESTED_SUMS="linux-32=277ffde84d86cb593ae9c3d144b11a5e4c80ba579fdfe6fe09830e04c85d04aa
-linux-64=f851110beaff16e78d643f0ccfd9524b4a44dfd59bae3e34bb52bba378f7690e
-linux-arm32-v6=15828543cffe24e628c43b25d4a31627ad29ef916f8b77fab69feb8b3a7ac4b6
-linux-arm32-v7a=0b9719471c7c69752857714e9711d4da57cf38a6beb75dcddfb21425f7919908
-linux-arm64-v8a=9886f077f9fd8e6713b84c377c1c7db4e53b9bfa8c276a5bd12561139522b473
-linux-mips32=8e753eaad5147115a327c7084a2f26aee42149c0f16a962a04ea103a055db555
-linux-mips32le=c41a4d7b7fafbf3ea345eef0b51c3dd68f4894e15069c19f3432670b13cbc160
-linux-mips64=444f3f78274030c431ea40599f8ed38da3a180e57afd5ff2b7fd79b904e018db
-linux-mips64le=387cd3e5b825b56b63551ead5c3786e1108321cf1aa4ec0907ec56ec44b48726
-linux-riscv64=8c489f330f5155d335a31577780e94d98459425844f200d65a664edfe871a924"
+XRAY_TESTED_SUMS="linux-32=b19b563d43f151f017e4a3227d2320c6ffb1c1a61f11b3c08b9e25bf940100af
+linux-64=ecdd54eccd24c4c21a8f00968e7dbf7f5996da92383d2321170b560dc4a95158
+linux-arm32-v6=6726ffaab314010c48d421d8bc5122d79e72d27d3a82b3aaa2d1c5e5b94a2e99
+linux-arm32-v7a=3c5339ba4a14ebad74df26e6ad935c215f5be615684f139a78d3dff8cbf6e7e4
+linux-arm64-v8a=4ebdad86048fa499e65334f88a120b1ed17e662f1c222afd3514afdf8820cdb1
+linux-mips32=fd806063824f5abdf5fc72ff4a6e94537b0d5900923886a018ec21100c39893b
+linux-mips32le=9ad6e49a48b55a71ec2976f3893f506cd96f11ae4ac672b28f179adff5a25a11
+linux-mips64=9e4a8d22283480fe8c8edb56d2b105dd3da23929c8503c1fb40ae4112468a2ca
+linux-mips64le=a3dc732d441d80698ca3fce8b52b64cf0384ee6ed61ebfba41ae75b98b4fad18
+linux-riscv64=e63ce4ba33f9401fe25fc9244228702388e079bba00ec44aca6011aa81b910de"
 
 CONF=/etc/config/byway
 LISTS=/etc/byway

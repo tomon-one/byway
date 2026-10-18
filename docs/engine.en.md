@@ -50,7 +50,7 @@ The installer asks for a version only when there is no engine on the system
 yet. A number can be typed by hand, or one of these picked:
 
 - **the one verified with byway** — the default. byway is verified on it end
-  to end, with the tunnel up and real traffic. Currently `26.9.30`;
+  to end, with the tunnel up and real traffic. Currently `26.10.17`;
   `byway engine tested` installs the same.
 - **the newest one, pre-releases included** — the first release in the XTLS
   list (`byway engine newest`).
@@ -286,8 +286,10 @@ becomes hundreds of connections: the router runs out of memory, and a burst
 of connections to one address is a reason to block it. Details:
 [XTLS/Xray-core#6797](https://github.com/XTLS/Xray-core/issues/6797). The fix
 is in `golang.org/x/net` v0.60.0
-([golang/go#81646](https://github.com/golang/go/issues/81646)); no Xray release
-includes it yet (as of 2026-10-16 it is only on the `main` branch).
+([golang/go#81646](https://github.com/golang/go/issues/81646)); Xray includes
+it since release 26.10.17 (`x/net` v0.61.0). The simplest way is to install
+that or a newer one: `byway engine 26.10.17`. The build below is only needed
+to stay on versions 26.9.8–26.10.10.
 
 Only xhttp keys are affected. With such an engine `byway doctor` warns
 "xmux does not limit connections", and `byway status` prints an `xmux` line.
