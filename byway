@@ -260,10 +260,6 @@ xray_pid() {
     ps w 2>/dev/null | grep "run -c $OUT" | grep -v grep | awk '{print $1}' | head -1
 }
 
-# Граница слова -- класс пробелов, не пробел: списки ключей записаны в
-# несколько строк, и слово в конце строки стоит перед переводом строки.
-in_set() { case " $2 " in *[[:space:]]"$1"[[:space:]]*) return 0 ;; esac; return 1; }
-
 # ── обновления ─────────────────────────────────────────────────────────────
 # Проверка только по запросу: регулярный стук в GitHub с домашнего адреса --
 # заметный провайдеру след «здесь byway». Ходим через свой прокси-вход:
@@ -417,12 +413,6 @@ net_get() {   # аргументы curl как есть
 
 # Разбор ключа (vless, vmess, trojan, ss, socks, hysteria2, wireguard) в
 # переменные N_*. Сам разборщик -- uc/keys.uc (parse_key), вызов -- bw_uc parse.
-
-# Раскодирование процентов; эмодзи -- те же байты UTF-8. Для меток ключей;
-# сам ключ раскодирует parse_uc.
-pctd() {
-    printf '%b' "$(printf '%s' "$1" | sed 's/%/\\x/g')" 2>/dev/null || printf '%s' "$1"
-}
 
 parse_node() {
     # Режим «свой конфиг»: вставлен готовый кусок JSON Xray, разбирать нечего
@@ -750,44 +740,11 @@ cmd_presets() {
     BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR BW_BADLIST=$BADLIST bw_uc presets
 }
 
-# Направления: свои списки со своим ключом выхода.
-
-# ── несколько выходов ──────────────────────────────────────────────────────
-# Направление: домены и подсети из /etc/byway/routes/<имя>.lst уходят в ноду
-# с этой меткой ключа. Ключ не дублируется (в секции UCI -- метка, ссылка из
-# node_urls): иначе uuid разошёлся бы при смене ключа. Домены и подсети --
-# в одном файле, различаются по форме строки.
+# Направления: свои списки со своим ключом выхода. Домены и подсети из
+# /etc/byway/routes/<имя>.lst уходят в ноду с этой меткой ключа (метка -- в
+# секции UCI, ссылка -- из node_urls). Читают их ucode-части (gen, merge,
+# doctor, transfer); здесь -- только каталог.
 ROUTES_DIR=$LISTS/routes
-
-route_names() {
-    uci show byway 2>/dev/null | sed -n 's/^byway\.\([^.]*\)=route$/\1/p'
-}
-
-# Ссылка ключа по метке (метка видна в списке ключей).
-route_key() {
-    for _rk in $(uci -q get byway.main.node_urls 2>/dev/null || true); do
-        case "$_rk" in *#*) _rl=$(pctd "${_rk#*#}") ;; *) _rl="" ;; esac
-        [ "$_rl" = "$1" ] && { printf '%s' "$_rk"; return 0; }
-    done
-    return 1
-}
-
-# Список направления, разложенный надвое. $2 -- dom или net.
-route_list() {
-    [ -f "$1" ] || return 0
-    awk -v want="$2" -v bad="$BADLIST" '{ sub(/^[[:space:]]+/, ""); sub(/[[:space:]\r]+$/, "")
-        if ($0 == "" || substr($0,1,1) == "#" || substr($0,1,2) == "//") next
-        # Пробел ВНУТРИ строки -- это не запись, а строка формата hosts
-        # («0.0.0.0 example.com») либо запись с пометкой. Прежде пробелы
-        # вырезались отовсюду, и такая строка СКЛЕИВАЛАСЬ в
-        # «0.0.0.0example.com»: обе проверки формы она проходила, не совпадала
-        # ни с чем никогда, в список отброшенных не попадала, и итог сборки
-        # честно печатал «отброшено: 0». Ровно эту ловушку уже чинили в
-        # fetch_list -- до списков направлений правка не доехала.
-        if ($0 ~ /[[:space:]]/) { print $0 >> bad; next }
-        isnet = ($0 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/)
-        if ((want == "net") == isnet) print }' "$1"
-}
 
 # Подписка: загрузка и вывод ключей построчно -- в ucode (uc/presets.uc,
 # cmd_sub). Адрес -- окружением: аргументы видны всем в /proc/*/cmdline.
@@ -3582,95 +3539,17 @@ cmd_lang() {
     sayf "язык: %s" "$_lw"
 }
 
-# Перенос настроек: export, import, clear. Ключ в выгрузке -- только с
+# Перенос настроек: export, import, clear. Тело выгрузки, разбор и приём
+# выгрузки, очистка -- в ucode (uc/transfer.uc). Здесь проверка пути, запись
+# файла, сборка конфига, перезапуск и откат. Ключ в выгрузке -- только с
 # --with-key; import кладёт прежнее в before-import.
 
-# ── перенос настроек ───────────────────────────────────────────────────────
-# Формат -- один текстовый файл, читаемый глазами и вставляемый в переписку:
-# архив в сообщение не вставишь, base64 в busybox нет. Ключ в выгрузку не
-# должен попадать сам: --no-key -- export его не пишет, import не трогает
-# нынешний.
-
-# Список явный, а не «всё из секции»: чужой файл не должен задавать роутеру
-# произвольную опцию; незнакомое имя -- описка или настройка версии новее.
-EXPORT_KEYS="enabled conn_mode node_url sub_url outbound_json conn_label
-             list_mode ru_direct preset interface fakeip_pool dns_upstream
-             dns_upstream2 dns_bootstrap dns_listen tproxy_port local_proxy_port redirect_port
-             router_via_vpn mark self_mark log_level ipv6 fakeip6_pool
-             show_usage mux_concurrency probe_interval guard block_quic allow_insecure
-             lists_update dns_route on_failure node_urls lang update_check
-             auto_update auto_update_hour"
-
-# xray_bin не переносится: это путь к программе, которую byway запускает
-# (от пользователя byway либо от root), из чужого файла его брать не надо (xray_ok удержит, но незачем), и
-# он машинный -- на другом роутере пути обычно нет.
-
-# Опции с ключом: ими различаются «поделиться настройкой» и «отдать доступ».
-SECRET_KEYS="node_url node_urls sub_url outbound_json"
-
-# Списочные опции UCI: вводятся через add_list, иначе одна строка с пробелами.
-LIST_KEYS="preset interface node_urls"
-
-# Тело отдельно от cmd_export: /dev/stdout есть не в каждой сборке busybox, и
-# «в файл или на экран» одной строкой иначе не записать.
-export_body() {
-    {
-        echo "# byway export 1"
-        _f '# программа: byway %s\n' "$BYWAY_VERSION"
-        _f '# снято: %s с %s\n' "$(date '+%Y-%m-%d %H:%M')" "$(uci -q get system.@system[0].hostname || _t роутера)"
-        [ "$_nokey" = 1 ] &&
-            echo "$(_t '# БЕЗ КЛЮЧА: подключение к VPN придётся вписать заново')"
-        echo
-        echo "[settings]"
-        for _k in $EXPORT_KEYS; do
-            [ "$_nokey" = 1 ] && in_set "$_k" "$SECRET_KEYS" && continue
-            _v=$(uci -q get "byway.main.$_k" || true)
-            [ -n "$_v" ] || continue
-            # Перевод строки в значении рвёт формат (свой конфиг аутбаунда
-            # вставляют многострочным): сворачиваем в одну строку, JSON цел.
-            printf '%s=%s\n' "$_k" "$(printf '%s' "$_v" | tr '\n\r' '  ')"
-        done
-        # Пустой строки перед заголовком нет намеренно: она попала бы в конец
-        # предыдущего списка, и import тихо менял бы разбивку файла на секции.
-        # Строки со скобки из списков выкидываем: не отличить от заголовка.
-        echo "[domains]"
-        grep -v '^\[' "$LISTS/domains.lst" 2>/dev/null || true
-        echo "[subnets]"
-        grep -v '^\[' "$LISTS/subnets.lst" 2>/dev/null || true
-        # Направления -- своими разделами, у каждого свой список. Без них на
-        # новом роутере трафик, разложенный по нодам, шёл бы весь в основную.
-        for _rn in $(route_names); do
-            printf '[route:%s]\n' "$_rn"
-            printf 'label=%s\n' "$(uci -q get "byway.$_rn.label" || true)"
-            printf 'enabled=%s\n' "$(uci -q get "byway.$_rn.enabled" || echo 1)"
-            printf '[routelist:%s]\n' "$_rn"
-            grep -v '^\[' "$ROUTES_DIR/$_rn.lst" 2>/dev/null || true
-        done
-    }
+tf_uc() {
+    BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_CONF=$CONF BW_ACCESS=$ACCESS bw_uc "$@"
 }
 
-# ── очистка накопленного ────────────────────────────────────────────────────
-# Файлы обнуляются, а не удаляются: byway дописывает в них на ходу, и
-# исчезнувший файл пришлось бы создавать заново каждому, кто пишет.
 cmd_clear() {
-    case "${1:-}" in
-      log)
-        : > "$LISTS/health.log"; : > /tmp/byway-watch.last
-        say "журнал состояния очищен" ;;
-      stat)
-        # Стираем и сырьё (хвост журнала обращений с адресами), и карту с
-        # позицией обхода и отсечкой времени: иначе карта считается уже
-        # построенной, новая не строится и всё идёт в строку «(по IP)».
-        : > "$LISTS/usage.tsv"; : > "$MAP"; [ ! -f "$ACCESS" ] || : > "$ACCESS"
-        rm -f "$MAPPOS" "$MARK" 2>/dev/null || true
-        say "статистика использования очищена" ;;
-      all)
-        : > "$LISTS/health.log"; : > /tmp/byway-watch.last
-        : > "$LISTS/usage.tsv"; : > "$MAP"; [ ! -f "$ACCESS" ] || : > "$ACCESS"
-        rm -f "$MAPPOS" "$MARK" 2>/dev/null || true
-        say "журнал и статистика очищены" ;;
-      *) die "byway clear log | stat | all" ;;
-    esac
+    tf_uc clear "${1:-}"
 }
 
 # Куда можно писать выгрузку и откуда читать. Панель вправе запускать только
@@ -3727,12 +3606,12 @@ cmd_export() {
     done
 
     if [ -z "$_dest" ]; then
-        export_body
+        tf_uc export "$_nokey"
         return 0
     fi
     path_ok "$_dest" || die "сюда писать нельзя: системные каталоги закрыты"
     # Под umask 077 во временный файл и mv -- как в cmd_report.
-    ( umask 077; export_body > "$_dest.new.$$" )
+    ( umask 077; tf_uc export "$_nokey" > "$_dest.new.$$" )
     mv "$_dest.new.$$" "$_dest"
     sayf "выгружено: %s (%s байт)" "$_dest" "$(wc -c < "$_dest")"
     if [ "$_nokey" = 1 ]; then
@@ -3754,52 +3633,15 @@ cmd_import() {
     [ -n "$_src" ] || die "byway import ФАЙЛ [--no-key] — файл от byway export"
     path_ok "$_src" || die "отсюда читать нельзя: системные каталоги закрыты"
     [ -r "$_src" ] || dief "не читается: %s" "$_src"
-    head -1 "$_src" | grep -q '^# byway export' ||
-        die "это не выгрузка byway: в первой строке нет заголовка"
-    import_backup
-
-    _tmp=$(mktemp -d /tmp/byway-import.XXXXXX) || die "не создать рабочий каталог в /tmp"
-    # Ловушка обязательна: в разобранной выгрузке лежит ключ, а выйти можно и
-    # по die, и по Ctrl+C. $_bak ловушка НЕ трогает: копию конфига (с ключом,
-    # во флеше, права 700) заводят ради отката ПОСЛЕ удачного приёма, меню и
-    # панель на неё ссылаются. Каталог один, следующий приём перезапишет.
     # Файл панели (/tmp/byway-import.txt) после приёма не нужен: в нём ключ.
-    trap 'rm -rf "$_tmp" 2>/dev/null; case "$_src" in /tmp/byway-import.txt) rm -f "$_src" ;; esac' EXIT
+    # Копию конфига в before-import ловушка НЕ трогает: она -- ради отката
+    # после удачного приёма, меню и панель на неё ссылаются.
+    trap 'case "$_src" in /tmp/byway-import.txt) rm -f "$_src" ;; esac' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    chmod 700 "$_tmp" 2>/dev/null || true
-    awk -v d="$_tmp" '
-        function nm(str,   n) { n = substr(str, index(str, ":") + 1)
-            sub(/\]$/, "", n)
-            return (n ~ /^[A-Za-z0-9_-]+$/) ? n : "" }
-        /^\[settings\]$/ { s = d "/settings"; next }
-        /^\[domains\]$/  { s = d "/domains";  next }
-        /^\[subnets\]$/  { s = d "/subnets";  next }
-        /^\[route:.*\]$/ { n = nm($0)
-            if (n == "") { s = ""; next }
-            print n >> (d "/routes"); s = d "/route." n; next }
-        /^\[routelist:.*\]$/ { n = nm($0)
-            s = (n == "") ? "" : d "/routelist." n; next }
-        # Неизвестный раздел -- НЕ дописывать в предыдущий. Выгрузка
-        # от будущей версии иначе уронила бы свои строки в чужой
-        # список, и заметить это было бы неоткуда.
-        /^\[.*\]$/ { s = ""; next }
-        /^#/ { next }
-        s { print > s }
-    ' "$_src"
-    import_settings
-    import_lists
-    import_routes
-    rm -rf "$_tmp"
-
-    sayf "принято настроек: %s" "$_n"
-    if [ "$_nokey" = 1 ]; then
-        say "ключ оставлен прежний"
-        # Ключ в файле есть, но не взят -- сказать прямо: иначе отказ вылезет
-        # позже строкой «конфиг не собрался», без указания причины.
-        grep -q '^node_url=..' "$_src" 2>/dev/null &&
-            warn "в выгрузке ключ ЕСТЬ, но принят не был -- так велит --no-key (в панели это галочка «Оставить нынешний ключ»)"
-    fi
+    # Разбор и приём: правки UCI -- без commit, списки -- на место.
+    tf_uc import "$_src" "$_nokey" || exit $?
+    _bak=$LISTS/before-import
 
     # Проверка сборкой: cmd_gen пишет во временный файл и переносит его после
     # проверки движком, боевой конфиг не портится. Подоболочка нужна: cmd_gen
@@ -3842,109 +3684,6 @@ cmd_import() {
         fi
         die "настройки из файла не приняты, прежние на месте"
     fi
-}
-
-# Шаг import: копия конфига и списков в before-import ДО правки.
-import_backup() {
-    _bak=$LISTS/before-import
-    mkdir -p "$_bak"
-    chmod 700 "$_bak" 2>/dev/null || true
-    ( umask 077; rm -f "$_bak/config"; cp "$CONF" "$_bak/config" ) 2>/dev/null || true
-    cp "$LISTS/domains.lst" "$_bak/domains.lst" 2>/dev/null || true
-    cp "$LISTS/subnets.lst" "$_bak/subnets.lst" 2>/dev/null || true
-    # Списки направлений -- тоже каждый раз заново: копия прошлого приёма
-    # возвращала бы при отказе чужие, не нынешние списки.
-    rm -rf "$_bak/routes" 2>/dev/null || true
-    mkdir -p "$_bak/routes"
-    chmod 700 "$_bak/routes" 2>/dev/null || true
-    for _rb in "$ROUTES_DIR"/*.lst; do
-        [ -f "$_rb" ] && cp "$_rb" "$_bak/routes/" 2>/dev/null || true
-    done
-    return 0
-}
-
-# Шаг import: опции из [settings] в UCI, только из EXPORT_KEYS.
-import_settings() {
-    _n=0; _skip=""
-    if [ -s "$_tmp/settings" ]; then
-        while IFS= read -r _line; do
-            case "$_line" in ''|'#'*) continue ;; esac
-            _k=${_line%%=*}; _v=${_line#*=}
-            [ "$_k" = "$_line" ] && continue
-            if ! in_set "$_k" "$EXPORT_KEYS"; then
-                _skip="$_skip $_k"; continue
-            fi
-            [ "$_nokey" = 1 ] && in_set "$_k" "$SECRET_KEYS" && continue
-            if in_set "$_k" "$LIST_KEYS"; then
-                uci -q delete "byway.main.$_k" || true
-                # set -f: значение из ЧУЖОГО файла, без него «*» раскрылся бы
-                # в список файлов каталога и попал в настройки.
-                set -f
-                for _w in $_v; do uci add_list "byway.main.$_k=$_w"; done
-                set +f
-            else
-                uci set "byway.main.$_k=$_v"
-            fi
-            _n=$((_n + 1))
-        done < "$_tmp/settings"
-    fi
-    [ -n "$_skip" ] && warnf "настройки неизвестны и пропущены:%s" "$_skip"
-    return 0
-}
-
-# Шаг import: списки доменов и подсетей; пустой раздел -- «список был пуст»,
-# отсутствующий -- «про списки речи не было».
-import_lists() {
-    for _l in domains subnets; do
-        [ -f "$_tmp/$_l" ] || continue
-        # Убираем только последнюю пустую строку: пустые внутри -- ручная
-        # разбивка на секции, стирать её нельзя.
-        sed '${/^[[:space:]]*$/d;}' "$_tmp/$_l" > "$LISTS/$_l.lst"
-    done
-    return 0
-}
-
-# Шаг import: направления заменяются целиком (как списки), нет раздела --
-# прежние остаются на месте.
-import_routes() {
-    if [ -f "$_tmp/routes" ]; then
-        mkdir -p "$_bak/routes"
-        chmod 700 "$_bak/routes" 2>/dev/null || true
-        for _old in $(route_names); do
-            cp "$ROUTES_DIR/$_old.lst" "$_bak/routes/$_old.lst" 2>/dev/null || true
-            uci -q delete "byway.$_old" || true
-        done
-        mkdir -p "$ROUTES_DIR"
-        while IFS= read -r _rn; do
-            [ -n "$_rn" ] || continue
-            # Имя из чужого файла станет именем секции UCI и файла: проверка
-            # дублирует awk, цена ошибки -- запись мимо каталога.
-            case "$_rn" in
-              *[!A-Za-z0-9_-]*|'') warnf "направление «%s» пропущено: имя не годится" "$_rn"; continue ;;
-            esac
-            # Имя уже занято секцией другого типа (main и прочие): присвоение
-            # сменило бы её тип, а label/enabled легли бы в главные настройки.
-            _rty=$(uci -q get "byway.$_rn" 2>/dev/null || true)
-            if [ -n "$_rty" ] && [ "$_rty" != route ]; then
-                warnf "направление «%s» пропущено: имя занято настройкой byway" "$_rn"
-                continue
-            fi
-            uci -q set "byway.$_rn=route"
-            while IFS= read -r _rl; do
-                case "$_rl" in
-                  label=*)   uci -q set "byway.$_rn.label=${_rl#label=}" ;;
-                  enabled=*) uci -q set "byway.$_rn.enabled=${_rl#enabled=}" ;;
-                esac
-            done < "$_tmp/route.$_rn"
-            if [ -f "$_tmp/routelist.$_rn" ]; then
-                sed '${/^[[:space:]]*$/d;}' "$_tmp/routelist.$_rn" > "$ROUTES_DIR/$_rn.lst"
-            else
-                : > "$ROUTES_DIR/$_rn.lst"
-            fi
-            _n=$((_n + 1))
-        done < "$_tmp/routes"
-    fi
-    return 0
 }
 
 # Учёт обращений (stat из cron) и top -- в ucode (uc/stat.uc). Здесь пути,
@@ -7959,6 +7698,246 @@ function cmd_sub() {
 	print(raw, '\n');
 }
 
+// Перенос настроек (бывший data/transfer.sh): тело выгрузки, приём выгрузки в
+// UCI и списки, очистка накопленного. Путь к файлу проверяет shell (path_ok),
+// сборку, перезапуск и откат -- тоже он (data/transfer.sh).
+//
+// Формат -- один текстовый файл, читаемый глазами и вставляемый в переписку.
+// Список опций явный, а не «всё из секции»: чужой файл не должен задавать
+// роутеру произвольную опцию. xray_bin не переносится: путь к программе,
+// которую byway запускает, из чужого файла брать незачем.
+const TF_KEYS = [ 'enabled', 'conn_mode', 'node_url', 'sub_url', 'outbound_json', 'conn_label',
+	'list_mode', 'ru_direct', 'preset', 'interface', 'fakeip_pool', 'dns_upstream',
+	'dns_upstream2', 'dns_bootstrap', 'dns_listen', 'tproxy_port', 'local_proxy_port', 'redirect_port',
+	'router_via_vpn', 'mark', 'self_mark', 'log_level', 'ipv6', 'fakeip6_pool',
+	'show_usage', 'mux_concurrency', 'probe_interval', 'guard', 'block_quic', 'allow_insecure',
+	'lists_update', 'dns_route', 'on_failure', 'node_urls', 'lang', 'update_check',
+	'auto_update', 'auto_update_hour' ];
+// Опции с ключом: ими различаются «поделиться настройкой» и «отдать доступ».
+const TF_SECRET = [ 'node_url', 'node_urls', 'sub_url', 'outbound_json' ];
+// Списочные опции UCI: вводятся по словам, иначе одна строка с пробелами.
+const TF_LIST = [ 'preset', 'interface', 'node_urls' ];
+
+function tf_has(a, k) { return index(a, k) >= 0; }
+
+// Строки текста, как их видят grep и awk: последний перевод строки -- конец
+// строки, а не пустая строка после него.
+function tf_lines(t) {
+	if (t == null || t === '') return [];
+	if (substr(t, -1) == '\n') t = substr(t, 0, length(t) - 1);
+	return split(t, '\n');
+}
+
+function tf_routes() {
+	let all = cursor().get_all('byway') ?? {}, r = [];
+	for (let n in all) if (all[n]['.type'] == 'route') push(r, all[n]);
+	return sort(r, (a, b) => a['.index'] - b['.index']);
+}
+
+// Строки файла без начинающихся со скобки: их не отличить от заголовка.
+function tf_list_body(file) {
+	for (let l in tf_lines(fs.readfile(file)))
+		if (substr(l, 0, 1) != '[') print(l, '\n');
+}
+
+// bw_uc export 0|1: тело выгрузки (1 -- без ключа).
+function cmd_export(nokey) {
+	nokey = nokey == '1';
+	print('# byway export 1\n');
+	print(_f('# программа: byway %s\n', getenv('BW_VERSION')));
+	let host = rtrim(run([ 'uci', '-q', 'get', 'system.@system[0].hostname' ]).out, '\n');
+	print(_f('# снято: %s с %s\n', trim(run([ 'date', '+%Y-%m-%d %H:%M' ]).out), host !== '' ? host : _t('роутера')));
+	if (nokey) print(_t('# БЕЗ КЛЮЧА: подключение к VPN придётся вписать заново'), '\n');
+	print('\n[settings]\n');
+	for (let k in TF_KEYS) {
+		if (nokey && tf_has(TF_SECRET, k)) continue;
+		let v = u(k);
+		if (v === '') continue;
+		// Перевод строки рвёт формат (свой конфиг вставляют многострочным).
+		print(k, '=', replace(v, /[\n\r]/g, ' '), '\n');
+	}
+	// Пустой строки перед заголовком нет намеренно: она попала бы в конец
+	// предыдущего списка, и приём менял бы разбивку файла.
+	let lists = getenv('BW_LISTS');
+	print('[domains]\n');
+	tf_list_body(lists + '/domains.lst');
+	print('[subnets]\n');
+	tf_list_body(lists + '/subnets.lst');
+	// Направления -- своими разделами: без них трафик, разложенный по нодам,
+	// шёл бы весь в основную.
+	for (let s in tf_routes()) {
+		let n = s['.name'];
+		print('[route:', n, ']\n');
+		print('label=', s.label ?? '', '\n');
+		print('enabled=', s.enabled ?? '1', '\n');
+		print('[routelist:', n, ']\n');
+		tf_list_body(getenv('BW_ROUTES') + '/' + n + '.lst');
+	}
+}
+
+// Копия до правки: конфиг (с ключом -- 600 в каталоге 700) и списки. Ради
+// отката ПОСЛЕ удачного приёма; следующий приём перезапишет.
+function tf_backup(bak) {
+	let lists = getenv('BW_LISTS'), routes = getenv('BW_ROUTES');
+	fs.mkdir(bak, 0700);
+	fs.chmod(bak, 0700);
+	fs.unlink(bak + '/config');
+	let c = fs.readfile(getenv('BW_CONF'));
+	if (c != null) {
+		let f = fs.open(bak + '/config', 'w', 0600);
+		if (f) { f.write(c); f.close(); }
+	}
+	for (let l in [ 'domains.lst', 'subnets.lst' ]) {
+		let t = fs.readfile(lists + '/' + l);
+		if (t != null) fs.writefile(bak + '/' + l, t);
+	}
+	// Списки направлений -- каждый раз заново: копия прошлого приёма вернула
+	// бы при отказе чужие списки.
+	run([ 'rm', '-rf', bak + '/routes' ]);
+	fs.mkdir(bak + '/routes', 0700);
+	fs.chmod(bak + '/routes', 0700);
+	for (let f in fs.lsdir(routes) ?? [])
+		if (substr(f, -4) == '.lst' && fs.stat(routes + '/' + f)?.type == 'file')
+			fs.writefile(bak + '/routes/' + f, fs.readfile(routes + '/' + f) ?? '');
+}
+
+// Имя направления из заголовка; негодное -- null (станет именем секции и файла).
+function tf_name(h) {
+	let n = substr(h, index(h, ':') + 1);
+	n = substr(n, 0, length(n) - 1);
+	return (n !== '' && ltrim(n, ALNUM + '_-') === '') ? n : null;
+}
+
+// Разбор выгрузки по разделам: settings, domains, subnets, route.N,
+// routelist.N -- массивы строк; routes -- имена по порядку. Раздел есть, только
+// если в нём была строка. Неизвестный раздел -- НЕ дописывать в предыдущий.
+function tf_parse(text) {
+	let S = { routes: [] }, cur = null;
+	for (let l in tf_lines(text)) {
+		if (match(l, /^\[.*\]$/)) {
+			cur = null;
+			if (l == '[settings]' || l == '[domains]' || l == '[subnets]') cur = substr(l, 1, length(l) - 2);
+			else if (substr(l, 0, 7) == '[route:') {
+				let n = tf_name(l);
+				if (n != null) { push(S.routes, n); cur = 'route.' + n; }
+			} else if (substr(l, 0, 11) == '[routelist:') {
+				let n = tf_name(l);
+				if (n != null) cur = 'routelist.' + n;
+			}
+			continue;
+		}
+		if (substr(l, 0, 1) == '#' || cur == null) continue;
+		S[cur] ??= [];
+		push(S[cur], l);
+	}
+	return S;
+}
+
+// Строки -> текст файла; последняя пустая (из одних пробелов) снимается:
+// пустые внутри -- ручная разбивка на секции.
+function tf_text(lines) {
+	let a = [ ...lines ];
+	if (length(a) && trim(a[length(a) - 1], WS) === '') pop(a);
+	return length(a) ? join('\n', a) + '\n' : '';
+}
+
+// bw_uc import ФАЙЛ 0|1: выгрузка -> UCI (save без commit) и списки (1 -- ключ
+// не трогать). Сборку и перезапуск делает shell; откат -- uci revert и копия.
+function cmd_import(src, nokey) {
+	nokey = nokey == '1';
+	let text = fs.readfile(src);
+	if (text == null) dief('не читается: %s', src);
+	if (substr(text, 0, 14) != '# byway export') die('это не выгрузка byway: в первой строке нет заголовка');
+	let lists = getenv('BW_LISTS'), routes = getenv('BW_ROUTES');
+	tf_backup(lists + '/before-import');
+	// Выгрузка с ключом разбирается в памяти, не во временный каталог.
+	let S = tf_parse(text);
+	let c = cursor(), n = 0, skip = '';
+	for (let l in S.settings ?? []) {
+		if (l === '') continue;
+		let e = index(l, '=');
+		if (e < 0) continue;
+		let k = substr(l, 0, e), v = substr(l, e + 1);
+		if (!tf_has(TF_KEYS, k)) { skip += ' ' + k; continue; }
+		if (nokey && tf_has(TF_SECRET, k)) continue;
+		if (tf_has(TF_LIST, k)) {
+			c.delete('byway', 'main', k);
+			let w = split(trim(v), /[ \t]+/);
+			if (w[0] !== '') c.set('byway', 'main', k, w);
+		} else if (v === '') {
+			c.delete('byway', 'main', k);
+		} else {
+			c.set('byway', 'main', k, v);
+		}
+		n++;
+	}
+	if (skip !== '') warnf('настройки неизвестны и пропущены:%s', skip);
+	// Пустой раздел (ни строки) -- «про список речи не было».
+	for (let l in [ 'domains', 'subnets' ])
+		if (S[l] != null) fs.writefile(lists + '/' + l + '.lst', tf_text(S[l]));
+	// Направления заменяются целиком; нет раздела -- прежние на месте.
+	if (length(S.routes)) {
+		for (let s in tf_routes()) {
+			let o = s['.name'], t = fs.readfile(routes + '/' + o + '.lst');
+			if (t != null) fs.writefile(lists + '/before-import/routes/' + o + '.lst', t);
+			c.delete('byway', o);
+		}
+		if (!fs.stat(routes)) fs.mkdir(routes, 0755);
+		for (let rn in S.routes) {
+			// Имя занято секцией другого типа (main и прочие): присвоение
+			// сменило бы её тип.
+			let ty = c.get('byway', rn);
+			if (ty != null && ty != 'route') {
+				warnf('направление «%s» пропущено: имя занято настройкой byway', rn);
+				continue;
+			}
+			c.set('byway', rn, 'route');
+			for (let l in S['route.' + rn] ?? []) {
+				if (substr(l, 0, 6) == 'label=') c.set('byway', rn, 'label', substr(l, 6));
+				else if (substr(l, 0, 8) == 'enabled=') c.set('byway', rn, 'enabled', substr(l, 8));
+			}
+			fs.writefile(routes + '/' + rn + '.lst', S['routelist.' + rn] != null ? tf_text(S['routelist.' + rn]) : '');
+			n++;
+		}
+	}
+	// save() без довода: save('byway') на ucode 22.03 отвечает «Invalid argument».
+	if (!c.save()) dief('настройки не записаны в UCI: %s', c.error() ?? '?');
+	sayf('принято настроек: %s', n);
+	if (nokey) {
+		say('ключ оставлен прежний');
+		// Ключ в файле есть, но не взят: иначе отказ вылезет позже строкой
+		// «конфиг не собрался».
+		if (match(text, /(^|\n)node_url=../))
+			warn('в выгрузке ключ ЕСТЬ, но принят не был -- так велит --no-key (в панели это галочка «Оставить нынешний ключ»)');
+	}
+}
+
+// bw_uc clear log|stat|all: обнулить накопленное. Файлы обнуляются, а не
+// удаляются: byway дописывает в них на ходу.
+function cmd_clear(what) {
+	let lists = getenv('BW_LISTS'), dir = '/var/run/byway';
+	let log = what == 'log' || what == 'all', st = what == 'stat' || what == 'all';
+	if (!log && !st) die('byway clear log | stat | all');
+	if (log) {
+		fs.writefile(lists + '/health.log', '');
+		fs.writefile('/tmp/byway-watch.last', '');
+	}
+	if (st) {
+		// И сырьё (журнал обращений с адресами), и карта с позицией и
+		// отсечкой: иначе карта считалась бы построенной, и всё шло бы в
+		// «(по IP)».
+		fs.writefile(lists + '/usage.tsv', '');
+		fs.writefile(dir + '/fakemap', '');
+		let acc = getenv('BW_ACCESS');
+		if (fs.stat(acc)) fs.writefile(acc, '');
+		fs.unlink(dir + '/fakemap.pos');
+		fs.unlink(dir + '/statmark');
+	}
+	if (what == 'log') say('журнал состояния очищен');
+	else if (what == 'stat') say('статистика использования очищена');
+	else say('журнал и статистика очищены');
+}
+
 // Разбор команды. Сюда попадают только перенесённые на ucode команды: прочие
 // разбирает shell (ui/main.sh) и зовёт bw_uc лишь для этих.
 
@@ -7986,6 +7965,9 @@ const CMDS = {
 	report: cmd_report,
 	presets: cmd_presets,
 	sub: cmd_sub,
+	export: cmd_export,
+	import: cmd_import,
+	clear: cmd_clear,
 	gen: cmd_gen,
 	merged: cmd_merged,
 };

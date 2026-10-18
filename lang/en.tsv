@@ -336,7 +336,6 @@ GitHub ответил %s, но версии в ответе нет	GitHub answer
 IPv6 поднят, а перехват только по IPv4	IPv6 is up, interception is IPv4 only
 в режиме «всё через VPN» соединения по IPv6 идут мимо туннеля: выключить IPv6 на WAN либо вернуться к режиму по спискам	in "everything through the VPN" mode IPv6 connections bypass the tunnel: turn IPv6 off on WAN or go back to list mode
 без имени	unnamed
-направление «%s» пропущено: имя не годится	route "%s" skipped: the name is not usable
 ВНИМАНИЕ    доступ к списку ЗАКРЫТ: туннеля нет, так велит «не пускать мимо VPN»\n	WARNING     the list is CLOSED: no tunnel, and "no traffic outside the VPN" says so\n
 параметр extra в ссылке -- не один объект JSON: он подставляется в конфиг как есть, и такая ссылка переписывает соседние поля, включая адрес сервера и защиту	the extra parameter in the key is not a single JSON object: it goes into the config as it is, so such a key rewrites the neighbouring fields, the server address and the security among them
 %s: не скачался, и прежней копии нет — список пуст	%s: not downloaded, and there is no earlier copy — the list is empty
@@ -776,3 +775,4 @@ byway: неизвестная команда «%s». Список: byway	byway: 
 пул %s без длины маски -- взято умолчание	pool %s has no mask length -- falling back to the default
 черновик конфига %s не записан: %s	the config draft %s was not written: %s
 конфиг не перенесён на место: %s	the config was not moved into place: %s
+настройки не записаны в UCI: %s	settings were not written to UCI: %s

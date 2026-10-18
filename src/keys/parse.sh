@@ -1,12 +1,6 @@
 # Разбор ключа (vless, vmess, trojan, ss, socks, hysteria2, wireguard) в
 # переменные N_*. Сам разборщик -- uc/keys.uc (parse_key), вызов -- bw_uc parse.
 
-# Раскодирование процентов; эмодзи -- те же байты UTF-8. Для меток ключей;
-# сам ключ раскодирует parse_uc.
-pctd() {
-    printf '%b' "$(printf '%s' "$1" | sed 's/%/\\x/g')" 2>/dev/null || printf '%s' "$1"
-}
-
 parse_node() {
     # Режим «свой конфиг»: вставлен готовый кусок JSON Xray, разбирать нечего
     # (аналог Outbound Config у podkop).

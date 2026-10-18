@@ -25,6 +25,9 @@ const CMDS = {
 	report: cmd_report,
 	presets: cmd_presets,
 	sub: cmd_sub,
+	export: cmd_export,
+	import: cmd_import,
+	clear: cmd_clear,
 	gen: cmd_gen,
 	merged: cmd_merged,
 };
