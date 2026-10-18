@@ -88,7 +88,7 @@ function pr_one(x, url, soft, name) {
 		outbounds: [ k.block ],
 	});
 	if (PR_TTY && name != null) print('  ', c_pad(name, 18), ' ');
-	print(sprintf(PR_TTY ? '\033[2m%-12s %-22s\033[0m ' : '  %-12s %-22s ', N.TYPE + '/' + N.SEC, N.HOST + ':' + N.PORT));
+	print(sprintf(PR_TTY ? '\033[2m%-16s %-22s\033[0m ' : '  %-12s %-22s ', N.TYPE + '/' + N.SEC, N.HOST + ':' + N.PORT));
 	let t = run([ x, 'run', '-test', '-c', PR_CFG ], true);
 	if (t.code != 0) {
 		print(PR_TTY ? '\033[1;31m' + rtrim(_t('конфиг отвергнут ядром\n'), '\n') + '\033[0m\n' : _t('конфиг отвергнут ядром\n'));
