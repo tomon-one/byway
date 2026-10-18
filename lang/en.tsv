@@ -404,7 +404,6 @@ byway не поднимется ни сейчас, ни после переза�
   dnsmasq ответит по пину, подставного адреса не будет — в туннель они НЕ пойдут	  dnsmasq will answer from the pin, there will be no placeholder address — they will NOT go through the tunnel
 сейчас работает, но после перезагрузки туннеля не будет: /etc/init.d/byway enable	it runs now, but after a reboot there will be no tunnel: /etc/init.d/byway enable
 список доменов: %s записей (своих %s)	domain list: %s entries (%s of them your own)
-порт %s занят другим входом byway — свой трафик роутер в туннель не пошлёт	port %s is taken by another byway inbound — the router will not send its own traffic into the tunnel
 роутер ходит к сайтам из списка сам	the router reaches the sites on the list on its own
 VPN для программ на роутере (router_via_vpn) включён, но цепочки в ядре нет	sending the router’s own traffic through the tunnel is on, but the kernel chain is missing
 переложить правила: byway plumb on	reapply the rules: byway plumb on
@@ -490,6 +489,11 @@ self_mark пересекается битами с mark %s -- взято %s	self
 применено, но движок не поднялся — смотреть: logread -e byway	applied, but the engine did not come up -- see: logread -e byway
 правила не приняты ядром, перехват не включён	the kernel rejected the rules, interception is not set up
 маршрут для помеченного трафика не заведён — перехват не включён	no route for marked traffic — interception is not set up
+у dnsmasq в настройках свои серверы: %s	dnsmasq has its own upstream servers set: %s
+часть запросов уходит мимо byway, и сайты из списка открываются через раз — убрать: Сеть → DHCP и DNS → Перенаправления	some queries bypass byway, so listed sites open only some of the time — remove them: Network → DHCP and DNS → Forwards
+не найден каталог добавок dnsmasq — DNS дома не переведён на byway, работают только подсети	dnsmasq has no conf-dir — home DNS is not switched to byway, only subnets work
+у dnsmasq в настройках свои серверы (%s): часть запросов уйдёт мимо byway, и сайты из списка будут открываться через раз — убрать: Сеть → DHCP и DNS → Перенаправления	dnsmasq has its own upstream servers set (%s): some queries will bypass byway, so listed sites will open only some of the time — remove them: Network → DHCP and DNS → Forwards
+перехват включён без DNS: таблица inet %s, правило fwmark	interception is on without DNS: table inet %s, fwmark rule
 автообновление включено, но суточная проверка версий выключена	auto-update is on, but the daily version check is off
 ключи для автовыбора не заданы	no keys set for auto-select
 добавить на вкладке «Основное» либо: uci add_list byway.main.node_urls=vless://…	add on the Overview tab, or: uci add_list byway.main.node_urls=vless://...
@@ -563,8 +567,6 @@ GitHub не ответил — номер свежей версии неизве
 engine [ВЕРСИЯ|tested|newest|stable|restore|/tmp/ФАЙЛ]	engine [VERSION|tested|newest|stable|restore|/tmp/FILE]
 конфига движка	the engine config
 правил nft	the nft rules
-проверки окружения	the environment check
-вход для трафика роутера	router traffic inbound
 вход tproxy	tproxy inbound
 прокси роутера	router proxy
 поставить: byway update	install it: byway update

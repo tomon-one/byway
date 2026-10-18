@@ -86,21 +86,6 @@ function g_dns_host(s) {
 	return ltrim(h, '0123456789.') === '' ? '' : h;
 }
 
-// Порт входа для собственного трафика роутера; пусто -- не заворачивать
-// (выключено или порт занят другим входом byway). Та же логика у nft
-// (config/addr.sh, redir_port): при расхождении правила вели бы в никуда.
-function g_redir_port(where) {
-	if (u('router_via_vpn') != '1') return '';
-	let p = g_val_or('redirect_port', u('redirect_port'), /^[0-9]{1,5}$/, '1604', where);
-	if (!g_port_ok(p)) p = '1604';
-	let t = u('tproxy_port') || '1602', l = u('local_proxy_port') || '1603';
-	if (p == t || p == l) {
-		warnf('порт %s занят другим входом byway — свой трафик роутер в туннель не пошлёт', p);
-		return '';
-	}
-	return p;
-}
-
 // Адрес IPv4 имени через nslookup; res -- резолвер или пусто.
 function g_a_of(name, res) {
 	let argv = [ 'nslookup', name ];
@@ -266,7 +251,7 @@ function g_dns() {
 	}
 }
 
-// Входы: DNS, tproxy, прокси роутера, redir-in; метка и развилка direct по
+// Входы: DNS, tproxy, прокси роутера; метка и развилка direct по
 // версии Xray.
 function g_inbounds() {
 	G.dns_listen = g_val_or('dns_listen', u('dns_listen') || '127.0.0.42', /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/, '127.0.0.42');
@@ -275,14 +260,10 @@ function g_inbounds() {
 	G.lp = g_val_or('local_proxy_port', u('local_proxy_port'), /^[0-9]{1,5}$/, '1603');
 	if (!g_port_ok(G.lp)) G.lp = '1603';
 	// Метка на исходящих сокетах движка при «VPN для программ на роутере»:
-	// иначе петля через цепочку output.
+	// иначе петля через цепочку output (движок от root узнаётся только по ней).
 	G.mark = (u('router_via_vpn') == '1' && getenv('BW_SELFMARK')) ? int(getenv('BW_SELFMARK')) : null;
 	// С 26.9.8 domainStrategy у direct живёт в sockopt; старым ядрам -- в settings.
 	G.direct_ds = G.xver < 260908;
-	G.rd = g_redir_port();
-	// Двухсемейный вход, пока в output есть правило для fakeip6: ядро
-	// подставляет ::1 для локального пакета.
-	G.rd_listen = u('ipv6') == '1' ? '::' : '127.0.0.1';
 }
 
 // Уровень журнала и журнал обращений.
@@ -401,17 +382,11 @@ function g_config() {
 		{ tag: 'tproxy-in', listen: G.tp_listen, port: int(G.tp), protocol: 'dokodemo-door',
 		  settings: { network: 'tcp,udp', followRedirect: true },
 		  streamSettings: { sockopt: { tproxy: 'tproxy' } }, sniffing: sniff },
-		// Прокси для самого роутера: его трафик идёт через output мимо tproxy.
-		// Вход нужен и при заворачивании: им byway скачивает себя до правил.
+		// Прокси для самого роутера: им byway скачивает себя и списки, в том
+		// числе до правил перехвата.
 		{ tag: 'local-in', listen: '127.0.0.1', port: int(G.lp), protocol: 'http',
 		  sniffing: { enabled: true, destOverride: [ 'http', 'tls' ], metadataOnly: false, routeOnly: false } },
 	];
-	// redirect, не tproxy: tproxy в output ядро не умеет. Только TCP.
-	if (G.rd !== '')
-		push(inb, { tag: 'redir-in', listen: G.rd_listen, port: int(G.rd), protocol: 'dokodemo-door',
-		            settings: { network: 'tcp', followRedirect: true },
-		            sniffing: { enabled: true, destOverride: [ 'fakedns', 'http', 'tls' ], metadataOnly: false, routeOnly: false } });
-
 	let direct = { tag: 'direct', protocol: 'freedom' }, set = {}, so = {};
 	if (G.direct_ds) set.domainStrategy = 'UseIP'; else so.domainStrategy = 'UseIP';
 	if (G.final) set.finalRules = G.final;

@@ -210,7 +210,7 @@ function cmd_status(arg) {
 	for (let l in split(run([ 'ip', 'route', 'show', 'table', ST_RT ]).out, '\n'))
 		if (substr(l, 0, 13) == 'local default') route = true;
 	print(_f('маршрут     %s\n', route ? _t('есть') : _t('НЕТ')));
-	let srv = rtrim(run([ 'uci', '-q', 'get', 'dhcp.@dnsmasq[0].server' ]).out, '\n');
+	let srv = join(' ', dm_servers());
 	print(_f('dnsmasq ->  %s\n', srv !== '' ? srv : _t('провайдер')));
 	if (p !== '') {
 		// Домен -- из своего списка: чужой тестовый давал «не выдаётся».

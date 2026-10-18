@@ -309,13 +309,18 @@ function dr_config() {
 function dr_dns() {
 	dr_head(_t('\nПерехват и соседние службы\n'));
 	let pid = st_xray_pid();
-	// Вхождением: `uci get` списка отдаёт значения через пробел.
-	if (index(' ' + dr_uci('dhcp.@dnsmasq[0].server') + ' ', ' ' + (u('dns_listen') || '127.0.0.42') + ' ') >= 0)
+	let own = u('dns_listen') || '127.0.0.42';
+	if (index(dm_servers(), own) >= 0)
 		dok(_t('dnsmasq направлен на byway'));
 	else if (u('enabled') != '1' || pid === '')
 		dok(_t('dnsmasq не тронут — byway ещё не запущен, так и должно быть'));
 	else
 		dwarn(_t('dnsmasq не направлен на byway'), _t('правила перехвата сняты: byway plumb on'));
+	// Свои апстримы в UCI файлом не отключить: dnsmasq шлёт им часть запросов.
+	let fo = dm_foreign(own);
+	if (length(fo))
+		dwarn(_f('у dnsmasq в настройках свои серверы: %s', join(' ', fo)),
+		      _t('часть запросов уходит мимо byway, и сайты из списка открываются через раз — убрать: Сеть → DHCP и DNS → Перенаправления'));
 	// dnsmasq один на все мосты, перехват -- только на перечисленных: сеть
 	// вне списка получает fakeip и умирает на WAN.
 	let bwif = ' ' + u('interface') + ' ', lost = '', outside = '';
@@ -441,10 +446,7 @@ function dr_rivals() {
 
 function dr_ports() {
 	let tp = u('tproxy_port') || '1602', lp = u('local_proxy_port') || '1603';
-	// redir_port ругается на столкновение портов: звать раз.
-	let rd = g_redir_port(_t('проверки окружения'));
 	let pairs = [ [ tp, _t('вход tproxy') ], [ lp, _t('прокси роутера') ] ];
-	if (rd !== '') push(pairs, [ rd, _t('вход для трафика роутера') ]);
 	let ns = split(run([ 'netstat', '-lnp' ]).out, '\n');
 	for (let pp in pairs) {
 		let who = {}, wl = [];
@@ -463,7 +465,7 @@ function dr_ports() {
 	let tbl = run([ 'nft', 'list', 'table', 'inet', ST_TABLE ]).code == 0;
 	// Заворот включён настройкой, работает цепочкой в ядре: спрашивать только
 	// при стоящем перехвате.
-	if (rd !== '' && tbl) {
+	if (u('router_via_vpn') == '1' && tbl) {
 		if (run([ 'nft', 'list', 'chain', 'inet', ST_TABLE, 'output' ]).code == 0) {
 			if (st_plain_first(getenv('BW_MERGED')) !== '')
 				dok(_t('роутер ходит к сайтам из списка сам'));
@@ -516,7 +518,7 @@ function cmd_doctor() { if (dr_run() > 0) exit(1); }
 // Ключи настроек -- по белому списку: новая настройка с секретом закрыта.
 const RP_KEYS = [ 'enabled', 'conn_mode', 'list_mode', 'ru_direct', 'preset', 'interface',
 	'fakeip_pool', 'dns_upstream', 'dns_upstream2', 'dns_bootstrap', 'dns_listen', 'tproxy_port',
-	'local_proxy_port', 'redirect_port', 'router_via_vpn', 'mark', 'self_mark', 'log_level', 'ipv6',
+	'local_proxy_port', 'router_via_vpn', 'mark', 'self_mark', 'log_level', 'ipv6',
 	'fakeip6_pool', 'show_usage', 'mux_concurrency', 'probe_interval', 'guard', 'block_quic',
 	'allow_insecure', 'lang', 'xray_bin', 'conn_label' ];
 

@@ -165,8 +165,15 @@ else
     # Незакоммиченная дельта byway (dns_up) не должна уйти во флеш вместе с
     # нашим commit.
     if [ "$_ours" = 1 ]; then do_ uci -q revert dhcp; fi
-    if [ "$_ours" != 1 ]; then
-        warn "следов byway в настройках DNS нет — dnsmasq не трогается"
+    # С 0.4.0 byway в UCI dnsmasq не пишет: править его есть смысл, только
+    # если там снимок или свой адрес от прежней версии.
+    _inuci=0
+    case " $(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null || true) " in
+      *" $_mine "*) _inuci=1 ;;
+    esac
+    [ -f /etc/byway/dns-saved ] && _inuci=1
+    if [ "$_ours" != 1 ] || [ "$_inuci" != 1 ]; then
+        [ "$_ours" = 1 ] || warn "следов byway в настройках DNS нет — dnsmasq не трогается"
     elif [ -f /etc/byway/dns-saved ]; then
         # ⚠️ Запоминаем ТЕКУЩИЙ список до удаления: в нём могли появиться
         # доменные записи (server=/nas.lan/192.168.1.5), заведённые уже после
@@ -205,7 +212,7 @@ else
         # у человека и до byway, вместе с его собственными адресами.
         dns_strip_own "$_mine"
     fi
-    if [ "$_ours" = 1 ]; then
+    if [ "$_ours" = 1 ] && [ "$_inuci" = 1 ]; then
         do_ uci commit dhcp
         do_ /etc/init.d/dnsmasq restart
     fi
@@ -224,11 +231,17 @@ else
     # программы нет, правил нет, половина интернета не открывается.
     _cdir=$(grep -h '^conf-dir=' /var/etc/dnsmasq.conf.* 2>/dev/null |
             head -1 | cut -d= -f2- | cut -d, -f1)
-    for _bc in "${_cdir:-/нет}/byway-block.conf" \
-               /tmp/dnsmasq.*.d/byway-block.conf \
-               /tmp/dnsmasq.d/byway-block.conf; do
-        [ -f "$_bc" ] && do_ rm -f "$_bc"
+    # Там же файл, которым byway с 0.4.0 уводит резолвер на себя
+    # (byway-dns.conf): без программы он слал бы весь DNS дома в пустоту.
+    _bcr=0; _bseen=" "
+    for _bc in "${_cdir:-/нет}/byway-block.conf" "${_cdir:-/нет}/byway-dns.conf" \
+               /tmp/dnsmasq.*.d/byway-block.conf /tmp/dnsmasq.*.d/byway-dns.conf \
+               /tmp/dnsmasq.d/byway-block.conf /tmp/dnsmasq.d/byway-dns.conf; do
+        case "$_bseen" in *" $_bc "*) continue ;; esac
+        _bseen="$_bseen$_bc "
+        [ -f "$_bc" ] && { do_ rm -f "$_bc"; _bcr=1; }
     done
+    [ "$_bcr" = 1 ] && do_ /etc/init.d/dnsmasq restart
     # Правил с меткой может накопиться несколько: ip rule add при каждом
     # подъёме добавляет новое, не заменяя прежнее. Ищем СВОЁ -- по метке, а
     # не по одной таблице: 100 с fwmark занимают и openclash, и passwall,
@@ -269,6 +282,16 @@ fi
 _lst=" $(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null || true) "
 _own=$(uci -q get byway.main.dns_listen 2>/dev/null || echo 127.0.0.42)
 [ -n "$_own" ] || _own=127.0.0.42
+# С 0.4.0 резолвер уводит файл в каталоге добавок -- он тоже признак беды.
+_dnsf=""
+for _f in /tmp/dnsmasq.*.d/byway-dns.conf /tmp/dnsmasq.d/byway-dns.conf; do
+    [ -f "$_f" ] && _dnsf=$_f
+done
+if [ "$DRY" != "1" ] && [ -n "$_dnsf" ]; then
+    warn "dnsmasq всё ещё смотрит в byway — исправляется"
+    do_ rm -f "$_dnsf"
+    do_ /etc/init.d/dnsmasq restart
+fi
 if [ "$DRY" != "1" ] && [ "$_ours" = 1 ] && [ "${_lst#* $_own }" != "$_lst" ]; then
     warn "dnsmasq всё ещё смотрит в byway — исправляется"
     # Дельта byway, не дошедшая до flash, уходит целиком: коммит записал бы

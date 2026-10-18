@@ -5,7 +5,6 @@
 TABLE=byway
 RT_TABLE=100
 BLOCK_MARK=/tmp/byway-blocked
-DNSSEC="dhcp.@dnsmasq[0]"
 # Умолчание пула IPv6 для конфига движка -- константа Xray (fakedns.go).
 POOL6_DEF="fc00::/18"
 
@@ -51,6 +50,10 @@ cmd_plumb() {
     rm -rf "$_plock" 2>/dev/null || true
     return "$_prc"
 }
+
+# Резолверы dnsmasq от byway (файл в каталоге добавок) через пробел; нет --
+# none. Сторож судит по ним, на нас ли DNS дома.
+dns_servers() { plumb_env bw_uc plumb servers 2>/dev/null || echo none; }
 
 # Снять запрет (сторож: служба выключена).
 block_off() { plumb_env bw_uc plumb unblock; }

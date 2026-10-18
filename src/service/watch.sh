@@ -158,7 +158,7 @@ watch_snapshot() {
     # Маршрут -- третья опора обвязки: без него помеченный пакет молча
     # гибнет, снаружи «туннель есть, а сайты не открываются».
     _rt=$(ip route show table "$RT_TABLE" 2>/dev/null | grep -c "^local default" || true)
-    _dm=$(uci -q get "$DNSSEC.server" 2>/dev/null || echo none)
+    _dm=$(dns_servers)
     _d=$(plain_domains "$(merged_domains)" | head -1)
     _fk=no
     if [ -n "$_d" ]; then
@@ -191,7 +191,7 @@ watch_heal() {
             _tab=$(nft list tables 2>/dev/null | grep -cE "^table inet $TABLE\$" || true)
             _rul=$(ip rule show 2>/dev/null | grep -cE "$(rule_re)" || true)
             _rt=$(ip route show table "$RT_TABLE" 2>/dev/null | grep -c "^local default" || true)
-            _dm=$(uci -q get "$DNSSEC.server" 2>/dev/null || echo none)
+            _dm=$(dns_servers)
         fi
     else
         rm -f "$NOPID" 2>/dev/null || true
@@ -225,7 +225,7 @@ watch_heal() {
             _tab=$(nft list tables 2>/dev/null | grep -cE "^table inet $TABLE\$" || true)
             _rul=$(ip rule show 2>/dev/null | grep -cE "$(rule_re)" || true)
             _rt=$(ip route show table "$RT_TABLE" 2>/dev/null | grep -c "^local default" || true)
-            _dm=$(uci -q get "$DNSSEC.server" 2>/dev/null || echo none)
+            _dm=$(dns_servers)
         fi
     fi
     return 0
@@ -518,7 +518,7 @@ cmd_pulse() {
     _healed=""
     if [ -z "$_pid" ]; then
         svc_registered || return 0
-        _dm=$(uci -q get "$DNSSEC.server" 2>/dev/null || echo none)
+        _dm=$(dns_servers)
         engine_gone
     elif [ -f "$BLOCK_MARK" ]; then
         rm -f "$NOPID" 2>/dev/null || true

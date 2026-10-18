@@ -2,6 +2,7 @@
 core.uc
 net.uc
 lists.uc
+dnsmasq.uc
 merge.uc
 keys.uc
 outbound.uc

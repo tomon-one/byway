@@ -8,7 +8,7 @@
 // которую byway запускает, из чужого файла брать незачем.
 const TF_KEYS = [ 'enabled', 'conn_mode', 'node_url', 'sub_url', 'outbound_json', 'conn_label',
 	'list_mode', 'ru_direct', 'preset', 'interface', 'fakeip_pool', 'dns_upstream',
-	'dns_upstream2', 'dns_bootstrap', 'dns_listen', 'tproxy_port', 'local_proxy_port', 'redirect_port',
+	'dns_upstream2', 'dns_bootstrap', 'dns_listen', 'tproxy_port', 'local_proxy_port',
 	'router_via_vpn', 'mark', 'self_mark', 'log_level', 'ipv6', 'fakeip6_pool',
 	'show_usage', 'mux_concurrency', 'probe_interval', 'guard', 'block_quic', 'allow_insecure',
 	'lists_update', 'dns_route', 'on_failure', 'node_urls', 'lang', 'update_check',
@@ -17,6 +17,8 @@ const TF_KEYS = [ 'enabled', 'conn_mode', 'node_url', 'sub_url', 'outbound_json'
 const TF_SECRET = [ 'node_url', 'node_urls', 'sub_url', 'outbound_json' ];
 // Списочные опции UCI: вводятся по словам, иначе одна строка с пробелами.
 const TF_LIST = [ 'preset', 'interface', 'node_urls' ];
+// Снятые настройки прежних версий: выгрузка 0.3 их несёт, это не ошибка.
+const TF_GONE = [ 'redirect_port' ];
 
 function tf_has(a, k) { return index(a, k) >= 0; }
 
@@ -158,6 +160,7 @@ function cmd_import(src, nokey) {
 		let e = index(l, '=');
 		if (e < 0) continue;
 		let k = substr(l, 0, e), v = substr(l, e + 1);
+		if (tf_has(TF_GONE, k)) continue;
 		if (!tf_has(TF_KEYS, k)) { skip += ' ' + k; continue; }
 		if (nokey && tf_has(TF_SECRET, k)) continue;
 		if (tf_has(TF_LIST, k)) {
