@@ -33,8 +33,8 @@ function mg_route_part(file, want) {
 	return r;
 }
 
-// bw_uc merged domains|subnets: путь к склейке (собрать, если кэш негоден).
-function cmd_merged(kind) {
+// Путь к склейке domains|subnets (собрать, если кэш негоден).
+function mg_path(kind) {
 	let dom = kind != 'subnets';
 	let lists = getenv('BW_LISTS'), routes = getenv('BW_ROUTES'), presets = getenv('BW_PRESETS');
 	let out = dom ? '/tmp/byway-domains-all.lst' : '/tmp/byway-subnets-all.lst';
@@ -57,16 +57,14 @@ function cmd_merged(kind) {
 	// Строка 1 -- время сборки, последняя -- сама склейка (её правка чужими
 	// руками -- тоже повод пересобрать: /tmp общий).
 	if (cur != null && length(old) == length(sig) + 2 && old[length(old) - 1] == cur &&
-	    join('\n', slice(old, 1, length(old) - 1)) == join('\n', sig) && newest < int(old[0])) {
-		print(out);
-		return;
-	}
+	    join('\n', slice(old, 1, length(old) - 1)) == join('\n', sig) && newest < int(old[0]))
+		return out;
 
 	// Сборка: текст -- в черновик, чистка и sort -u -- busybox (на роутере
 	// быстрее, и список не держится в памяти ucode).
 	let now = time();
 	let tmp = trim(run([ 'mktemp', '/tmp/byway-merge.XXXXXX' ]).out);
-	if (tmp === '') { print(out); return; }
+	if (tmp === '') return out;
 	let f = fs.open(tmp, 'w');
 	let own = fs.readfile(src[0]);
 	if (own != null) f.write(own + '\n');
@@ -86,7 +84,10 @@ function cmd_merged(kind) {
 	              'sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*$//" | sort -u > "$1.s" && mv "$1.s" "$2"',
 	              'sh', tmp, out ], true);
 	fs.unlink(tmp);
-	if (r.code != 0) { fs.unlink(tmp + '.s'); print(out); return; }
+	if (r.code != 0) { fs.unlink(tmp + '.s'); return out; }
 	fs.writefile(out + '.sig', now + '\n' + join('\n', sig) + '\n' + mg_stat(out));
-	print(out);
+	return out;
 }
+
+// bw_uc merged domains|subnets: путь к склейке.
+function cmd_merged(kind) { print(mg_path(kind)); }

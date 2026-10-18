@@ -23,6 +23,8 @@ const CMDS = {
 	top: cmd_top,
 	doctor: cmd_doctor,
 	report: cmd_report,
+	presets: cmd_presets,
+	sub: cmd_sub,
 	gen: cmd_gen,
 	merged: cmd_merged,
 };
