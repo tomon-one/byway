@@ -566,7 +566,7 @@ return view.extend({
 		o.value('outbound', _('Свой конфиг'));
 		o.default = 'key';
 
-		o = s.option(form.TextValue, 'node_url', _('Ключ'),
+		var urlOpt = o = s.option(form.TextValue, 'node_url', _('Ключ'),
 			_('Ссылка целиком. Имя после решётки станет названием подключения.'));
 		o.rows = 3;
 		o.monospace = true;
@@ -674,6 +674,39 @@ return view.extend({
 		o.placeholder = _('свой конфиг');
 		o.depends('conn_mode', 'outbound');
 		o.remove = keepHidden;
+
+		/* Проверка ключа без консоли (владелец 2026-10-18): byway probe поднимает
+		   отдельный движок со своим входом и стучится через ключ наружу, не трогая
+		   работающий туннель. ~6 с на ключ -- фоновой задачей, как обновление.
+		   Один ключ -- то, что сейчас в поле, даже не сохранённое; подписка --
+		   выбранный ключ; несколько и свой конфиг -- сохранённое. */
+		o = s.option(form.DummyValue, '_probe', _('Проверка ключа'));
+		o.cfgvalue = function () { return ' '; };
+		o.renderWidget = function () {
+			var box = bwui.output('');
+			box.style.marginTop = '.5em';
+			var btn = E('button', {
+				'class': 'btn cbi-button-action',
+				'click': ui.createHandlerFn(this, function () {
+					var mode = '';
+					try { mode = s.children.filter(function (c) { return c.option === 'conn_mode'; })[0].formvalue('main'); }
+					catch (e) { mode = uci.get('byway', 'main', 'conn_mode') || 'key'; }
+					var args = [ 'probe' ];
+					if (mode === 'key' || mode === 'sub') {
+						var u = '';
+						if (mode === 'key') { try { u = (urlOpt.formvalue('main') || '').trim(); } catch (e) { u = ''; } }
+						if (!u) u = (uci.get('byway', 'main', 'node_url') || '').trim();
+						if (!u) { bwui.say(box, _('Ключ не задан — проверять нечего.')); return; }
+						args.push(u);
+					} else if (mode === 'selector' || mode === 'urltest') {
+						args.push('--all');
+					}
+					return bwui.job(args, box);
+				})
+			}, [ _('Проверить ключ') ]);
+			return E('div', {}, [ btn, E('div', { 'class': 'cbi-value-description' },
+				[ _('Соединение через ключ к сайту в интернете, работающий туннель не трогается. При нескольких ключах и своём конфиге проверяется сохранённое.') ]), box ]);
+		};
 
 		o = s.option(form.ListValue, 'on_failure', _('Если VPN не поднялся'),
 			_('Когда движок VPN на роутере не работает или перехват не лёг. Недоступный сервер при работающем движке сюда не относится: трафик и так уходит в движок и мимо VPN не идёт. «Пустить напрямую» — интернет работает, но то, что шло через VPN, идёт без него. «Не пускать» — это закрывается: в режиме «по спискам» — сайты из списков, в режиме «всё через VPN» — весь интернет. Доступ к роутеру остаётся.'));

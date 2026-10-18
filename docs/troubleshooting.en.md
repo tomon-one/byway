@@ -550,7 +550,8 @@ hand: `nft list tables`, `ip rule show`, `ip route show table 100`,
 
 While byway runs, table 100 should hold only `local default dev lo`; byway
 warns about foreign routes there when it loads its rules. The mark, ports
-and pool can be changed on the Network tab, the table number cannot.
+and pool can be changed on the Advanced tab → "Addresses and ports", the table
+number cannot.
 
 If zapret runs alongside, one domain must not sit on both lists: the session
 splits across two exits. `byway presets` compares the zapret hostlist at

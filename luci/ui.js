@@ -149,7 +149,13 @@ return baseclass.extend({
 			return new Promise(function (done) {
 				(function poll() {
 					fs.exec(self.BYWAY, [ 'job', 'log' ]).then(function (l) {
-						self.say(box, (l.stdout || '').trim() || _('запуск…'));
+						/* Предупреждения и сведения Xray (строки с датой) человеку
+						   ничего не говорят: «WebSocket устарел» под итогом пробы
+						   читается как поломка. Ошибки остаются. */
+						var out = (l.stdout || '').split('\n').filter(function (x) {
+							return !/^\s*\d{4}\/\d\d\/\d\d \d\d:\d\d:\d\d\S* \[(Warning|Info|Debug)\]/.test(x);
+						}).join('\n');
+						self.say(box, out.trim() || _('запуск…'));
 						if (l.code === 3) setTimeout(poll, 3000);
 						else done();
 					}).catch(function () { setTimeout(poll, 3000); });

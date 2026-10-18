@@ -433,7 +433,7 @@ Nothing else is added to a custom config:
 ## Per-key routes
 
 A route is a separate list of domains and subnets that goes through its own key
-instead of the main one. Routes tab, "Per-key routes" block, "Add a route"
+instead of the main one. Lists tab, "Per-key routes" block, "Add a route"
 button.
 
 The route name uses Latin letters, digits, `_` and `-`; it is also the file

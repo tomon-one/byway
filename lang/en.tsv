@@ -647,7 +647,7 @@ flow=%s у trojan Xray-core не поддерживает — пропущен	X
 задача запущена: byway %s	task started: byway %s
 конец	done
 … идёт	… in progress
-byway job update|engine [ВЕРСИЯ]|log	byway job update|engine [VERSION]|log
+byway job update|engine [ВЕРСИЯ]|probe [ССЫЛКА|--all]|log	byway job update|engine [VERSION]|probe [LINK|--all]|log
 byway watch: ядра нет -- byway engine restore в фоне	byway watch: no core -- byway engine restore in the background
   GitHub не ответил ни через туннель, ни напрямую, ни по адресам из DoH — проверить связь роутера и повторить	  GitHub did not answer through the tunnel, directly or at addresses from DoH — check the router's connection and retry
 xmux        не ограничивает соединения: ядро собрано на Go 1.27, см. byway doctor\n	xmux        does not limit connections: the core is built with Go 1.27, see byway doctor\n

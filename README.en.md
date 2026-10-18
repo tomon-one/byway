@@ -297,7 +297,7 @@ uci set byway.main.enabled=1
 uci commit byway
 ```
 
-**2. The list.** The "Routes" tab or the file `/etc/byway/domains.lst`, one
+**2. The list.** The "Lists" tab or the file `/etc/byway/domains.lst`, one
 entry per line; an entry covers subdomains too. If everything should go through
 the VPN, pick the "Everything through the VPN" mode.
 
@@ -311,7 +311,7 @@ the VPN, pick the "Everything through the VPN" mode.
 up; for the first 25 seconds the check answers "starting", and that is not a
 failure.
 
-**5. Ready-made lists** — on the same "Routes" tab, in "By lists" mode: pick
+**5. Ready-made lists** — on the same "Lists" tab, in "By lists" mode: pick
 them in the "Ready-made lists" field, press "Save & Apply", then "Download
 now" — the button applies what it downloaded by itself. Better to do this once
 the tunnel is up: the lists are downloaded through it.
@@ -544,11 +544,11 @@ a failure — [how byway works](docs/architecture.en.md).
 
 | tab | what is there |
 |---|---|
-| **Overview** | whether it works, through what, and how to change that: state, key, connection mode, failure behaviour |
-| **Routes** | what goes through the VPN: mode, your lists, ready-made lists, per-key routes |
-| **Network** | whose traffic to divert, DNS, interception ports and addresses, Mux, QUIC rejection, VPN for programs on the router |
-| **Maintenance** | full state, environment check, report for a support request, state log, byway update and swapping the Xray core for the tested one or a version by number (in the background, progress on the page), byway auto-update, settings transfer, statistics |
-| **Advanced** | language and values you change once in a lifetime |
+| **Overview** | whether it works, through what, and how to change that: state, key, connection mode, key check, failure behaviour |
+| **Lists** | what goes through the VPN: mode, your lists, ready-made lists, per-key routes |
+| **Network** | whose traffic to divert, DNS, Mux, QUIC rejection, VPN for programs on the router |
+| **Maintenance** | four sub-tabs: status (full state, environment check, report for a support request, log), updates (byway and the Xray core — the tested one or a version by number, in the background, progress on the page; auto-update), moving settings, statistics |
+| **Advanced** | language and values you change once in a lifetime; the "Addresses and ports" sub-tab holds the pool, resolver address, ports and mark |
 
 > ⚠️ **Clear the browser cache after updating byway.** LuCI appends the
 > version of **LuCI itself** to a module's URL, not the file's, so after a

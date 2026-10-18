@@ -107,6 +107,12 @@
 				"/usr/local/bin/byway sub *": [
 					"exec"
 				],
+				"/usr/local/bin/byway job probe": [
+					"exec"
+				],
+				"/usr/local/bin/byway job probe *": [
+					"exec"
+				],
 				"/etc/init.d/byway reload": [
 					"exec"
 				],
