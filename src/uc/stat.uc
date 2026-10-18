@@ -149,7 +149,7 @@ function cmd_stat() {
 	if (!fs.stat(SA_DIR)) fs.mkdir(SA_DIR, 0755);
 	if (sa_all()) { warn('в режиме «всё через VPN» журнал обращений не ведётся — статистики нет'); return; }
 	if (sa_off())
-		warn('сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)');
+		warn('сбор статистики выключен — включить: byway set show_usage on (в панели: Обслуживание → Сбор статистики)');
 	let pid = st_xray_pid();
 	if (pid === '') { warn('xray не запущен, считать нечего'); return; }
 	let mk = split(fs.readfile(SA_MARK) ?? '', '\n');
@@ -173,7 +173,7 @@ function cmd_top(n) {
 	let st = fs.stat(sa_file());
 	if (!st || !st.size) {
 		if (sa_all()) die('в режиме «всё через VPN» журнал обращений не ведётся — статистики нет');
-		if (sa_off()) die('сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)');
+		if (sa_off()) die('сбор статистики выключен — включить: byway set show_usage on (в панели: Обслуживание → Сбор статистики)');
 		die('учёт пуст. Собирается задачей cron; вручную: byway stat');
 	}
 	let rows = [];

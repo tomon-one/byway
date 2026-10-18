@@ -265,7 +265,7 @@ The option is not in the panel, only in the console; `byway export` includes
 it:
 
 ```sh
-uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload
+byway set allow_insecure on
 ```
 
 On engine 26.3.27 or newer the engine decides, and the option does not

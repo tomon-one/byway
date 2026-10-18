@@ -117,7 +117,7 @@ function dr_needs() {
 		          _t('движок не запущен или упал: /etc/init.d/byway restart, затем byway status и logread -e xray'));
 	} else {
 		dwarn(_t('byway выключен настройкой'),
-		      _t('включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart'));
+		      _t('включить: byway on'));
 	}
 	// Автозапуск отдельно от enabled; `enabled` не отличает «выключено» от
 	// «нет файла» -- файл проверяется сам.
@@ -224,7 +224,7 @@ function dr_updates() {
 			dok(_t('автообновление включено'));
 		if (u('update_check') == '0')
 			dwarn(_t('автообновление включено, но суточная проверка версий выключена'),
-			      _t('без проверки версий автообновлению нечего ставить — включить: uci set byway.main.update_check=1 && uci commit byway'));
+			      _t('без проверки версий автообновлению нечего ставить — включить: byway set update_check on'));
 		// Окно -- по местному времени, а OpenWrt по умолчанию в UTC. Судим по
 		// timezone: часы двигает только он, zonename без zoneinfo -- нет.
 		let tzn = dr_uci('system.@system[0].zonename'), tzo = dr_uci('system.@system[0].timezone');
@@ -254,13 +254,13 @@ function dr_config() {
 		let k = trim(u('node_urls'));
 		let n = k === '' ? 0 : length(split(k, /[ \t\n]+/));
 		if (n > 0) dok(_f('ключей для автовыбора: %s', n));
-		else dbad(_t('ключи для автовыбора не заданы'), _t('добавить на вкладке «Основное» либо: uci add_list byway.main.node_urls=vless://…'));
+		else dbad(_t('ключи для автовыбора не заданы'), _t('добавить на вкладке «Основное» либо: byway key sub АДРЕС'));
 	} else if (mode == 'outbound') {
 		if (u('outbound_json') !== '') dok(_t('свой конфиг аутбаунда задан'));
 		else dbad(_t('выбран свой конфиг, но он пуст'), _t('вписать кусок JSON на вкладке «Основное»'));
 	} else {
 		let url = u('node_url');
-		if (url === '') dbad(_t('ключ не задан'), _t('вписать на вкладке «Основное» или: uci set byway.main.node_url=vless://…'));
+		if (url === '') dbad(_t('ключ не задан'), _t("вписать на вкладке «Основное» или: byway key 'ССЫЛКА'"));
 		else if (substr(url, 0, length('ЗАПОЛНИТЬ')) == 'ЗАПОЛНИТЬ') dbad(_t('ключ не заполнен'), _t('вписать настоящий ключ вместо заглушки'));
 		else dok(_f('ключ задан, режим: %s', mode));
 	}
@@ -302,7 +302,7 @@ function dr_config() {
 		let sm = u('self_mark') || '0x400000', mk = u('mark') || '0x100000';
 		if (ltrim(sm + mk, '0123456789abcdefABCDEFxX') === '' && (dr_num(sm) & dr_num(mk)) != 0)
 			dwarn(_f('self_mark %s пересекается битами с mark %s', sm, mk),
-			      _t('byway возьмёт другое значение сам (его видно в byway nft, строка «meta mark … return»); закрепить: uci set byway.main.self_mark=ЗНАЧЕНИЕ && uci commit byway && /etc/init.d/byway reload'));
+			      _t('byway возьмёт другое значение сам (его видно в byway nft, строка «meta mark … return»); закрепить: byway set self_mark ЗНАЧЕНИЕ'));
 	}
 }
 
@@ -477,7 +477,7 @@ function dr_ports() {
 		}
 	} else if (u('router_via_vpn') != '1') {
 		dwarn(_t('роутер сам до сайтов из списка не достаёт'),
-		      _t('VPN для программ на роутере (router_via_vpn) выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload'));
+		      _t('VPN для программ на роутере (router_via_vpn) выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: byway set router_via_vpn on'));
 	}
 	// Правило и маршрут снимают разные руки: сосед уносит маршрут, а
 	// перехват выглядит исправным.

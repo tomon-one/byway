@@ -523,7 +523,7 @@ diag_uc() {
 }
 
 cmd_doctor() {
-    diag_uc doctor
+    diag_uc doctor "$@"
 }
 
 # byway report: отчёт для обращения, адреса и имена вымараны, ключа нет.
@@ -759,7 +759,7 @@ cmd_import() {
                 warn "применено, но движок не поднялся — смотреть: logread -e byway"
             fi
         else
-            say "применено. byway выключен настройкой -- включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart"
+            say "применено. byway выключен настройкой -- включить: byway on"
         fi
     else
         warn "конфиг не собрался — прежние настройки возвращаются на место"
@@ -832,7 +832,7 @@ case "${1:-}" in
   sub)    shift; cmd_sub "$@" ;;
   presets) cmd_presets ;;
   health) cmd_health ;;
-  doctor) cmd_doctor ;;
+  doctor) shift; cmd_doctor "$@" ;;
   menu|меню) cmd_menu ;;
   export) shift; cmd_export "$@" ;;
   report) shift; cmd_report "$@" ;;
@@ -854,14 +854,21 @@ case "${1:-}" in
   plumb)  shift; cmd_plumb "$@" ;;
   status) cmd_status "${2:-}" ;;
   key)    shift; cli_uc key "$@" ;;
+  keys)   cli_uc keys ;;
+  list)   shift; cli_uc list "$@" ;;
+  mode)   shift; cli_uc mode "$@" ;;
+  set)    shift; cli_uc set "$@" ;;
+  # «ядро» -- как в панели и документах; engine остаётся рабочим.
+  core)   shift; cmd_engine "$@" ;;
   on)     cli_uc onoff 1 ;;
   off)    cli_uc onoff ;;
   add)    shift; cli_uc add "$@" ;;
   del)    shift; cli_uc del "$@" ;;
   # Без доводов -- сводка как «Основное» в панели; help -- все команды.
-  "")     cli_uc home ;;
-  help|--help|-h) cli_uc help ;;
-  *)     printf "$(_f 'byway: неизвестная команда «%s». Все команды: byway help\n' "$1")"; exit 1 ;;
+  "")     _bi=""; [ -t 0 ] && [ -t 1 ] && _bi=1
+          BW_INTERACTIVE=$_bi cli_uc home ;;
+  help|--help|-h) shift; cli_uc help "$@" ;;
+  *)     cli_uc unknown "$1" ;;
 esac
 
 exit $?
@@ -986,9 +993,15 @@ function run(argv, err) {
 
 // ── колонки в терминале ───────────────────────────────────────────────────
 // Длина в знаках, а не байтах: русская подпись иначе сдвигала колонку.
+// Коды цвета (ESC [ … m) места не занимают.
 function c_len(s) {
-	let n = 0;
-	for (let i = 0; i < length(s); i++) if ((ord(s, i) & 0xC0) != 0x80) n++;
+	let n = 0, esc = false;
+	for (let i = 0; i < length(s); i++) {
+		let c = ord(s, i);
+		if (esc) { if (c == 109) esc = false; continue; }
+		if (c == 27) { esc = true; continue; }
+		if ((c & 0xC0) != 0x80) n++;
+	}
 	return n;
 }
 function c_pad(s, w) { let n = w - c_len(s); return n > 0 ? s + sprintf('%' + n + 's', '') : s; }
@@ -1953,7 +1966,7 @@ function ob_transport(N) {
 	}
 	if (t == 'xhttp') {
 		if (xv < 10824)
-			ob_dief('движку %s транспорт xhttp неизвестен (нужен Xray-core 1.8.24 или новее) — обновить: byway engine tested, либо взять ключ на ws', ob_xrayv(12));
+			ob_dief('движку %s транспорт xhttp неизвестен (нужен Xray-core 1.8.24 или новее) — обновить: byway core tested, либо взять ключ на ws', ob_xrayv(12));
 		let x = { path: N.PATH, host: N.WSHOST };
 		if (N.MODE != '') x.mode = N.MODE;
 		// extra -- один объект (json_obj_ok в разборе); не JSON вовсе --
@@ -1969,7 +1982,7 @@ function ob_transport(N) {
 	}
 	if (t == 'hysteria') {
 		if (xv < 260327)
-			ob_dief('hysteria2 нужен Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
+			ob_dief('hysteria2 нужен Xray-core 26.3.27 или новее, а стоит %s — обновить: byway core tested', ob_xrayv(2));
 		ob_warn('hysteria2 идёт поверх QUIC (UDP), а в РФ его ограничивают первым делом');
 		let s = { network: 'hysteria', hysteriaSettings: { version: 2, auth: N.PASS } }, masks = [];
 		// Смена портов, как у клиента hysteria2: порт сервера меняется раз в
@@ -1979,13 +1992,13 @@ function ob_transport(N) {
 		// молча игнорируют); старое ядро -- основной порт.
 		if (N.HOP) {
 			if (xv < 260930)
-				ob_warnf('смена портов hysteria2 нужна Xray-core 26.9.30 или новее, а стоит %s — соединение идёт только на порт %s; обновить: byway engine tested', ob_xrayv(2), N.PORT);
+				ob_warnf('смена портов hysteria2 нужна Xray-core 26.9.30 или новее, а стоит %s — соединение идёт только на порт %s; обновить: byway core tested', ob_xrayv(2), N.PORT);
 			else
 				push(masks, { type: 'udphop', settings: { mode: 'intervalRemote', remotePorts: N.HOP } });
 		}
 		if (N.OBFS != '') {
 			if (xv < 260711)
-				ob_dief('obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
+				ob_dief('obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а стоит %s — обновить: byway core tested', ob_xrayv(2));
 			push(masks, { type: 'salamander', settings: { password: N.OBFSPW } });
 		}
 		if (length(masks)) s.finalmask = { udp: masks };
@@ -2007,7 +2020,7 @@ function ob_security(N, st, sni) {
 		if (N.INSEC == '1' || N.INSEC == 'true') {
 			if (xv < 260327) {
 				if (u('allow_insecure') != '1' && N.PIN + N.VCN == '')
-					ob_die('в ключе отключена проверка сертификата (allowInsecure): соединение может подменить любой на пути. Для своего сервера с самоподписанным сертификатом: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload');
+					ob_die('в ключе отключена проверка сертификата (allowInsecure): соединение может подменить любой на пути. Для своего сервера с самоподписанным сертификатом: byway set allow_insecure on');
 				ob_warn('allowInsecure=1: проверка сертификата сервера отключена, соединение можно подменить');
 				s.allowInsecure = true;
 			} else if (N.PIN == '' && N.VCN == '') {
@@ -2016,7 +2029,7 @@ function ob_security(N, st, sni) {
 		}
 		if (N.PIN != '' || N.VCN != '') {
 			if (xv < 260327)
-				ob_dief('проверка сертификата по отпечатку (pcs, vcn) нужна Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
+				ob_dief('проверка сертификата по отпечатку (pcs, vcn) нужна Xray-core 26.3.27 или новее, а стоит %s — обновить: byway core tested', ob_xrayv(2));
 			if (N.PIN != '') s.pinnedPeerCertSha256 = N.PIN;
 			if (N.VCN != '') s.verifyPeerCertByName = N.VCN;
 		}
@@ -2033,7 +2046,7 @@ function ob_security(N, st, sni) {
 		// отвергает само; на старом -- то же решение здесь.
 		if ((N.PROTO == 'vless' || N.PROTO == 'trojan') && xv < 260711 &&
 		    u('allow_insecure') != '1' && !ob_private(N.HOST))
-			ob_die('ключ vless или trojan без TLS к публичному адресу: ключ и трафик видны любому на пути. Нужен ключ с security=tls или reality; разрешить всё же: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload');
+			ob_die('ключ vless или trojan без TLS к публичному адресу: ключ и трафик видны любому на пути. Нужен ключ с security=tls или reality; разрешить всё же: byway set allow_insecure on');
 		st.security = 'none';
 	} else {
 		ob_dief('security=%s не поддержан', N.SEC);
@@ -2137,7 +2150,7 @@ function ob_key(url, tag, prev_sni, prev_wshost) {
 	if (N.SNI == null) N.SNI = prev_sni;
 	if (N.WSHOST == null) N.WSHOST = prev_wshost;
 	if (N.ENC != '' && N.ENC != 'none' && ob_xver() < 250829)
-		ob_dief('шифрование VLESS (encryption=mlkem768x25519plus) появилось в Xray-core 25.8.29, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
+		ob_dief('шифрование VLESS (encryption=mlkem768x25519plus) появилось в Xray-core 25.8.29, а стоит %s — обновить: byway core tested', ob_xrayv(2));
 	if (!match(N.PORT, /^[0-9]+$/) || int(N.PORT) < 1 || int(N.PORT) > 65535)
 		ob_dief('порт в ссылке недопустим: %s', N.PORT);
 
@@ -2493,7 +2506,7 @@ function g_dns() {
 			G.boot = { address: bs, domains: bh, skipFallback: true };
 		} else {
 			warn('резолвер задан именем, а bootstrap не задан — разрешать имя нечем, взяты адреса по умолчанию');
-			warn('  вписать: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway');
+			warn('  вписать: byway set dns_bootstrap 77.88.8.8');
 			G.up = 'https://8.8.8.8/dns-query';
 			G.up2 = 'https://1.1.1.1/dns-query';
 		}
@@ -3645,7 +3658,7 @@ function cmd_stat() {
 	if (!fs.stat(SA_DIR)) fs.mkdir(SA_DIR, 0755);
 	if (sa_all()) { warn('в режиме «всё через VPN» журнал обращений не ведётся — статистики нет'); return; }
 	if (sa_off())
-		warn('сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)');
+		warn('сбор статистики выключен — включить: byway set show_usage on (в панели: Обслуживание → Сбор статистики)');
 	let pid = st_xray_pid();
 	if (pid === '') { warn('xray не запущен, считать нечего'); return; }
 	let mk = split(fs.readfile(SA_MARK) ?? '', '\n');
@@ -3669,7 +3682,7 @@ function cmd_top(n) {
 	let st = fs.stat(sa_file());
 	if (!st || !st.size) {
 		if (sa_all()) die('в режиме «всё через VPN» журнал обращений не ведётся — статистики нет');
-		if (sa_off()) die('сбор статистики выключен — включить: uci set byway.main.show_usage=1 && uci commit byway && /etc/init.d/byway reload (в панели: Обслуживание → Сбор статистики)');
+		if (sa_off()) die('сбор статистики выключен — включить: byway set show_usage on (в панели: Обслуживание → Сбор статистики)');
 		die('учёт пуст. Собирается задачей cron; вручную: byway stat');
 	}
 	let rows = [];
@@ -3806,7 +3819,7 @@ function dr_needs() {
 		          _t('движок не запущен или упал: /etc/init.d/byway restart, затем byway status и logread -e xray'));
 	} else {
 		dwarn(_t('byway выключен настройкой'),
-		      _t('включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart'));
+		      _t('включить: byway on'));
 	}
 	// Автозапуск отдельно от enabled; `enabled` не отличает «выключено» от
 	// «нет файла» -- файл проверяется сам.
@@ -3913,7 +3926,7 @@ function dr_updates() {
 			dok(_t('автообновление включено'));
 		if (u('update_check') == '0')
 			dwarn(_t('автообновление включено, но суточная проверка версий выключена'),
-			      _t('без проверки версий автообновлению нечего ставить — включить: uci set byway.main.update_check=1 && uci commit byway'));
+			      _t('без проверки версий автообновлению нечего ставить — включить: byway set update_check on'));
 		// Окно -- по местному времени, а OpenWrt по умолчанию в UTC. Судим по
 		// timezone: часы двигает только он, zonename без zoneinfo -- нет.
 		let tzn = dr_uci('system.@system[0].zonename'), tzo = dr_uci('system.@system[0].timezone');
@@ -3943,13 +3956,13 @@ function dr_config() {
 		let k = trim(u('node_urls'));
 		let n = k === '' ? 0 : length(split(k, /[ \t\n]+/));
 		if (n > 0) dok(_f('ключей для автовыбора: %s', n));
-		else dbad(_t('ключи для автовыбора не заданы'), _t('добавить на вкладке «Основное» либо: uci add_list byway.main.node_urls=vless://…'));
+		else dbad(_t('ключи для автовыбора не заданы'), _t('добавить на вкладке «Основное» либо: byway key sub АДРЕС'));
 	} else if (mode == 'outbound') {
 		if (u('outbound_json') !== '') dok(_t('свой конфиг аутбаунда задан'));
 		else dbad(_t('выбран свой конфиг, но он пуст'), _t('вписать кусок JSON на вкладке «Основное»'));
 	} else {
 		let url = u('node_url');
-		if (url === '') dbad(_t('ключ не задан'), _t('вписать на вкладке «Основное» или: uci set byway.main.node_url=vless://…'));
+		if (url === '') dbad(_t('ключ не задан'), _t("вписать на вкладке «Основное» или: byway key 'ССЫЛКА'"));
 		else if (substr(url, 0, length('ЗАПОЛНИТЬ')) == 'ЗАПОЛНИТЬ') dbad(_t('ключ не заполнен'), _t('вписать настоящий ключ вместо заглушки'));
 		else dok(_f('ключ задан, режим: %s', mode));
 	}
@@ -3991,7 +4004,7 @@ function dr_config() {
 		let sm = u('self_mark') || '0x400000', mk = u('mark') || '0x100000';
 		if (ltrim(sm + mk, '0123456789abcdefABCDEFxX') === '' && (dr_num(sm) & dr_num(mk)) != 0)
 			dwarn(_f('self_mark %s пересекается битами с mark %s', sm, mk),
-			      _t('byway возьмёт другое значение сам (его видно в byway nft, строка «meta mark … return»); закрепить: uci set byway.main.self_mark=ЗНАЧЕНИЕ && uci commit byway && /etc/init.d/byway reload'));
+			      _t('byway возьмёт другое значение сам (его видно в byway nft, строка «meta mark … return»); закрепить: byway set self_mark ЗНАЧЕНИЕ'));
 	}
 }
 
@@ -4166,7 +4179,7 @@ function dr_ports() {
 		}
 	} else if (u('router_via_vpn') != '1') {
 		dwarn(_t('роутер сам до сайтов из списка не достаёт'),
-		      _t('VPN для программ на роутере (router_via_vpn) выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload'));
+		      _t('VPN для программ на роутере (router_via_vpn) выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: byway set router_via_vpn on'));
 	}
 	// Правило и маршрут снимают разные руки: сосед уносит маршрут, а
 	// перехват выглядит исправным.
@@ -5646,6 +5659,9 @@ function up_verify(num, root, dir) {
 // поднялось и откачено, 4 -- откат не удался, 5 -- копия для отката не
 // сделалась, 6 -- подпись не сошлась (оба -- ничего не тронуто), прочее -- не
 // скачалось.
+// Шаг долгой работы: человек видит, сколько осталось (владелец 2026-10-18).
+function up_step(n, total, what) { print('\n'); sayf('шаг %s из %s: %s', n, total, what); }
+
 function cmd_update(...args) {
 	let num = getenv('BW_NUM'), uf = '', nov = false, uto = '';
 	for (let i = 0; i < length(args); i++) {
@@ -5694,10 +5710,11 @@ function cmd_update(...args) {
 	if (uf == '--check') return;
 
 	UP_DIR = up_tmpdir('byway-update');
+	let total = (nov ? 4 : 5) - (up_idle() ? 1 : 0), st = 0;
 	if (UP_DIR === '') die('не создать рабочий каталог в /tmp');
 	fs.writefile(UP_DIRF, UP_DIR);
 	let d = UP_DIR;
-	say('загрузка');
+	up_step(++st, total, _t('загрузка'));
 	if (nt_get([ '--max-time', '120', '-o', d + '/p.tar.gz',
 	             'https://github.com/' + getenv('BW_REPO') + '/archive/refs/tags/v' + nw + '.tar.gz' ]) != 0) {
 		up_die(_t('не скачалось -- ничего не тронуто'));
@@ -5711,6 +5728,7 @@ function cmd_update(...args) {
 	} else {
 		// 1 -- проверить нечем (обход назвать можно), 2 -- подлинность
 		// опровергнута (обход не советовать).
+		up_step(++st, total, _t('проверка подписи выпуска'));
 		let r = up_verify(nw, root, d);
 		if (r == 0) say('подпись выпуска сошлась с ключом byway');
 		else if (r == 1) { warn('выпуск не поставлен -- ничего не тронуто; поставить без проверки подписи: byway update --no-verify'); up_exit(6); }
@@ -5719,12 +5737,13 @@ function cmd_update(...args) {
 
 	// Связь до установки: откатывать за мёртвый сервер нельзя.
 	let tun0 = !up_idle() && up_tunnel_ok();
+	up_step(++st, total, _t('копия прежней версии для отката'));
 	if (!up_snapshot()) {
 		warn('копия прежней версии для отката не сделалась (место на флеше?) -- ничего не тронуто');
 		up_exit(5);
 	}
 	// Ставит install.sh: он один знает, что куда класть и что оставить.
-	say('установка');
+	up_step(++st, total, _t('установка'));
 	if (sys([ 'sh', '-c', 'cd "$1" && sh install.sh', 'sh', root ]) != 0) {
 		warn('установка оборвалась -- возврат прежней версии');
 		up_exit(up_restore() ? 3 : 4);
@@ -5735,9 +5754,9 @@ function cmd_update(...args) {
 	// «отвергнут»: doctor писал бы об этом вечно.
 	if (up_read(UP_AUFAIL) == nw) fs.unlink(UP_AUFAIL);
 	if (up_idle()) up_exit(0);
-	say('проверка туннеля на новой версии (до 2,5 минуты)');
+	up_step(++st, total, _t('проверка туннеля на новой версии (до 2,5 минуты)'));
 	if (up_wait(tun0)) {
-		say('готово: туннель на новой версии работает');
+		print('\n\033[1;32m', _f('готово: byway %s, туннель работает', nw), '\033[0m\n');
 		up_exit(0);
 	}
 	warn('на новой версии туннель не поднялся -- возврат прежней');
@@ -5837,7 +5856,7 @@ function wt_restore() {
 	if (u('enabled') == '1' && !alt && !x_ok(xray_bin()) &&
 	    !wt_fresh('/tmp/byway-engine-restore', 15)) {
 		fs.writefile('/tmp/byway-engine-restore', '');
-		logt('byway watch: ядра нет -- byway engine restore в фоне');
+		logt('byway watch: ядра нет -- byway core restore в фоне');
 		system([ 'sh', '-c', '( "$1" engine restore 2>&1 | sed "s/$(printf "\\033")\\[[0-9;]*m//g" | logger -t byway ) </dev/null >/dev/null 2>&1 &',
 		         'sh', wt_self() ]);
 	}
@@ -6332,17 +6351,20 @@ function en_gen_tail() {
 // остановленной службе.
 function en_bin_set(p) {
 	if (run([ 'uci', 'set', 'byway.main.xray_bin=' + p ]).code != 0 || run([ 'uci', 'commit', 'byway' ]).code != 0)
-		warnf('путь к движку не записался в настройки: uci set byway.main.xray_bin=%s && uci commit byway', p);
+		warnf('путь к движку не записался в настройки: byway set xray_bin %s', p);
 }
 
 function en_svc(a) { run([ '/etc/init.d/byway', a ]); }
-function en_done() { sayf('готово: Xray %s, на флеше свободно %s МБ', E.nw, en_mb(en_free_kb())); }
+// Этап долгой замены -- выделенной строкой: видно, где сейчас идёт работа.
+function en_stage(s) { print('\n\033[1m→ ', s, '\033[0m\n'); }
+
+function en_done() { print('\n\033[1;32m', _f('готово: Xray %s, на флеше свободно %s МБ', E.nw, en_mb(en_free_kb())), '\033[0m\n'); }
 
 // Путь «ядра нет» (после sysupgrade или снятого пакета): ставится без отката.
 // 25 МБ, как у установщика: ubifs дожимает ядро примерно вдвое.
 function en_fresh() {
 	if (E.free < 25600) dief('на флеше свободно %s МБ, ядру нужно %s — ничего не тронуто', en_mb(E.free), 25);
-	sayf('ядра нет — ставится Xray %s', E.nw);
+	en_stage(_f('ядра нет — ставится Xray %s', E.nw));
 	let r = en_put(E.pkg, E.new, E.sz);
 	if (r == 2) { en_noexec_mark(); die('ядро не запускается на этом железе — удалено'); }
 	if (r != 0) die('ядро не распаковалось на флеш — ничего не тронуто');
@@ -6350,7 +6372,7 @@ function en_fresh() {
 	en_bin_set(E.new);
 	logf('движок поставлен: %s (прежнего не было)', E.nw);
 	if (u('enabled') == '1') {
-		say('запуск службы');
+		en_stage(_t('запуск службы'));
 		en_svc('restart');
 	}
 	en_done();
@@ -6358,7 +6380,7 @@ function en_fresh() {
 
 // Путь «рядом». Прежнее ядро не трогается до успеха: откат -- вернуть путь.
 function en_side() {
-	say('места хватает — новое ядро кладётся рядом с прежним');
+	en_stage(_t('места хватает — новое ядро кладётся рядом с прежним'));
 	let r = en_put(E.pkg, E.new, E.sz);
 	fs.unlink(E.pkg);
 	if (r == 2) { en_noexec_mark(); die('новое ядро не запускается на этом железе — удалено, работает прежнее'); }
@@ -6379,7 +6401,7 @@ function en_side() {
 	en_bin_set(E.new);
 	warn('перезапуск службы: туннель пропадёт на несколько секунд');
 	en_svc('restart');
-	say('проверка туннеля на новом движке (до 2,5 минуты)');
+	en_stage(_t('проверка туннеля на новом движке (до 2,5 минуты)'));
 	if (up_wait(E.tun0)) {
 		// Удаляется, только если ядро наше: /usr/bin/xray -- файл пакета.
 		if (ours) {
@@ -6405,8 +6427,8 @@ function en_side() {
 // СЕЙЧАС, пока туннель жив; потом -- дочерний процесс без INT и HUP.
 function en_ram() {
 	if (substr(E.old, 0, 20) != '/usr/local/bin/xray-')
-		dief('места на второе ядро нет, а прежнее (%s) — из пакета; снять пакет вручную и поставить заново: byway engine %s', E.old, E.nw);
-	sayf('места на второе ядро нет (свободно %s МБ) — замена через память', en_mb(E.free));
+		dief('места на второе ядро нет, а прежнее (%s) — из пакета; снять пакет вручную и поставить заново: byway core %s', E.old, E.nw);
+	en_stage(_f('места на второе ядро нет (свободно %s МБ) — замена через память', en_mb(E.free)));
 	if (match(E.old, /^\/usr\/local\/bin\/xray-[^-]*-/)) {
 		// Своя сборка: архив выпуска дал бы откат на ОФИЦИАЛЬНЫЙ бинарник под
 		// именем своей сборки. Копия -- сам файл, сжатый в память.
@@ -6416,7 +6438,7 @@ function en_ram() {
 			die('копию своей сборки для отката не сделать — замена не начата');
 	} else {
 		E.orb = E.d + '/old.zip';
-		sayf('загрузка прежней версии %s — для отката', E.ov);
+		en_stage(_f('загрузка прежней версии %s — для отката', E.ov));
 		if (en_fetch(E.ov, E.orb) != 0)
 			dief('архив прежней версии %s не получен — без копии для отката замена не начата', E.ov);
 	}
@@ -6445,7 +6467,7 @@ function en_ram_back() {
 
 // Отказ ПОСЛЕ удаления: прежнее ядро -- из архива, скачанного до остановки.
 function en_ram_restore() {
-	sayf('возврат %s из архива', E.ov);
+	en_stage(_f('возврат %s из архива', E.ov));
 	if (en_put(E.orb, E.old) == 0) {
 		en_bin_set(E.old);
 		en_gen(E.old);
@@ -6475,7 +6497,7 @@ function cmd_engine_ram(d) {
 	// plumb on при запуске. Номер этого процесса: умрёт замена -- сторож
 	// метку не признает.
 	fs.writefile(PL_DOWN, fs.readlink('/proc/self') + '\n');
-	say('идёт замена — прерывать нельзя');
+	en_stage(_t('идёт замена — прерывать нельзя'));
 	sys([ 'sleep', '2' ]);
 	let mk = en_mem_kb();
 	if (mk * 1024 < int(E.sz) + 20971520) {
@@ -6505,7 +6527,7 @@ function cmd_engine_ram(d) {
 	fs.unlink(t);
 	en_bin_set(E.new);
 	en_svc('start');
-	say('проверка туннеля на новом движке (до 2,5 минуты)');
+	en_stage(_t('проверка туннеля на новом движке (до 2,5 минуты)'));
 	if (up_wait(E.tun0)) {
 		en_ram_end(true);
 		logf('движок заменён: %s -> %s', E.ov, E.nw);
@@ -6521,7 +6543,7 @@ function cmd_engine_ram(d) {
 // Переключение на ядро, которое уже лежит рядом: проверка конфига,
 // перезапуск, проверка туннеля; не поднялось -- обратно. Оба файла остаются.
 function en_switch() {
-	sayf('Xray %s уже лежит рядом — переключение без загрузки', E.nw);
+	en_stage(_f('Xray %s уже лежит рядом — переключение без загрузки', E.nw));
 	E.tun0 = !up_idle() && up_tunnel_ok();
 	if (up_idle()) {
 		en_bin_set(E.new);
@@ -6536,10 +6558,10 @@ function en_switch() {
 	en_bin_set(E.new);
 	warn('перезапуск службы: туннель пропадёт на несколько секунд');
 	en_svc('restart');
-	say('проверка туннеля на новом движке (до 2,5 минуты)');
+	en_stage(_t('проверка туннеля на новом движке (до 2,5 минуты)'));
 	if (up_wait(E.tun0)) {
 		logf('движок переключён: %s -> %s', E.ov, E.nw);
-		sayf('готово: Xray %s; прежнее ядро осталось рядом: %s', E.nw, E.old);
+		print('\n\033[1;32m', _f('готово: Xray %s; прежнее ядро осталось рядом: %s', E.nw, E.old), '\033[0m\n');
 		return;
 	}
 	warn('туннель на этом движке не поднялся — возврат прежнего');
@@ -6611,7 +6633,7 @@ function cmd_engine(arg) {
 		let nv = en_top('any'), sv = en_top('stable');
 		if (E.ov === '') {
 			warn('ядро Xray не указано или не запускается (byway.main.xray_bin)');
-			say('  поставить: byway engine restore');
+			say('  поставить: byway core restore');
 		} else if (nv === '') {
 			sayf('стоит Xray %s; есть ли новее — неизвестно: GitHub не ответил', E.ov);
 			up_nonet();
@@ -6625,15 +6647,15 @@ function cmd_engine(arg) {
 			else sayf('  проверенная с byway: %s', tested);
 		}
 		if (nv !== '' && E.ov !== '' && st_ver_gt(nv, E.ov)) {
-			sayf('  поставить: byway engine %s', nv);
-			if (tested != nv && st_ver_gt(tested, E.ov)) say('  или проверенную: byway engine tested');
+			sayf('  поставить: byway core %s', nv);
+			if (tested != nv && st_ver_gt(tested, E.ov)) say('  или проверенную: byway core tested');
 		}
 		if (arg == '--check') return;
 		say('подробно:');
 		if (E.ov !== '') sayf('  файл: %s', E.old);
 		if (nv !== '') sayf('  самая свежая у XTLS: %s, стабильная: %s', nv, sv || '?');
 		sayf('  на флеше свободно %s МБ, памяти доступно %s МБ', en_mb(en_free_kb()), en_mb(en_mem_kb()));
-		say('  варианты: byway engine ВЕРСИЯ | tested | newest | stable | restore | /tmp/ФАЙЛ.gz');
+		say('  варианты: byway core ВЕРСИЯ | tested | newest | stable | restore | /tmp/ФАЙЛ.gz');
 		return;
 	}
 	if (arg == 'tested') {
@@ -6672,7 +6694,7 @@ function cmd_engine(arg) {
 	// Ядра нет -- место проверяем ДО загрузки: сторож повторяет раз в 15 мин.
 	if (E.ov === '' && en_free_kb() < 25600)
 		dief('на флеше свободно %s МБ, ядру нужно %s — ничего не тронуто', en_mb(en_free_kb()), 25);
-	sayf('загрузка Xray-core %s (%s)', E.nw, E.asset);
+	en_stage(_f('загрузка Xray-core %s (%s)', E.nw, E.asset));
 	E.pkg = E.d + '/new.zip';
 	let r = en_fetch(E.nw, E.pkg);
 	if (r == 1) { up_nonet(); dief('архив %s не скачался — ничего не тронуто', E.nw); }
@@ -6680,7 +6702,7 @@ function cmd_engine(arg) {
 	if (r != 0) dief('архив %s не сошёлся с суммой SHA2-256 из .dgst выпуска — отброшен, ничего не тронуто', E.nw);
 	E.sz = en_size(E.pkg);
 	if (E.sz === '') die('в архиве нет файла xray — ничего не тронуто');
-	say('архив сверен с суммой из выпуска');
+	en_stage(_t('архив сверен с суммой из выпуска'));
 	en_go();
 }
 
@@ -6883,7 +6905,7 @@ function cmd_presets() {
 		say('ни одного готового списка не подключено');
 		say('  что бывает:');
 		for (let k in PS_NAMES) print(sprintf('    %-20s %s\n', k, ps_about(k)));
-		say('  подключить: uci add_list byway.main.preset=ИМЯ && uci commit byway && byway presets && /etc/init.d/byway reload');
+		say('  подключить: byway list ready on ИМЯ');
 	} else {
 		warn('ни один из подключённых списков не обновился — прежние копии остались на месте');
 	}
@@ -7229,7 +7251,7 @@ function m_apply() {
 		// из меню нельзя (enabled только через uci): сказать об этом.
 		if (u('enabled') != '1') {
 			print(_t('\n  \033[1;33mсобрано, но byway ВЫКЛЮЧЕН\033[0m — туннеля не будет\n'));
-			print(_t('  включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart\n'));
+			print(_t('  включить: byway on\n'));
 			return;
 		}
 		run([ '/etc/init.d/byway', 'restart' ]);
@@ -7386,7 +7408,7 @@ function m_lists() {
 function m_svc_done(what) {
 	if (u('enabled') != '1') {
 		print(_t('\n  byway ВЫКЛЮЧЕН настройкой — служба не запускается\n'));
-		print(_t('  включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart\n'));
+		print(_t('  включить: byway on\n'));
 		return;
 	}
 	for (let i = 0; i < 12 && st_xray_pid() === ''; i++) sys([ 'sleep', '1' ]);
@@ -7640,7 +7662,7 @@ function cmd_home() {
 		print(_t('  С чего начать:\n'));
 		print(_t('  1. Вписать ключ — ссылку от сервиса VPN, в одинарных кавычках:\n'), "       byway key 'vless://…'\n");
 		print(_t('  2. Добавить сайты, которые должны идти через VPN:\n       byway add youtube.com instagram.com\n'));
-		print(_t('  3. Проверить: byway health — все четыре строки зелёные.\n'));
+		print(_t('  3. Проверить: byway — все четыре строки зелёные.\n'));
 		print(_t('  Подробно, по шагам: https://github.com/tomon-one/byway/blob/main/docs/beginner.md\n'));
 	} else {
 		c_health(run([ m_self(), 'health' ]).out);
@@ -7656,43 +7678,66 @@ function cmd_home() {
 	c_group(_t('Частые команды'));
 	c_help("key 'ССЫЛКА'", _t('вписать ключ и применить'));
 	c_help('add САЙТ …', _t('добавить сайты или подсети в свои списки'));
-	c_help('health', _t('проверить: служба, VPN, трафик, DNS'));
+	c_help('list', _t('что пускается через VPN'));
+	c_help('set', _t('все настройки'));
 	c_help('menu', _t('всё то же пунктами меню'));
 	print('\n', _t('  Все команды: byway help'), '\n');
+	// В терминале -- сразу в меню по Enter: новичку не нужно помнить команды.
+	// Из скрипта и ssh 'byway' (не терминал) -- ничего не спрашивается.
+	if (getenv('BW_INTERACTIVE') == '1') {
+		print('\n', C_B, _t('  Enter — открыть меню, Ctrl+C — выйти'), C_0, ' ');
+		fs.stdout?.flush();
+		let l = fs.stdin.read('line');
+		if (l != null && trim(l) === '') sys([ m_self(), 'menu' ]);
+	}
 }
 
 // ── byway help ────────────────────────────────────────────────────────────
-function cmd_help() {
+// Команды -- по предметам (ключ, списки, состояние); служебные -- только в
+// `byway help all` (владелец 2026-10-18: «максимально просто»).
+function cmd_help(all) {
 	print(C_B, 'byway ', getenv('BW_VERSION'), C_0, _t(' — раздельное туннелирование через VPN\n'));
-	c_group(_t('Подключение'));
+	c_group(_t('Ключ'));
 	c_help("key 'ССЫЛКА'", _t('вписать ключ (проверяется до записи) и применить; ссылку — в одинарных кавычках'));
-	c_help('on | off', _t('включить или выключить byway'));
-	c_help('probe [ССЫЛКА|--all]', _t('проверить ключ отдельно, не трогая работающий туннель; --all — все ключи'));
-	c_help('sub АДРЕС', _t('скачать ключи из подписки'));
+	c_help('key', _t('какой ключ стоит и работает ли'));
+	c_help('keys', _t('список ключей, активный отмечен'));
+	c_help('key use N', _t('сделать активным ключ номер N'));
+	c_help('key sub АДРЕС', _t('взять ключи из подписки'));
+	c_help('probe [--all]', _t('проверить ключ, не трогая работающий туннель; --all — все ключи'));
 	c_group(_t('Списки'));
+	c_help('list', _t('что пускается через VPN: режим, свои списки, готовые'));
 	c_help('add САЙТ|ПОДСЕТЬ …', _t('добавить в свои списки и применить; сразу несколько, через пробел; «-» — читать список со ввода до Ctrl+D'));
 	c_help('del САЙТ|ПОДСЕТЬ …', _t('убрать из своих списков и применить'));
-	c_help('presets', _t('обновить готовые списки'));
+	c_help('list ready', _t('готовые списки; подключить: list ready on ИМЯ'));
+	c_help('mode lists|all', _t('по спискам или всё через VPN'));
 	c_help('top [N]', _t('чем на самом деле пользуются'));
-	c_group(_t('Состояние'));
-	c_help('health', _t('быстрая проверка: служба, VPN, трафик, DNS'));
-	c_help('status [--short]', _t('что сейчас работает, подробно'));
-	c_help('doctor', _t('проверка окружения: что не так и как исправить'));
-	c_help('report [файл]', _t('отчёт для обращения, без ключа от VPN'));
+	c_group(_t('Работа'));
+	c_help('(без команды)', _t('проверка: служба, VPN, трафик, DNS, и что делать'));
+	c_help('on | off', _t('включить или выключить byway'));
+	c_help('status', _t('что сейчас работает, подробно'));
+	c_help('doctor [--fix]', _t('проверка окружения: что не так и как исправить; --fix — починить, что чинится само'));
+	c_help('set [ИМЯ ЗНАЧЕНИЕ]', _t('все настройки и их значения; изменить одну и применить'));
+	c_help('menu', _t('всё то же пунктами меню'));
 	c_group(_t('Обслуживание'));
-	c_help('menu', _t('те же действия пунктами меню'));
-	c_help('update [--check|--force|--rollback|--no-verify]', _t('новая версия byway: --check — только проверить, --force — переставить ту же, --rollback — вернуть прежнюю, --no-verify — без проверки подписи'));
-	c_help('engine [ВЕРСИЯ|tested|newest|stable|restore|/tmp/ФАЙЛ]', _t('ядро Xray-core: без довода — есть ли обновление и подробности, с доводом — замена'));
-	c_help('lang [ru|en]', _t('язык вывода и панели'));
+	c_help('update [--check|--rollback]', _t('новая версия byway: --check — только проверить, --rollback — вернуть прежнюю'));
+	c_help('core [tested|ВЕРСИЯ]', _t('ядро Xray-core: без довода — есть ли обновление; tested — поставить проверенное'));
+	c_help('lang ru|en', _t('язык вывода и панели'));
 	c_help('export [файл] [--with-key]', _t('выгрузить настройки; по умолчанию без ключа'));
 	c_help('import ФАЙЛ [--no-key]', _t('принять настройки из выгрузки; --no-key — ключ не трогать'));
-	c_help('clear log|stat|all', _t('очистить журнал состояния, статистику или то и другое'));
-	c_group(_t('Для опытных'));
+	c_help('report [файл]', _t('отчёт для обращения, без ключа от VPN'));
+	if (all != 'all') { print('\n', _t('  Служебные команды: byway help all'), '\n'); return; }
+	c_group(_t('Служебные'));
+	c_help('health', _t('проверка строками для скриптов и панели; в терминале — как byway без доводов'));
 	c_help('check [ССЫЛКА]', _t('разобрать ключ и проверить конфиг, без соединений'));
+	c_help('sub АДРЕС', _t('скачать подписку и напечатать ключи'));
+	c_help('presets', _t('скачать подключённые готовые списки'));
+	c_help('update --force|--no-verify', _t('--force — переставить ту же версию, --no-verify — без проверки подписи'));
+	c_help('core newest|stable|restore|/tmp/ФАЙЛ', _t('свежее или стабильное ядро, вернуть пропавшее, своя сборка; engine — то же'));
+	c_help('clear log|stat|all', _t('очистить журнал состояния, статистику или то и другое'));
 	c_help('gen', _t('пересобрать конфиг из настроек и списков'));
 	c_help('show', _t('собранный конфиг без секретов: счётчики и правила'));
 	c_help('nft', _t('правила перехвата, не применяя их'));
-	c_help('plumb on | off', _t('включить или снять перехват (nft, маршрут, DNS)'));
+	c_help('plumb on|off', _t('включить или снять перехват (nft, маршрут, DNS)'));
 	c_help('job update|engine|probe|log', _t('то же в фоне, ход в журнале (так зовёт панель)'));
 	c_help('version', _t('версия'));
 }
@@ -7832,6 +7877,300 @@ function cmd_del(...args) {
 	c_apply();
 }
 
+// ── настройки: byway set ──────────────────────────────────────────────────
+// Всё, что есть в панели, -- одной командой, с той же проверкой значения и
+// применением (владелец 2026-10-18: «ни одной подсказки с uci»). default --
+// вернуть умолчание (опция удаляется). Вид: f -- да/нет, e -- из списка,
+// r -- по образцу, l -- список через пробел.
+function c_sets() {
+	return [
+		[ 'conn_mode', 'e', 'key sub selector urltest outbound', _t('способ подключения: один ключ, подписка, несколько вручную, несколько автоматически, свой конфиг') ],
+		[ 'list_mode', 'e', 'lists all', _t('режим: по спискам или всё через VPN (то же — byway mode)') ],
+		[ 'ru_direct', 'f', '', _t('.ru, .su и .рф — напрямую в режиме «всё через VPN»') ],
+		[ 'on_failure', 'e', 'open closed', _t('если VPN не поднялся: open — пустить напрямую, closed — не пускать') ],
+		[ 'interface', 'l', '^[A-Za-z0-9._-]+$', _t('сети роутера, которые пользуются VPN (br-lan — домашняя)') ],
+		[ 'mux_concurrency', 'r', '^[0-9]{1,3}$', _t('Mux: запросов в одном соединении, 0 — выключено') ],
+		[ 'dns_upstream', 'r', '^https://[^ ]+$', _t('DNS-сервер, шифрованный (DoH): https://…/dns-query') ],
+		[ 'dns_upstream2', 'r', '^(https://[^ ]+|none)$', _t('запасной DNS-сервер; none — без запасного') ],
+		[ 'dns_bootstrap', 'r', '^[0-9a-fA-F.:]+$', _t('DNS для имени DoH-сервера, если тот вписан именем') ],
+		[ 'dns_route', 'e', 'direct tunnel', _t('путь к DNS-серверу: напрямую или через VPN') ],
+		[ 'block_quic', 'f', '', _t('отказ QUIC для сайтов через VPN') ],
+		[ 'router_via_vpn', 'f', '', _t('VPN для программ на самом роутере') ],
+		[ 'ipv6', 'f', '', _t('IPv6 (экспериментально)') ],
+		[ 'log_level', 'e', 'none error warning info debug', _t('подробность журнала ядра') ],
+		[ 'probe_interval', 'r', '^[0-9]+[smh]?$', _t('шаг проверки ключей в автовыборе: 3m, 30s') ],
+		[ 'show_usage', 'f', '', _t('сбор статистики «чем пользуются»') ],
+		[ 'lists_update', 'r', '^[0-9]+[mhd]?([0-9]+[mhd])*$', _t('период обновления готовых списков: 12h, 1d; 0 — только вручную') ],
+		[ 'update_check', 'f', '', _t('проверка новых версий byway') ],
+		[ 'auto_update', 'f', '', _t('автоматическая установка новых версий') ],
+		[ 'auto_update_hour', 'r', '^([01]?[0-9]|2[0-3])$', _t('час автоматической установки, по часам роутера') ],
+		[ 'guard', 'f', '', _t('восстановление перехвата раз в пять минут') ],
+		[ 'xray_memlimit', 'r', '^([0-9]+([KMGT]i?B|[KMG])?|off|no)$', _t('предел памяти ядра: 96, 128MiB; 0 — без предела') ],
+		[ 'xray_root', 'f', '', _t('ядро от root — небезопасно') ],
+		[ 'allow_insecure', 'f', '', _t('незащищённые ключи — небезопасно, соединение можно подменить') ],
+		[ 'xray_bin', 'r', '^/[^ ]+$', _t('путь к ядру Xray; обычно его вписывает byway core') ],
+		[ 'fakeip_pool', 'r', '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+$', _t('пул подставных адресов') ],
+		[ 'fakeip6_pool', 'r', '^[0-9a-fA-F:]+/[0-9]+$', _t('пул подставных адресов IPv6') ],
+		[ 'dns_listen', 'r', '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$', _t('адрес резолвера byway') ],
+		[ 'tproxy_port', 'r', '^[0-9]{1,5}$', _t('порт перехвата') ],
+		[ 'local_proxy_port', 'r', '^[0-9]{1,5}$', _t('порт прокси byway') ],
+		[ 'mark', 'r', '^(0x[0-9a-fA-F]{1,8}|[0-9]{1,10})$', _t('метка пакетов') ],
+		[ 'self_mark', 'r', '^(0x[0-9a-fA-F]{1,8}|[0-9]{1,10})$', _t('метка соединений ядра') ],
+	];
+}
+
+// Флаг: да/нет любыми словами -> 1/0; не флаг -- null.
+function c_flag(v) {
+	v = lc(v);
+	if (index([ '1', 'on', 'yes', 'true', 'да', 'вкл' ], v) >= 0) return '1';
+	if (index([ '0', 'off', 'no', 'false', 'нет', 'выкл' ], v) >= 0) return '0';
+	return null;
+}
+
+function c_uci(cmd) { return run([ 'uci', '-q', ...cmd ]).code == 0; }
+
+// Записать настройку: значение (или список) и commit; курсор -- заново.
+function c_store(name, vals, list) {
+	c_uci([ 'delete', 'byway.main.' + name ]);
+	if (list) { for (let v in vals) c_uci([ 'add_list', 'byway.main.' + name + '=' + v ]); }
+	else if (length(vals)) c_uci([ 'set', 'byway.main.' + name + '=' + vals[0] ]);
+	c_uci([ 'commit', 'byway' ]);
+	_cur = null;
+}
+
+function c_show_val(name, kind) {
+	let v = u(name);
+	if (v === '') return C_DIM + _t('по умолчанию') + C_0;
+	if (kind == 'f') return v == '1' ? C_OK + _t('да') + C_0 : _t('нет');
+	return v;
+}
+
+function cmd_set(name, ...rest) {
+	let S = c_sets();
+	if (!name) {
+		print(C_B, _t('Настройки'), C_0, _t(' — изменить: byway set ИМЯ ЗНАЧЕНИЕ; вернуть умолчание: byway set ИМЯ default\n\n'));
+		for (let s in S) {
+			print('  ', C_B, c_pad(s[0], 18), C_0, ' ', c_pad(c_show_val(s[0], s[1]), 22), ' ', C_DIM, s[3], C_0, '\n');
+		}
+		return;
+	}
+	let s = null;
+	for (let x in S) if (x[0] == name) s = x;
+	if (!s) dief('нет такой настройки: %s — список: byway set', name);
+	if (!length(rest)) {
+		print('  ', C_B, s[0], C_0, ' = ', c_show_val(s[0], s[1]), '\n  ', s[3], '\n');
+		if (s[1] == 'f') print(_t('  значения: on или off\n'));
+		else if (s[1] == 'e') print(_f('  значения: %s\n', join(', ', split(s[2], ' '))));
+		return;
+	}
+	let vals = rest;
+	if (length(rest) == 1 && rest[0] == 'default') vals = [];
+	else if (s[1] == 'f') {
+		let f = c_flag(rest[0]);
+		if (f == null) dief('%s — да или нет: on или off', name);
+		vals = [ f ];
+	} else if (s[1] == 'e') {
+		if (index(split(s[2], ' '), rest[0]) < 0) dief('%s — одно из: %s', name, join(', ', split(s[2], ' ')));
+		vals = [ rest[0] ];
+	} else {
+		if (s[1] != 'l') vals = [ join(' ', rest) ];
+		for (let v in vals) if (!match(v, regexp(s[2]))) dief('значение «%s» не годится для %s', v, name);
+		if (name == 'xray_bin' && !x_ok(vals[0])) dief('%s — не запускаемое ядро Xray в системном каталоге', vals[0]);
+	}
+	c_store(name, vals, s[1] == 'l');
+	print('  ', C_B, name, C_0, ' = ', c_show_val(name, s[1]), '\n');
+	c_apply();
+}
+
+// ── ключи ────────────────────────────────────────────────────────────────
+function c_keylist() {
+	let v = cursor().get('byway', 'main', 'node_urls');
+	if (v == null) return [];
+	return type(v) == 'array' ? v : [ v ];
+}
+
+// Ключ одной строкой: схема, сервер, имя -- uuid и пароль не печатаются.
+function c_keyshort(k) {
+	let b = split(k, '#')[0], h = rindex(k, '#');
+	// В ucode (POSIX) нет (?:…) -- учётная часть отдельной группой.
+	let m = match(b, /^([a-z0-9+.-]+):\/\/([^@\/?]*@)?([^\/?#]+)/);
+	let name = h >= 0 ? pk_pctd(substr(k, h + 1)) : '';
+	return (m ? m[1] + '://…@' + m[3] : substr(b, 0, 40) + '…') + (name !== '' ? ' · ' + name : '');
+}
+
+// byway keys: список с номерами, активный отмечен.
+function cmd_keys() {
+	let L = c_keylist(), cur = u('node_url');
+	if (!length(L) && cur !== '') L = [ cur ];
+	if (!length(L)) { print(_t("  ключей нет — вписать: byway key 'ССЫЛКА' или из подписки: byway key sub АДРЕС"), '\n'); return; }
+	let i = 0;
+	for (let k in L) {
+		i++;
+		print('  ', k == cur ? C_OK + '●' + C_0 : ' ', ' ', C_B, i, C_0, '  ', c_keyshort(k), '\n');
+	}
+	print('\n', _t('  ● — активный. Выбрать: byway key use N; проверить все: byway probe --all\n'));
+}
+
+// byway key use N: активный -- N-й из списка; способ -- «несколько вручную».
+function c_key_use(n) {
+	let L = c_keylist(), i = int(n ?? '0');
+	if (!length(L)) die("в списке ключей пусто — сначала: byway key sub АДРЕС или byway key 'ССЫЛКА'");
+	if (!(i >= 1 && i <= length(L))) dief('номер ключа — от 1 до %s: byway keys', length(L));
+	m_uci('node_url=' + L[i - 1], 'conn_mode=selector');
+	sayf('активный ключ: %s', c_keyshort(L[i - 1]));
+	c_apply();
+}
+
+// byway key sub АДРЕС: ключи подписки -- в список, активный остаётся, если
+// он есть среди них, иначе первый; способ -- «несколько вручную».
+function c_key_sub(url) {
+	if (!url) die('byway key sub АДРЕС — адрес подписки https://…');
+	let r = run([ 'env', 'BW_SUB_URL=' + url, m_self(), 'sub', url ], true);
+	let keys = [];
+	for (let l in split(r.out, '\n')) {
+		l = trim(l);
+		let m = match(l, /^([a-z0-9+.-]+):\/\//);
+		if (m && index([ 'vless', 'vmess', 'trojan', 'ss', 'socks', 'hysteria2', 'hy2', 'wireguard', 'wg' ], lc(m[1])) >= 0) push(keys, l);
+	}
+	if (!length(keys)) { print(r.out); die('ключей в подписке не нашлось — настройки не изменены'); }
+	c_store('node_urls', keys, true);
+	let cur = u('node_url'), act = index(keys, cur) >= 0 ? cur : keys[0];
+	m_uci('node_url=' + act, 'sub_url=' + url, (u('conn_mode') == 'urltest' ? 'conn_mode=urltest' : 'conn_mode=selector'));
+	sayf('ключей из подписки: %s', length(keys));
+	cmd_keys();
+	c_apply();
+}
+
+// byway key [ССЫЛКА | use N | sub АДРЕС]: без довода -- какой ключ и
+// работает ли (проба, ~6 с).
+function cmd_key2(a, b) {
+	if (a == 'use') return c_key_use(b);
+	if (a == 'sub') return c_key_sub(b);
+	if (a) return cmd_key(a);
+	if (c_nokey()) { print(_t("  ключ не задан — вписать: byway key 'ССЫЛКА'"), '\n'); return; }
+	let m = u('conn_mode') || 'key';
+	if (m == 'outbound') print(_t('  свой конфиг аутбаунда\n'));
+	else print('  ', c_keyshort(u('node_url') || c_keylist()[0]), '\n');
+	print('\n');
+	sys([ 'env', 'BW_TTY=1', m_self(), 'probe' ]);
+}
+
+// ── списки ───────────────────────────────────────────────────────────────
+// byway list: что в списках; domains|subnets -- свои целиком; ready --
+// готовые (on|off ИМЯ -- подключить или убрать).
+function c_presets() {
+	let v = cursor().get('byway', 'main', 'preset');
+	if (v == null) return [];
+	return type(v) == 'array' ? v : split(trim(v), /[ \t]+/);
+}
+
+function c_ready(act, names) {
+	let P = c_presets();
+	if (!act) {
+		for (let n in PS_NAMES)
+			print('  ', index(P, n) >= 0 ? C_OK + '●' + C_0 : ' ', ' ', C_B, c_pad(n, 20), C_0, ' ', C_DIM, ps_about(n), C_0, '\n');
+		print('\n', _t('  ● — подключён. Подключить: byway list ready on ИМЯ; убрать: byway list ready off ИМЯ\n'));
+		return;
+	}
+	if (act != 'on' && act != 'off') die('byway list ready on|off ИМЯ …');
+	if (!length(names)) dief('какой список: %s', join(', ', PS_NAMES));
+	for (let n in names) {
+		if (index(PS_NAMES, n) < 0) dief('нет такого готового списка: %s — есть: %s', n, join(', ', PS_NAMES));
+		if (act == 'on' && index(P, n) < 0) push(P, n);
+		if (act == 'off') { let k = []; for (let x in P) if (x != n) push(k, x); P = k; }
+	}
+	c_store('preset', P, true);
+	if (act == 'on') sys([ m_self(), 'presets' ]);
+	c_apply();
+}
+
+function cmd_list(what, ...rest) {
+	if (what == 'domains' || what == 'subnets') {
+		for (let l in c_read(what)) print(l, '\n');
+		return;
+	}
+	if (what == 'ready') return c_ready(rest[0], slice(rest, 1));
+	if (what) dief('byway list [domains|subnets|ready] — не %s', what);
+	let all = u('list_mode') == 'all';
+	print('  ', _t('Режим: '), C_B, all ? _t('всё через VPN') : _t('по спискам'), C_0, C_DIM, _t('  (сменить: byway mode lists|all)'), C_0, '\n\n');
+	print('  ', c_pad(_t('свои сайты'), 22), lj_count(c_file('domains')), C_DIM, _t('   byway list domains'), C_0, '\n');
+	print('  ', c_pad(_t('свои подсети'), 22), lj_count(c_file('subnets')), C_DIM, _t('   byway list subnets'), C_0, '\n');
+	let P = c_presets();
+	print('  ', c_pad(_t('готовые списки'), 22), length(P) ? join(', ', P) : _t('не подключены'), C_DIM, _t('   byway list ready'), C_0, '\n');
+	let rd = getenv('BW_ROUTES'), R = filter(fs.lsdir(rd) ?? [], (f) => substr(f, -4) == '.lst');
+	if (length(R)) print('  ', c_pad(_t('направления'), 22), length(R), '\n');
+	print('\n', _t('  Добавить: byway add САЙТ|ПОДСЕТЬ …   убрать: byway del …\n'));
+}
+
+// byway mode lists|all
+function cmd_mode(m) {
+	if (m != 'lists' && m != 'all') {
+		print('  ', _t('Режим: '), C_B, u('list_mode') == 'all' ? _t('всё через VPN') : _t('по спискам'), C_0, '\n');
+		print(_t('  byway mode lists — через VPN только списки; byway mode all — весь трафик\n'));
+		return;
+	}
+	m_uci('list_mode=' + m);
+	if (m == 'all') say('режим: всё через VPN');
+	else say('режим: по спискам');
+	c_apply();
+}
+
+// ── опечатка в команде ───────────────────────────────────────────────────
+// Ближайшая по расстоянию правки команда: «helth» -> «health».
+const C_NAMES = [ 'help', 'key', 'keys', 'on', 'off', 'add', 'del', 'list', 'mode', 'set', 'probe', 'health',
+	'status', 'doctor', 'menu', 'update', 'core', 'engine', 'lang', 'export', 'import', 'report', 'top', 'clear',
+	'presets', 'sub', 'check', 'gen', 'show', 'nft', 'plumb', 'version' ];
+function c_dist(a, b) {
+	let p = [];
+	for (let j = 0; j <= length(b); j++) push(p, j);
+	for (let i = 1; i <= length(a); i++) {
+		let q = [ i ];
+		for (let j = 1; j <= length(b); j++)
+			push(q, min(p[j] + 1, q[j - 1] + 1, p[j - 1] + (substr(a, i - 1, 1) == substr(b, j - 1, 1) ? 0 : 1)));
+		p = q;
+	}
+	return p[length(b)];
+}
+function cmd_unknown(w) {
+	let best = null, bd = 99;
+	for (let n in C_NAMES) { let d = c_dist(lc(w ?? ''), n); if (d < bd) { bd = d; best = n; } }
+	if (best && bd <= 2) printf(_t('byway: нет команды «%s». Может быть: byway %s\n'), w, best);
+	else printf(_t('byway: нет команды «%s». Все команды: byway help\n'), w);
+	exit(1);
+}
+
+// ── byway doctor --fix ───────────────────────────────────────────────────
+// Чинит то, что чинится само и без риска; остальное -- советом doctor.
+function cmd_fix() {
+	let n = 0;
+	if (u('enabled') == '1' && !fs.stat('/etc/rc.d/S21byway')) {
+		run([ '/etc/init.d/byway', 'enable' ]); say('автозапуск службы включён'); n++;
+	}
+	let cr = run([ 'crontab', '-l' ]).out, add = '';
+	if (index(cr, 'byway watch') < 0) add += '*/5 * * * * /usr/local/bin/byway watch >/dev/null 2>&1\n';
+	if (index(cr, 'byway stat') < 0) add += '7 * * * * /usr/local/bin/byway stat >/dev/null 2>&1\n';
+	if (index(cr, 'byway pulse') < 0) add += '* * * * * /usr/local/bin/byway pulse >/dev/null 2>&1\n';
+	if (add !== '') {
+		let t = (cr !== '' && substr(cr, -1) != '\n') ? cr + '\n' : cr;
+		let p = fs.popen('crontab -', 'w');
+		if (p) { p.write(t + add); p.close(); say('задачи cron byway возвращены'); n++; }
+	}
+	if (run([ 'pidof', 'crond' ]).code != 0) {
+		run([ '/etc/init.d/cron', 'enable' ]); run([ '/etc/init.d/cron', 'start' ]); say('crond запущен'); n++;
+	}
+	if (u('enabled') == '1' && !c_nokey()) {
+		if (st_xray_pid() === '') {
+			sys([ '/etc/init.d/byway', 'restart' ]); say('служба перезапущена'); n++;
+		} else if (!pl_has_table(PL_TABLE) || !fs.stat(dm_file(DM_DNS) || '/nonexistent')) {
+			sys([ m_self(), 'plumb', 'on' ]); say('перехват поднят заново'); n++;
+		}
+	}
+	if (!fs.stat('/sbin/ujail'))
+		warn("пакета procd-ujail нет — ядро работает от root; поставить: apk add procd-ujail (или opkg install) && /etc/init.d/byway restart");
+	if (!n) say('чинить само нечего');
+	print('\n');
+}
+
 // Разбор команды. Сюда попадают только перенесённые на ucode команды: прочие
 // разбирает shell (ui/main.sh) и зовёт bw_uc лишь для этих.
 
@@ -7854,7 +8193,8 @@ const CMDS = {
 	health: cmd_health,
 	stat: cmd_stat,
 	top: cmd_top,
-	doctor: cmd_doctor,
+	// --fix: сперва починить, что чинится само (uc/cli.uc), потом проверка.
+	doctor: function (a) { if (a == '--fix') cmd_fix(); cmd_doctor(); },
 	report: cmd_report,
 	presets: cmd_presets,
 	sub: cmd_sub,
@@ -7878,15 +8218,19 @@ const CMDS = {
 	home: cmd_home,
 	help: cmd_help,
 	hfmt: cmd_hfmt,
-	key: cmd_key,
+	key: cmd_key2,
+	keys: cmd_keys,
+	set: cmd_set,
+	list: cmd_list,
+	mode: cmd_mode,
+	unknown: cmd_unknown,
 	onoff: function (on) { cmd_onoff(on == '1'); },
 	add: cmd_add,
 	del: cmd_del,
 };
 
 let _cmd = ARGV[0] ?? '';
-if (CMDS[_cmd] == null)
-	dief('byway: неизвестная команда «%s». Все команды: byway help', _cmd);
+if (CMDS[_cmd] == null) cmd_unknown(_cmd);
 CMDS[_cmd](...slice(ARGV, 1));
 
 #@uc-end

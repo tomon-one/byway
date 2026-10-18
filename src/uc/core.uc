@@ -117,9 +117,15 @@ function run(argv, err) {
 
 // ── колонки в терминале ───────────────────────────────────────────────────
 // Длина в знаках, а не байтах: русская подпись иначе сдвигала колонку.
+// Коды цвета (ESC [ … m) места не занимают.
 function c_len(s) {
-	let n = 0;
-	for (let i = 0; i < length(s); i++) if ((ord(s, i) & 0xC0) != 0x80) n++;
+	let n = 0, esc = false;
+	for (let i = 0; i < length(s); i++) {
+		let c = ord(s, i);
+		if (esc) { if (c == 109) esc = false; continue; }
+		if (c == 27) { esc = true; continue; }
+		if ((c & 0xC0) != 0x80) n++;
+	}
 	return n;
 }
 function c_pad(s, w) { let n = w - c_len(s); return n > 0 ? s + sprintf('%' + n + 's', '') : s; }

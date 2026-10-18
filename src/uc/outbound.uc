@@ -96,7 +96,7 @@ function ob_transport(N) {
 	}
 	if (t == 'xhttp') {
 		if (xv < 10824)
-			ob_dief('движку %s транспорт xhttp неизвестен (нужен Xray-core 1.8.24 или новее) — обновить: byway engine tested, либо взять ключ на ws', ob_xrayv(12));
+			ob_dief('движку %s транспорт xhttp неизвестен (нужен Xray-core 1.8.24 или новее) — обновить: byway core tested, либо взять ключ на ws', ob_xrayv(12));
 		let x = { path: N.PATH, host: N.WSHOST };
 		if (N.MODE != '') x.mode = N.MODE;
 		// extra -- один объект (json_obj_ok в разборе); не JSON вовсе --
@@ -112,7 +112,7 @@ function ob_transport(N) {
 	}
 	if (t == 'hysteria') {
 		if (xv < 260327)
-			ob_dief('hysteria2 нужен Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
+			ob_dief('hysteria2 нужен Xray-core 26.3.27 или новее, а стоит %s — обновить: byway core tested', ob_xrayv(2));
 		ob_warn('hysteria2 идёт поверх QUIC (UDP), а в РФ его ограничивают первым делом');
 		let s = { network: 'hysteria', hysteriaSettings: { version: 2, auth: N.PASS } }, masks = [];
 		// Смена портов, как у клиента hysteria2: порт сервера меняется раз в
@@ -122,13 +122,13 @@ function ob_transport(N) {
 		// молча игнорируют); старое ядро -- основной порт.
 		if (N.HOP) {
 			if (xv < 260930)
-				ob_warnf('смена портов hysteria2 нужна Xray-core 26.9.30 или новее, а стоит %s — соединение идёт только на порт %s; обновить: byway engine tested', ob_xrayv(2), N.PORT);
+				ob_warnf('смена портов hysteria2 нужна Xray-core 26.9.30 или новее, а стоит %s — соединение идёт только на порт %s; обновить: byway core tested', ob_xrayv(2), N.PORT);
 			else
 				push(masks, { type: 'udphop', settings: { mode: 'intervalRemote', remotePorts: N.HOP } });
 		}
 		if (N.OBFS != '') {
 			if (xv < 260711)
-				ob_dief('obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
+				ob_dief('obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а стоит %s — обновить: byway core tested', ob_xrayv(2));
 			push(masks, { type: 'salamander', settings: { password: N.OBFSPW } });
 		}
 		if (length(masks)) s.finalmask = { udp: masks };
@@ -150,7 +150,7 @@ function ob_security(N, st, sni) {
 		if (N.INSEC == '1' || N.INSEC == 'true') {
 			if (xv < 260327) {
 				if (u('allow_insecure') != '1' && N.PIN + N.VCN == '')
-					ob_die('в ключе отключена проверка сертификата (allowInsecure): соединение может подменить любой на пути. Для своего сервера с самоподписанным сертификатом: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload');
+					ob_die('в ключе отключена проверка сертификата (allowInsecure): соединение может подменить любой на пути. Для своего сервера с самоподписанным сертификатом: byway set allow_insecure on');
 				ob_warn('allowInsecure=1: проверка сертификата сервера отключена, соединение можно подменить');
 				s.allowInsecure = true;
 			} else if (N.PIN == '' && N.VCN == '') {
@@ -159,7 +159,7 @@ function ob_security(N, st, sni) {
 		}
 		if (N.PIN != '' || N.VCN != '') {
 			if (xv < 260327)
-				ob_dief('проверка сертификата по отпечатку (pcs, vcn) нужна Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
+				ob_dief('проверка сертификата по отпечатку (pcs, vcn) нужна Xray-core 26.3.27 или новее, а стоит %s — обновить: byway core tested', ob_xrayv(2));
 			if (N.PIN != '') s.pinnedPeerCertSha256 = N.PIN;
 			if (N.VCN != '') s.verifyPeerCertByName = N.VCN;
 		}
@@ -176,7 +176,7 @@ function ob_security(N, st, sni) {
 		// отвергает само; на старом -- то же решение здесь.
 		if ((N.PROTO == 'vless' || N.PROTO == 'trojan') && xv < 260711 &&
 		    u('allow_insecure') != '1' && !ob_private(N.HOST))
-			ob_die('ключ vless или trojan без TLS к публичному адресу: ключ и трафик видны любому на пути. Нужен ключ с security=tls или reality; разрешить всё же: uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload');
+			ob_die('ключ vless или trojan без TLS к публичному адресу: ключ и трафик видны любому на пути. Нужен ключ с security=tls или reality; разрешить всё же: byway set allow_insecure on');
 		st.security = 'none';
 	} else {
 		ob_dief('security=%s не поддержан', N.SEC);
@@ -280,7 +280,7 @@ function ob_key(url, tag, prev_sni, prev_wshost) {
 	if (N.SNI == null) N.SNI = prev_sni;
 	if (N.WSHOST == null) N.WSHOST = prev_wshost;
 	if (N.ENC != '' && N.ENC != 'none' && ob_xver() < 250829)
-		ob_dief('шифрование VLESS (encryption=mlkem768x25519plus) появилось в Xray-core 25.8.29, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
+		ob_dief('шифрование VLESS (encryption=mlkem768x25519plus) появилось в Xray-core 25.8.29, а стоит %s — обновить: byway core tested', ob_xrayv(2));
 	if (!match(N.PORT, /^[0-9]+$/) || int(N.PORT) < 1 || int(N.PORT) > 65535)
 		ob_dief('порт в ссылке недопустим: %s', N.PORT);
 

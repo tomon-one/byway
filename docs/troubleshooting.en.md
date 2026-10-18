@@ -146,8 +146,7 @@ but the engine accepts the previous one, the service starts on the previous
 one, and the latest settings changes do not take effect. The engine runs as the
 `byway` user in a `procd-ujail` cage; if it fails to start only there
 (`doctor`: the engine runs not as root and crashes in a loop), return to root:
-`uci set byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway
-restart`.
+`byway set xray_root on`.
 
 `vpn fail`: the router cannot open a connection to the server. The server
 is down, changed its address or port, or the address is unreachable from
@@ -304,7 +303,7 @@ To add a network (the device name is in `uci get network.NETWORK.device`,
 for example `br-guest`):
 
 ```sh
-uci add_list byway.main.interface=br-guest && uci commit byway && /etc/init.d/byway reload
+byway set interface br-lan br-guest
 ```
 
 The installer adds the firewall rule `byway-tproxy`, which accepts
@@ -338,7 +337,7 @@ The chain should have a line with `udp dport 443`, `counter packets N` and
 `reject`; a growing `N` means the rejection fires. No such line, turn it on:
 
 ```sh
-uci set byway.main.block_quic=1 && uci commit byway && /etc/init.d/byway reload
+byway set block_quic on
 ```
 
 The line is there, the counter grows, and the pauses stay: the cause is
@@ -358,7 +357,7 @@ seconds. Traces: `dmesg | grep -i killed`; current use: the `memory` line of
 of the router's memory by default, at least 32 MiB. Your own limit:
 
 ```sh
-uci set byway.main.xray_memlimit=64MiB && uci commit byway && /etc/init.d/byway reload
+byway set xray_memlimit 64MiB
 ```
 
 `0` means no limit. A bare number means megabytes; `MB` and `M` become `MiB`,
@@ -444,7 +443,7 @@ older versions byway refuses the same itself. A key without TLS is fixed on
 the server. Instead of a disabled check the key needs the certificate
 fingerprint (`pcs=` or `pinSHA256=`), or the server needs a real certificate.
 For your own server with a self-signed certificate on an engine below 26.3.27
-(without TLS, below 26.7.11), `uci set byway.main.allow_insecure=1 && uci
+(without TLS, below 26.7.11), `byway set allow_insecure on && uci
 commit byway && /etc/init.d/byway reload` lifts byway's refusal; the option
 does not override a recent engine.
 
@@ -487,7 +486,7 @@ The redirect is the setting "VPN for programs on the router" (Network tab,
 list`. To turn it on:
 
 ```sh
-uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload
+byway set router_via_vpn on
 ```
 
 Reloading the rules is not enough here: the setting changes both the nft
@@ -516,7 +515,7 @@ with real IPv6 traffic (see [What byway does not
 do](../README.en.md#what-byway-does-not-do)):
 
 ```sh
-uci set byway.main.ipv6=1 && uci commit byway && /etc/init.d/byway restart
+byway set ipv6 on
 ```
 
 If IPv6 is on but the kernel has no rule for it, doctor suggests
@@ -597,8 +596,8 @@ byway plumb off
 The command removes the block and interception and returns dnsmasq to its
 previous servers: the list then goes direct. No need to change the setting —
 the block comes back on the next service start. If you did set
-`on_failure=open` (`uci set byway.main.on_failure=open && uci commit byway`),
-restore the default once fixed: `uci set byway.main.on_failure=closed && uci
+`on_failure=open` (`byway set on_failure open`),
+restore the default once fixed: `byway set on_failure closed && uci
 commit byway && /etc/init.d/byway restart`.
 
 If the `byway` command itself does not work, remove the block by hand (the

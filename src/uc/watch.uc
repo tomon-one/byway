@@ -91,7 +91,7 @@ function wt_restore() {
 	if (u('enabled') == '1' && !alt && !x_ok(xray_bin()) &&
 	    !wt_fresh('/tmp/byway-engine-restore', 15)) {
 		fs.writefile('/tmp/byway-engine-restore', '');
-		logt('byway watch: ядра нет -- byway engine restore в фоне');
+		logt('byway watch: ядра нет -- byway core restore в фоне');
 		system([ 'sh', '-c', '( "$1" engine restore 2>&1 | sed "s/$(printf "\\033")\\[[0-9;]*m//g" | logger -t byway ) </dev/null >/dev/null 2>&1 &',
 		         'sh', wt_self() ]);
 	}

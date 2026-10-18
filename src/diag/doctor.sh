@@ -11,5 +11,5 @@ diag_uc() {
 }
 
 cmd_doctor() {
-    diag_uc doctor
+    diag_uc doctor "$@"
 }

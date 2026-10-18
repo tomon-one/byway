@@ -197,7 +197,7 @@ function cmd_presets() {
 		say('ни одного готового списка не подключено');
 		say('  что бывает:');
 		for (let k in PS_NAMES) print(sprintf('    %-20s %s\n', k, ps_about(k)));
-		say('  подключить: uci add_list byway.main.preset=ИМЯ && uci commit byway && byway presets && /etc/init.d/byway reload');
+		say('  подключить: byway list ready on ИМЯ');
 	} else {
 		warn('ни один из подключённых списков не обновился — прежние копии остались на месте');
 	}

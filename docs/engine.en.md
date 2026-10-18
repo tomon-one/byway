@@ -257,7 +257,7 @@ put back. Both files stay.
 A fallback, with no tunnel check and no rollback:
 
 ```sh
-uci set byway.main.xray_bin=/usr/local/bin/xray-26.3.27 && uci commit byway
+byway set xray_bin /usr/local/bin/xray-26.3.27
 byway gen && /etc/init.d/byway restart
 ```
 
@@ -378,7 +378,7 @@ A refusal is a message naming the required version and suggesting
 with a self-signed certificate instead:
 
 ```sh
-uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload
+byway set allow_insecure on
 ```
 
 The option is console only. It does not override an engine from 26.3.27 on
@@ -475,7 +475,7 @@ Putting the engine on a separately mounted USB stick and pointing at it
 directly does not work: byway does not accept a path outside the system
 directories. A symlink named `xray*` in a system directory does work:
 `ln -s /mnt/sda1/xray /usr/local/bin/xray-usb` and
-`uci set byway.main.xray_bin=/usr/local/bin/xray-usb`. The stick has to be
+`byway set xray_bin /usr/local/bin/xray-usb`. The stick has to be
 mounted by the time the service starts, or there is no engine.
 
 A firmware upgrade (sysupgrade) keeps byway's files but not the engine: 35 MB
@@ -519,7 +519,7 @@ On a router with 256 MB (`MemTotal` about 234 MB) the automatic value is
 `128MB`, and the engine would crash on every start.
 
 ```sh
-uci set byway.main.xray_memlimit=128MiB && uci commit byway
+byway set xray_memlimit 128MiB
 /etc/init.d/byway reload
 ```
 

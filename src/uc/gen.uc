@@ -244,7 +244,7 @@ function g_dns() {
 			G.boot = { address: bs, domains: bh, skipFallback: true };
 		} else {
 			warn('резолвер задан именем, а bootstrap не задан — разрешать имя нечем, взяты адреса по умолчанию');
-			warn('  вписать: uci set byway.main.dns_bootstrap=77.88.8.8 && uci commit byway');
+			warn('  вписать: byway set dns_bootstrap 77.88.8.8');
 			G.up = 'https://8.8.8.8/dns-query';
 			G.up2 = 'https://1.1.1.1/dns-query';
 		}

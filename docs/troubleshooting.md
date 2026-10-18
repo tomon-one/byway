@@ -136,8 +136,8 @@ engine restore`). После обновления прошивки так и б�
 собрался, а прежний движок принимает, служба поднимается на прежнем, и
 последние изменения настроек не действуют. Движок идёт от пользователя
 `byway` в клетке `procd-ujail`; не встаёт именно в ней (`doctor`: движок
-работает не от root и падает по кругу) — вернуть root: `uci set
-byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway restart`.
+работает не от root и падает по кругу) — вернуть root: `byway set
+xray_root on`.
 
 `vpn fail` — роутер не может открыть соединение с сервером: сервер выключен,
 сменил адрес или порт, либо адрес недоступен с вашей линии. Ключ проверяется
@@ -287,7 +287,7 @@ DoH выключает. Проверка с ПК: `nslookup use-application-dns.
 `br-guest`):
 
 ```sh
-uci add_list byway.main.interface=br-guest && uci commit byway && /etc/init.d/byway reload
+byway set interface br-lan br-guest
 ```
 
 Установщик заводит правило firewall `byway-tproxy`, которое принимает
@@ -322,7 +322,7 @@ nft list chain inet byway input
 `reject`; растущее `N` значит, что отказ срабатывает. Строки нет — включить:
 
 ```sh
-uci set byway.main.block_quic=1 && uci commit byway && /etc/init.d/byway reload
+byway set block_quic on
 ```
 
 Строка есть, счётчик растёт, а паузы остаются — причина в другом, см.
@@ -342,7 +342,7 @@ uci set byway.main.block_quic=1 && uci commit byway && /etc/init.d/byway reload
 по умолчанию 40 % памяти роутера, не меньше 32 МиБ. Свой предел:
 
 ```sh
-uci set byway.main.xray_memlimit=64MiB && uci commit byway && /etc/init.d/byway reload
+byway set xray_memlimit 64MiB
 ```
 
 Без предела — `0`. Число без единиц — мегабайты; `MB` и `M` переводятся в
@@ -423,8 +423,7 @@ byway update --rollback
 Вместо отключённой проверки нужен отпечаток сертификата в ключе (`pcs=` или
 `pinSHA256=`) либо настоящий сертификат на сервере. Для своего сервера с
 самоподписанным сертификатом на ядре до 26.3.27 (без TLS — до 26.7.11) отказ
-byway снимает `uci set byway.main.allow_insecure=1 && uci commit byway &&
-/etc/init.d/byway reload`; свежее ядро опция не переубедит.
+byway снимает `byway set allow_insecure on`; свежее ядро опция не переубедит.
 
 `byway engine` при замене ядра сверяет архив с суммой из выпуска, проверяет
 конфиг новым движком и до двух с половиной минут ждёт туннеля, а если связь
@@ -463,7 +462,7 @@ permitted`. Так ломаются обновления других служб
 достаёт`. Включить:
 
 ```sh
-uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload
+byway set router_via_vpn on
 ```
 
 Перекладки правил тут мало: настройка меняет и правила nft, и конфиг движка
@@ -491,7 +490,7 @@ IPv6 наружу не станет, и уходить мимо туннеля �
 (см. [Чего byway не умеет](../README.md#чего-byway-не-умеет)):
 
 ```sh
-uci set byway.main.ipv6=1 && uci commit byway && /etc/init.d/byway restart
+byway set ipv6 on
 ```
 
 Если IPv6 включён, а правила для него в ядре нет, doctor предлагает
@@ -570,9 +569,8 @@ byway plumb off
 Команда снимает запрет и перехват и возвращает dnsmasq к прежним серверам:
 список при этом идёт напрямую. Настройку менять не нужно — запрет вернётся при
 следующем запуске службы. Если вы всё же поставили `on_failure=open`
-(`uci set byway.main.on_failure=open && uci commit byway`), после починки
-верните умолчание: `uci set byway.main.on_failure=closed && uci commit byway
-&& /etc/init.d/byway restart`.
+(`byway set on_failure open`), после починки
+верните умолчание: `byway set on_failure closed`.
 
 Если не работает сама команда `byway`, снять запрет руками (каталог —
 из строки `conf-dir=` в `/var/etc/dnsmasq.conf.*`):

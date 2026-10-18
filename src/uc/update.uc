@@ -336,6 +336,9 @@ function up_verify(num, root, dir) {
 // поднялось и откачено, 4 -- откат не удался, 5 -- копия для отката не
 // сделалась, 6 -- подпись не сошлась (оба -- ничего не тронуто), прочее -- не
 // скачалось.
+// Шаг долгой работы: человек видит, сколько осталось (владелец 2026-10-18).
+function up_step(n, total, what) { print('\n'); sayf('шаг %s из %s: %s', n, total, what); }
+
 function cmd_update(...args) {
 	let num = getenv('BW_NUM'), uf = '', nov = false, uto = '';
 	for (let i = 0; i < length(args); i++) {
@@ -384,10 +387,11 @@ function cmd_update(...args) {
 	if (uf == '--check') return;
 
 	UP_DIR = up_tmpdir('byway-update');
+	let total = (nov ? 4 : 5) - (up_idle() ? 1 : 0), st = 0;
 	if (UP_DIR === '') die('не создать рабочий каталог в /tmp');
 	fs.writefile(UP_DIRF, UP_DIR);
 	let d = UP_DIR;
-	say('загрузка');
+	up_step(++st, total, _t('загрузка'));
 	if (nt_get([ '--max-time', '120', '-o', d + '/p.tar.gz',
 	             'https://github.com/' + getenv('BW_REPO') + '/archive/refs/tags/v' + nw + '.tar.gz' ]) != 0) {
 		up_die(_t('не скачалось -- ничего не тронуто'));
@@ -401,6 +405,7 @@ function cmd_update(...args) {
 	} else {
 		// 1 -- проверить нечем (обход назвать можно), 2 -- подлинность
 		// опровергнута (обход не советовать).
+		up_step(++st, total, _t('проверка подписи выпуска'));
 		let r = up_verify(nw, root, d);
 		if (r == 0) say('подпись выпуска сошлась с ключом byway');
 		else if (r == 1) { warn('выпуск не поставлен -- ничего не тронуто; поставить без проверки подписи: byway update --no-verify'); up_exit(6); }
@@ -409,12 +414,13 @@ function cmd_update(...args) {
 
 	// Связь до установки: откатывать за мёртвый сервер нельзя.
 	let tun0 = !up_idle() && up_tunnel_ok();
+	up_step(++st, total, _t('копия прежней версии для отката'));
 	if (!up_snapshot()) {
 		warn('копия прежней версии для отката не сделалась (место на флеше?) -- ничего не тронуто');
 		up_exit(5);
 	}
 	// Ставит install.sh: он один знает, что куда класть и что оставить.
-	say('установка');
+	up_step(++st, total, _t('установка'));
 	if (sys([ 'sh', '-c', 'cd "$1" && sh install.sh', 'sh', root ]) != 0) {
 		warn('установка оборвалась -- возврат прежней версии');
 		up_exit(up_restore() ? 3 : 4);
@@ -425,9 +431,9 @@ function cmd_update(...args) {
 	// «отвергнут»: doctor писал бы об этом вечно.
 	if (up_read(UP_AUFAIL) == nw) fs.unlink(UP_AUFAIL);
 	if (up_idle()) up_exit(0);
-	say('проверка туннеля на новой версии (до 2,5 минуты)');
+	up_step(++st, total, _t('проверка туннеля на новой версии (до 2,5 минуты)'));
 	if (up_wait(tun0)) {
-		say('готово: туннель на новой версии работает');
+		print('\n\033[1;32m', _f('готово: byway %s, туннель работает', nw), '\033[0m\n');
 		up_exit(0);
 	}
 	warn('на новой версии туннель не поднялся -- возврат прежней');

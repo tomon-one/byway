@@ -25,7 +25,7 @@ case "${1:-}" in
   sub)    shift; cmd_sub "$@" ;;
   presets) cmd_presets ;;
   health) cmd_health ;;
-  doctor) cmd_doctor ;;
+  doctor) shift; cmd_doctor "$@" ;;
   menu|меню) cmd_menu ;;
   export) shift; cmd_export "$@" ;;
   report) shift; cmd_report "$@" ;;
@@ -47,12 +47,19 @@ case "${1:-}" in
   plumb)  shift; cmd_plumb "$@" ;;
   status) cmd_status "${2:-}" ;;
   key)    shift; cli_uc key "$@" ;;
+  keys)   cli_uc keys ;;
+  list)   shift; cli_uc list "$@" ;;
+  mode)   shift; cli_uc mode "$@" ;;
+  set)    shift; cli_uc set "$@" ;;
+  # «ядро» -- как в панели и документах; engine остаётся рабочим.
+  core)   shift; cmd_engine "$@" ;;
   on)     cli_uc onoff 1 ;;
   off)    cli_uc onoff ;;
   add)    shift; cli_uc add "$@" ;;
   del)    shift; cli_uc del "$@" ;;
   # Без доводов -- сводка как «Основное» в панели; help -- все команды.
-  "")     cli_uc home ;;
-  help|--help|-h) cli_uc help ;;
-  *)     printf "$(_f 'byway: неизвестная команда «%s». Все команды: byway help\n' "$1")"; exit 1 ;;
+  "")     _bi=""; [ -t 0 ] && [ -t 1 ] && _bi=1
+          BW_INTERACTIVE=$_bi cli_uc home ;;
+  help|--help|-h) shift; cli_uc help "$@" ;;
+  *)     cli_uc unknown "$1" ;;
 esac

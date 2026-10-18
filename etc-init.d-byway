@@ -292,7 +292,7 @@ start_service() {
 		for _x in /usr/local/bin/xray-*; do [ -x "$_x" ] && _alt=$_x; done
 		if [ -n "$_alt" ]; then
 			echo "$(_tr '  рядом лежит %s' "$_alt")"
-			echo "$(_tr '  указать его: uci set byway.main.xray_bin=%s && uci commit byway' "$_alt")"
+			echo "$(_tr '  указать его: byway set xray_bin %s' "$_alt")"
 		else
 			# Менеджер ВЫЧИСЛЯЕМ, а не зашиваем: apk есть только с
 			# OpenWrt 25.12, на 22.03/23.05/24.10 -- opkg, и глагол у него
@@ -311,7 +311,7 @@ start_service() {
 			# перезапускает службу сама; не вышло -- сторож повторит.
 			if [ ! -f /tmp/byway-engine-restore ]; then
 				: > /tmp/byway-engine-restore
-				echo "$(_tr '  движок ставится в фоне: byway engine restore (журнал: logread -e byway)')"
+				echo "$(_tr '  движок ставится в фоне: byway core restore (журнал: logread -e byway)')"
 				# 1000>&- -- см. у цикла подъёма ниже.
 				# Сперва маршрут по умолчанию (до двух минут): при загрузке WAN
 				# поднимается позже службы, и единственная попытка уходила в
@@ -322,8 +322,8 @@ start_service() {
 				  done
 				  sleep 10; "$BYWAY" engine restore 2>&1 | sed "s/$(printf '\033')\[[0-9;]*m//g" | logger -t byway ) </dev/null >/dev/null 2>&1 1000>&- &
 			fi
-			echo "$(_tr '  поставить руками: byway engine restore, либо %s xray-core' "$_pkgfix")"
-			echo "$(_tr '  либо указать свой путь: uci set byway.main.xray_bin=/путь/к/xray')"
+			echo "$(_tr '  поставить руками: byway core restore, либо %s xray-core' "$_pkgfix")"
+			echo "$(_tr '  либо указать свой путь: byway set xray_bin /путь/к/xray')"
 		fi
 		# Безусловно, по той же причине, что и веткой выше.
 		plumb_off_fail

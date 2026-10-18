@@ -130,9 +130,8 @@ Xray-core from the OpenWrt packages.
 
 Worth knowing before installing, not after.
 
-- **IPv6 — experimental, off by default.** Turn it on with `uci set
-  byway.main.ipv6=1 && uci commit byway && /etc/init.d/byway reload`; the web
-  UI has no switch for it. Both families are intercepted: their own nft sets,
+- **IPv6 — experimental, off by default.** Turn it on in the web UI
+  (Network → IPv6) or with `byway set ipv6 on`. Both families are intercepted: their own nft sets,
   their own fake pool (`fc00::/18`), their own routing rule.
 
   > **IPv6 has never been verified with real traffic.** The rules are accepted
@@ -298,9 +297,8 @@ and the "Key" field — the whole link from your VPN: `vless://`, `vmess://`,
 (`wg://`). Or in the console:
 
 ```sh
-uci set byway.main.node_url='vless://…'   # or vmess://, trojan://, ss://, socks://, hy2://, wg://
-uci set byway.main.enabled=1
-uci commit byway
+byway key 'vless://…'   # or vmess://, trojan://, ss://, socks://, hy2://, wg://
+byway on
 ```
 
 **2. The list.** The "Lists" tab or the file `/etc/byway/domains.lst`, one
@@ -512,7 +510,7 @@ the "Overview" tab (`on_failure`).
 service creates it on first start) inside a `procd-ujail` cage with
 `CAP_NET_RAW` (`CAP_NET_ADMIN` on kernels before 5.17) and
 `CAP_NET_BIND_SERVICE`; without `procd-ujail` — as root. To return to root:
-`uci set byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway restart`.
+`byway set xray_root on`.
 
 **"Block"** is the default for new installs (before 0.3.0 the default was
 "Let it through directly"); updating byway leaves the
@@ -574,15 +572,22 @@ a failure — [how byway works](docs/architecture.en.md).
 | command | what it does |
 |---|---|
 | `byway` | summary: four checks in colour and what to do when one is red; without a key — three steps; common commands |
-| `byway help` | all commands, grouped |
+| `byway help`, `byway help all` | commands by group; `all` — internal ones too |
 | `byway key 'LINK'` | set the key and apply; the key is checked before it is saved; put the link in single quotes, or the shell cuts it at `&` |
+| `byway key` | which key is set, and a check of it |
+| `byway keys`, `byway key use N` | the numbered list of keys, the active one marked; make key N active |
+| `byway key sub ADDRESS` | take keys from a subscription into the list; the active one stays if the subscription has it |
+| `byway list` | what goes through the VPN: mode, number of your sites and subnets, ready-made lists; `byway list domains` and `byway list subnets` — your lists in full |
+| `byway list ready [on\|off NAME]` | ready-made lists with descriptions; connect or remove one |
+| `byway mode lists\|all` | mode: by lists or everything through the VPN |
+| `byway set [NAME [VALUE\|default]]` | all settings with current values; change one (the value is checked) and apply; `default` — back to the default |
 | `byway on`, `byway off` | turn byway on or off; when off, the internet works without the VPN |
 | `byway add SITE\|SUBNET …` | add to your lists and apply: several at once, space-separated; a site may be a link (`https://…/path` — the name is taken); subnets and addresses go to the subnet list by themselves; invalid entries and repeats are named and skipped; `byway add -` reads a list from input until Ctrl+D |
 | `byway del SITE\|SUBNET …` | remove from your lists and apply |
 | `byway menu` | console menu |
 | `byway status [--short]` | what is working right now |
 | `byway health` | service, VPN link, traffic, DNS; in a terminal — in colour with advice, into a script or the panel — as `check<TAB>state<TAB>note` lines |
-| `byway doctor` | environment: modules, tools, space, conflicts; updates |
+| `byway doctor [--fix]` | environment: modules, tools, space, conflicts; updates; `--fix` — first fix what can be fixed automatically: autostart, cron jobs, crond, a stopped service, removed interception |
 | `byway gen` | rebuild the config from settings and lists; the engine picks it up after `/etc/init.d/byway reload` |
 | `byway plumb on\|off` | raise or remove interception |
 | `byway check [LINK]` | parse a key and verify the config, no connections |
@@ -592,7 +597,7 @@ a failure — [how byway works](docs/architecture.en.md).
 | `byway top [N]` | which list entries are actually used; needs statistics collection on (`show_usage`) |
 | `byway stat` | collect statistics now, without waiting for the schedule; also only with `show_usage` |
 | `byway update [--check\|--force\|--rollback\|--no-verify]` | whether a new byway version exists, and installing it; `--force` installs the latest GitHub release even if it is not newer than the installed one; `--rollback` returns the previous version from the copy; `--no-verify` skips the release signature check (when there is nothing to check with) |
-| `byway engine [--check\|VERSION\|tested\|newest\|stable\|restore\|/tmp/FILE]` | whether an Xray-core update exists, and replacing the engine; `--check` only finds out; `VERSION` of an engine already next to it switches without a download; `restore` installs a missing engine; `/tmp/FILE` is your own build (a `.gz` with the binary or the release `.zip`) |
+| `byway core [--check\|VERSION\|tested\|newest\|stable\|restore\|/tmp/FILE]` | whether an Xray-core update exists, and replacing the engine; `--check` only finds out; `VERSION` of an engine already next to it switches without a download; `restore` installs a missing engine; `/tmp/FILE` is your own build (a `.gz` with the binary or the release `.zip`) |
 | `byway job update\|engine [VERSION]\|probe [LINK\|--all]\|log` | internal, for the panel: an update, a core replacement or a key check in the background; `log` — progress, code 3 — still running |
 | `byway lang ru\|en` | output and web UI language |
 | `byway report [file]` | a report for a bug thread: state and diagnostics, no key |
@@ -817,7 +822,7 @@ public address without TLS or reality — byway says so plainly. And since
 real certificate, and byway says so right away, without handing the config to
 the engine. On an engine below these versions byway refuses both cases
 itself; for your own server with a self-signed certificate,
-`uci set byway.main.allow_insecure=1` lifts the refusal (console only, details
+`byway set allow_insecure on` lifts the refusal (console only, details
 in [keys](docs/keys.en.md)). If the engine was updated around
 `byway engine` (as a package, for example), `byway engine NUMBER` can go back
 to the version that worked if there is room on flash for a second engine; if

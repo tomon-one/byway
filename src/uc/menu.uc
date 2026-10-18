@@ -47,7 +47,7 @@ function m_apply() {
 		// из меню нельзя (enabled только через uci): сказать об этом.
 		if (u('enabled') != '1') {
 			print(_t('\n  \033[1;33mсобрано, но byway ВЫКЛЮЧЕН\033[0m — туннеля не будет\n'));
-			print(_t('  включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart\n'));
+			print(_t('  включить: byway on\n'));
 			return;
 		}
 		run([ '/etc/init.d/byway', 'restart' ]);
@@ -204,7 +204,7 @@ function m_lists() {
 function m_svc_done(what) {
 	if (u('enabled') != '1') {
 		print(_t('\n  byway ВЫКЛЮЧЕН настройкой — служба не запускается\n'));
-		print(_t('  включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart\n'));
+		print(_t('  включить: byway on\n'));
 		return;
 	}
 	for (let i = 0; i < 12 && st_xray_pid() === ''; i++) sys([ 'sleep', '1' ]);

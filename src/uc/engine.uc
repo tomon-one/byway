@@ -155,17 +155,20 @@ function en_gen_tail() {
 // остановленной службе.
 function en_bin_set(p) {
 	if (run([ 'uci', 'set', 'byway.main.xray_bin=' + p ]).code != 0 || run([ 'uci', 'commit', 'byway' ]).code != 0)
-		warnf('путь к движку не записался в настройки: uci set byway.main.xray_bin=%s && uci commit byway', p);
+		warnf('путь к движку не записался в настройки: byway set xray_bin %s', p);
 }
 
 function en_svc(a) { run([ '/etc/init.d/byway', a ]); }
-function en_done() { sayf('готово: Xray %s, на флеше свободно %s МБ', E.nw, en_mb(en_free_kb())); }
+// Этап долгой замены -- выделенной строкой: видно, где сейчас идёт работа.
+function en_stage(s) { print('\n\033[1m→ ', s, '\033[0m\n'); }
+
+function en_done() { print('\n\033[1;32m', _f('готово: Xray %s, на флеше свободно %s МБ', E.nw, en_mb(en_free_kb())), '\033[0m\n'); }
 
 // Путь «ядра нет» (после sysupgrade или снятого пакета): ставится без отката.
 // 25 МБ, как у установщика: ubifs дожимает ядро примерно вдвое.
 function en_fresh() {
 	if (E.free < 25600) dief('на флеше свободно %s МБ, ядру нужно %s — ничего не тронуто', en_mb(E.free), 25);
-	sayf('ядра нет — ставится Xray %s', E.nw);
+	en_stage(_f('ядра нет — ставится Xray %s', E.nw));
 	let r = en_put(E.pkg, E.new, E.sz);
 	if (r == 2) { en_noexec_mark(); die('ядро не запускается на этом железе — удалено'); }
 	if (r != 0) die('ядро не распаковалось на флеш — ничего не тронуто');
@@ -173,7 +176,7 @@ function en_fresh() {
 	en_bin_set(E.new);
 	logf('движок поставлен: %s (прежнего не было)', E.nw);
 	if (u('enabled') == '1') {
-		say('запуск службы');
+		en_stage(_t('запуск службы'));
 		en_svc('restart');
 	}
 	en_done();
@@ -181,7 +184,7 @@ function en_fresh() {
 
 // Путь «рядом». Прежнее ядро не трогается до успеха: откат -- вернуть путь.
 function en_side() {
-	say('места хватает — новое ядро кладётся рядом с прежним');
+	en_stage(_t('места хватает — новое ядро кладётся рядом с прежним'));
 	let r = en_put(E.pkg, E.new, E.sz);
 	fs.unlink(E.pkg);
 	if (r == 2) { en_noexec_mark(); die('новое ядро не запускается на этом железе — удалено, работает прежнее'); }
@@ -202,7 +205,7 @@ function en_side() {
 	en_bin_set(E.new);
 	warn('перезапуск службы: туннель пропадёт на несколько секунд');
 	en_svc('restart');
-	say('проверка туннеля на новом движке (до 2,5 минуты)');
+	en_stage(_t('проверка туннеля на новом движке (до 2,5 минуты)'));
 	if (up_wait(E.tun0)) {
 		// Удаляется, только если ядро наше: /usr/bin/xray -- файл пакета.
 		if (ours) {
@@ -228,8 +231,8 @@ function en_side() {
 // СЕЙЧАС, пока туннель жив; потом -- дочерний процесс без INT и HUP.
 function en_ram() {
 	if (substr(E.old, 0, 20) != '/usr/local/bin/xray-')
-		dief('места на второе ядро нет, а прежнее (%s) — из пакета; снять пакет вручную и поставить заново: byway engine %s', E.old, E.nw);
-	sayf('места на второе ядро нет (свободно %s МБ) — замена через память', en_mb(E.free));
+		dief('места на второе ядро нет, а прежнее (%s) — из пакета; снять пакет вручную и поставить заново: byway core %s', E.old, E.nw);
+	en_stage(_f('места на второе ядро нет (свободно %s МБ) — замена через память', en_mb(E.free)));
 	if (match(E.old, /^\/usr\/local\/bin\/xray-[^-]*-/)) {
 		// Своя сборка: архив выпуска дал бы откат на ОФИЦИАЛЬНЫЙ бинарник под
 		// именем своей сборки. Копия -- сам файл, сжатый в память.
@@ -239,7 +242,7 @@ function en_ram() {
 			die('копию своей сборки для отката не сделать — замена не начата');
 	} else {
 		E.orb = E.d + '/old.zip';
-		sayf('загрузка прежней версии %s — для отката', E.ov);
+		en_stage(_f('загрузка прежней версии %s — для отката', E.ov));
 		if (en_fetch(E.ov, E.orb) != 0)
 			dief('архив прежней версии %s не получен — без копии для отката замена не начата', E.ov);
 	}
@@ -268,7 +271,7 @@ function en_ram_back() {
 
 // Отказ ПОСЛЕ удаления: прежнее ядро -- из архива, скачанного до остановки.
 function en_ram_restore() {
-	sayf('возврат %s из архива', E.ov);
+	en_stage(_f('возврат %s из архива', E.ov));
 	if (en_put(E.orb, E.old) == 0) {
 		en_bin_set(E.old);
 		en_gen(E.old);
@@ -298,7 +301,7 @@ function cmd_engine_ram(d) {
 	// plumb on при запуске. Номер этого процесса: умрёт замена -- сторож
 	// метку не признает.
 	fs.writefile(PL_DOWN, fs.readlink('/proc/self') + '\n');
-	say('идёт замена — прерывать нельзя');
+	en_stage(_t('идёт замена — прерывать нельзя'));
 	sys([ 'sleep', '2' ]);
 	let mk = en_mem_kb();
 	if (mk * 1024 < int(E.sz) + 20971520) {
@@ -328,7 +331,7 @@ function cmd_engine_ram(d) {
 	fs.unlink(t);
 	en_bin_set(E.new);
 	en_svc('start');
-	say('проверка туннеля на новом движке (до 2,5 минуты)');
+	en_stage(_t('проверка туннеля на новом движке (до 2,5 минуты)'));
 	if (up_wait(E.tun0)) {
 		en_ram_end(true);
 		logf('движок заменён: %s -> %s', E.ov, E.nw);
@@ -344,7 +347,7 @@ function cmd_engine_ram(d) {
 // Переключение на ядро, которое уже лежит рядом: проверка конфига,
 // перезапуск, проверка туннеля; не поднялось -- обратно. Оба файла остаются.
 function en_switch() {
-	sayf('Xray %s уже лежит рядом — переключение без загрузки', E.nw);
+	en_stage(_f('Xray %s уже лежит рядом — переключение без загрузки', E.nw));
 	E.tun0 = !up_idle() && up_tunnel_ok();
 	if (up_idle()) {
 		en_bin_set(E.new);
@@ -359,10 +362,10 @@ function en_switch() {
 	en_bin_set(E.new);
 	warn('перезапуск службы: туннель пропадёт на несколько секунд');
 	en_svc('restart');
-	say('проверка туннеля на новом движке (до 2,5 минуты)');
+	en_stage(_t('проверка туннеля на новом движке (до 2,5 минуты)'));
 	if (up_wait(E.tun0)) {
 		logf('движок переключён: %s -> %s', E.ov, E.nw);
-		sayf('готово: Xray %s; прежнее ядро осталось рядом: %s', E.nw, E.old);
+		print('\n\033[1;32m', _f('готово: Xray %s; прежнее ядро осталось рядом: %s', E.nw, E.old), '\033[0m\n');
 		return;
 	}
 	warn('туннель на этом движке не поднялся — возврат прежнего');
@@ -434,7 +437,7 @@ function cmd_engine(arg) {
 		let nv = en_top('any'), sv = en_top('stable');
 		if (E.ov === '') {
 			warn('ядро Xray не указано или не запускается (byway.main.xray_bin)');
-			say('  поставить: byway engine restore');
+			say('  поставить: byway core restore');
 		} else if (nv === '') {
 			sayf('стоит Xray %s; есть ли новее — неизвестно: GitHub не ответил', E.ov);
 			up_nonet();
@@ -448,15 +451,15 @@ function cmd_engine(arg) {
 			else sayf('  проверенная с byway: %s', tested);
 		}
 		if (nv !== '' && E.ov !== '' && st_ver_gt(nv, E.ov)) {
-			sayf('  поставить: byway engine %s', nv);
-			if (tested != nv && st_ver_gt(tested, E.ov)) say('  или проверенную: byway engine tested');
+			sayf('  поставить: byway core %s', nv);
+			if (tested != nv && st_ver_gt(tested, E.ov)) say('  или проверенную: byway core tested');
 		}
 		if (arg == '--check') return;
 		say('подробно:');
 		if (E.ov !== '') sayf('  файл: %s', E.old);
 		if (nv !== '') sayf('  самая свежая у XTLS: %s, стабильная: %s', nv, sv || '?');
 		sayf('  на флеше свободно %s МБ, памяти доступно %s МБ', en_mb(en_free_kb()), en_mb(en_mem_kb()));
-		say('  варианты: byway engine ВЕРСИЯ | tested | newest | stable | restore | /tmp/ФАЙЛ.gz');
+		say('  варианты: byway core ВЕРСИЯ | tested | newest | stable | restore | /tmp/ФАЙЛ.gz');
 		return;
 	}
 	if (arg == 'tested') {
@@ -495,7 +498,7 @@ function cmd_engine(arg) {
 	// Ядра нет -- место проверяем ДО загрузки: сторож повторяет раз в 15 мин.
 	if (E.ov === '' && en_free_kb() < 25600)
 		dief('на флеше свободно %s МБ, ядру нужно %s — ничего не тронуто', en_mb(en_free_kb()), 25);
-	sayf('загрузка Xray-core %s (%s)', E.nw, E.asset);
+	en_stage(_f('загрузка Xray-core %s (%s)', E.nw, E.asset));
 	E.pkg = E.d + '/new.zip';
 	let r = en_fetch(E.nw, E.pkg);
 	if (r == 1) { up_nonet(); dief('архив %s не скачался — ничего не тронуто', E.nw); }
@@ -503,6 +506,6 @@ function cmd_engine(arg) {
 	if (r != 0) dief('архив %s не сошёлся с суммой SHA2-256 из .dgst выпуска — отброшен, ничего не тронуто', E.nw);
 	E.sz = en_size(E.pkg);
 	if (E.sz === '') die('в архиве нет файла xray — ничего не тронуто');
-	say('архив сверен с суммой из выпуска');
+	en_stage(_t('архив сверен с суммой из выпуска'));
 	en_go();
 }

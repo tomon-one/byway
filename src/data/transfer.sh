@@ -126,7 +126,7 @@ cmd_import() {
                 warn "применено, но движок не поднялся — смотреть: logread -e byway"
             fi
         else
-            say "применено. byway выключен настройкой -- включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart"
+            say "применено. byway выключен настройкой -- включить: byway on"
         fi
     else
         warn "конфиг не собрался — прежние настройки возвращаются на место"

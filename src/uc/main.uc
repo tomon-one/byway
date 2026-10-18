@@ -20,7 +20,8 @@ const CMDS = {
 	health: cmd_health,
 	stat: cmd_stat,
 	top: cmd_top,
-	doctor: cmd_doctor,
+	// --fix: сперва починить, что чинится само (uc/cli.uc), потом проверка.
+	doctor: function (a) { if (a == '--fix') cmd_fix(); cmd_doctor(); },
 	report: cmd_report,
 	presets: cmd_presets,
 	sub: cmd_sub,
@@ -44,13 +45,17 @@ const CMDS = {
 	home: cmd_home,
 	help: cmd_help,
 	hfmt: cmd_hfmt,
-	key: cmd_key,
+	key: cmd_key2,
+	keys: cmd_keys,
+	set: cmd_set,
+	list: cmd_list,
+	mode: cmd_mode,
+	unknown: cmd_unknown,
 	onoff: function (on) { cmd_onoff(on == '1'); },
 	add: cmd_add,
 	del: cmd_del,
 };
 
 let _cmd = ARGV[0] ?? '';
-if (CMDS[_cmd] == null)
-	dief('byway: неизвестная команда «%s». Все команды: byway help', _cmd);
+if (CMDS[_cmd] == null) cmd_unknown(_cmd);
 CMDS[_cmd](...slice(ARGV, 1));

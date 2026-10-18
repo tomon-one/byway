@@ -238,7 +238,7 @@ HTTP. Его byway проверяет, только если до замены �
 Запасной способ, без проверки туннеля и отката:
 
 ```sh
-uci set byway.main.xray_bin=/usr/local/bin/xray-26.3.27 && uci commit byway
+byway set xray_bin /usr/local/bin/xray-26.3.27
 byway gen && /etc/init.d/byway restart
 ```
 
@@ -351,7 +351,7 @@ byway печатает sha256 ядра (сверьте с `sha256sum xray` на 
 вместо этого команду для своего сервера с самоподписанным сертификатом:
 
 ```sh
-uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload
+byway set allow_insecure on
 ```
 
 Опция только в консоли. Ядро с 26.3.27 (для ключа без TLS — с 26.7.11) она не
@@ -442,7 +442,7 @@ extroot.
 отдельно смонтированную флешку и указать к нему путь напрямую нельзя: путь
 вне системных каталогов byway не примет. Можно симлинком с именем `xray*` в
 системном каталоге: `ln -s /mnt/sda1/xray /usr/local/bin/xray-usb` и
-`uci set byway.main.xray_bin=/usr/local/bin/xray-usb`. Флешка должна быть
+`byway set xray_bin /usr/local/bin/xray-usb`. Флешка должна быть
 смонтирована к старту службы, иначе ядра нет.
 
 Обновление прошивки (sysupgrade) сохраняет файлы byway, но не ядро: 35 МБ в
@@ -485,7 +485,7 @@ Xray написан на Go. Без ограничения сборщик мус
 бы при каждом старте.
 
 ```sh
-uci set byway.main.xray_memlimit=128MiB && uci commit byway
+byway set xray_memlimit 128MiB
 /etc/init.d/byway reload
 ```
 

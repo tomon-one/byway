@@ -257,7 +257,7 @@ JSON, а не строкой. Скобки и кавычки в нём зако�
 Опции нет в панели, только в консоли; она входит в выгрузку `byway export`:
 
 ```sh
-uci set byway.main.allow_insecure=1 && uci commit byway && /etc/init.d/byway reload
+byway set allow_insecure on
 ```
 
 На ядре 26.3.27 и новее решает само ядро, опция его не переубедит.
