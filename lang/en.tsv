@@ -132,6 +132,7 @@ byway import ФАЙЛ [--no-key]	byway import FILE [--no-key]
 byway import ФАЙЛ [--no-key] — файл от byway export	byway import FILE [--no-key] — a file made by byway export
 отсюда читать нельзя: системные каталоги закрыты	cannot read from there: system directories are closed
 не читается: %s	cannot read: %s
+не записан %s	could not write %s
 это не выгрузка byway: в первой строке нет заголовка	this is not a byway export: the first line has no header
 настройки неизвестны и пропущены:%s	unknown settings, skipped:%s
 принято настроек: %s	settings accepted: %s
@@ -488,6 +489,7 @@ self_mark %s не влезает в 32 бита -- взято умолчание
 self_mark пересекается битами с mark %s -- взято %s	self_mark shares bits with mark %s -- %s used
 применено, но движок не поднялся — смотреть: logread -e byway	applied, but the engine did not come up -- see: logread -e byway
 правила не приняты ядром, перехват не включён	the kernel rejected the rules, interception is not set up
+маршрут для помеченного трафика не заведён — перехват не включён	no route for marked traffic — interception is not set up
 автообновление включено, но суточная проверка версий выключена	auto-update is on, but the daily version check is off
 ключи для автовыбора не заданы	no keys set for auto-select
 добавить на вкладке «Основное» либо: uci add_list byway.main.node_urls=vless://…	add on the Overview tab, or: uci add_list byway.main.node_urls=vless://...

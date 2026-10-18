@@ -17,10 +17,6 @@ lists/merge.sh
 lists/presets.sh
 lists/routes.sh
 lists/sub.sh
-plumb/route.sh
-plumb/nft.sh
-plumb/dns.sh
-plumb/block.sh
 plumb/plumb.sh
 service/watch.sh
 service/job.sh

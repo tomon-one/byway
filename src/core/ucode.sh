@@ -11,7 +11,7 @@
 BW_SELF=${BW_SELF:-}
 BW_UCF=/var/run/byway.uc
 
-bw_uc() {
+bw_uc_prep() {
     [ -n "$BW_SELF" ] || BW_SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
     _ust=$(ls -lni "$BW_SELF" 2>/dev/null || true)
     if [ -z "$_ust" ] || [ "$(head -n 1 "$BW_UCF" 2>/dev/null)" != "// $_ust" ]; then
@@ -26,5 +26,9 @@ bw_uc() {
                 die "часть byway на ucode не извлечена в /var/run"
             }
     fi
+}
+
+bw_uc() {
+    bw_uc_prep
     BW_VERSION=$BYWAY_VERSION BW_LANG=$BW_LANG ucode -S "$BW_UCF" "$@"
 }

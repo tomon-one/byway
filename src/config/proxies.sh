@@ -1,8 +1,8 @@
 # Аутбаунды собирает ucode (uc/outbound.uc) для gen, check и probe; здесь --
-# метка сокетов, пока перехват на shell.
+# метка сокетов.
 
-# Метка исходящих для «VPN для программ на роутере» -- числом, пока перехват
-# на shell. Последняя строка: self_mark печатает жалобы в тот же вывод.
+# Метка исходящих для «VPN для программ на роутере» -- числом (uc/plumb.uc,
+# та же, что в правилах nft).
 ob_env_mark() {
-    if [ "$(u router_via_vpn)" = "1" ]; then self_mark_dec | tail -1; fi
+    if [ "$(u router_via_vpn)" = "1" ]; then bw_uc selfmark; fi
 }

@@ -205,7 +205,7 @@ _f() { _fm=$(_t "$1"); shift; printf "$_fm" "$@"; }
 BW_SELF=${BW_SELF:-}
 BW_UCF=/var/run/byway.uc
 
-bw_uc() {
+bw_uc_prep() {
     [ -n "$BW_SELF" ] || BW_SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
     _ust=$(ls -lni "$BW_SELF" 2>/dev/null || true)
     if [ -z "$_ust" ] || [ "$(head -n 1 "$BW_UCF" 2>/dev/null)" != "// $_ust" ]; then
@@ -220,6 +220,10 @@ bw_uc() {
                 die "часть byway на ucode не извлечена в /var/run"
             }
     fi
+}
+
+bw_uc() {
+    bw_uc_prep
     BW_VERSION=$BYWAY_VERSION BW_LANG=$BW_LANG ucode -S "$BW_UCF" "$@"
 }
 
@@ -468,19 +472,7 @@ parse_uc() {
     bw_uc parse
 }
 
-# Адреса и порты конфига: DNS-вход, пул fakeip, вход для трафика роутера.
-
-# Имя хоста из строки резолвера, пусто для адреса. Имени нужен bootstrap: иначе
-# движок спросит имя сервера у него же самого.
-dns_host() {   # 1 -- строка вида https://ЧТО-ТО/путь
-    _dh=${1#*://}; _dh=${_dh%%/*}
-    # Литерал IPv6 пишется в скобках -- это адрес, а не имя.
-    case "$_dh" in \[*) return 0 ;; esac
-    _dh=${_dh%%:*}
-    case "$_dh" in
-      *[!0-9.]*) printf '%s' "$_dh" ;;
-    esac
-}
+# Адреса и метка для сторожа и проверок: DNS-вход, пул fakeip, метка обвязки.
 
 # Адрес DNS-входа с умолчанием: поле в панели можно очистить, а голое `u
 # dns_listen` тогда пусто -- сторож каждые 5 минут пересобирает обвязку, а
@@ -523,26 +515,6 @@ pool_sane() {   # 1 -- пул вида a.b.c.d/len
     return 0
 }
 
-# Число адресов в пуле: для poolSize движка и для предупреждения «список
-# длиннее пула».
-pool_size() {   # 1 -- пул вида a.b.c.d/len
-    _psl=${1#*/}
-    case "$_psl" in ''|*[!0-9]*) _psl=15 ;; esac
-    awk -v l="$_psl" 'BEGIN {
-        if (l < 1 || l > 32) l = 15
-        n = 2 ^ (32 - l) - 2
-        # Нижнего ограничителя ЗДЕСЬ нет. Стоял `if (n < 16) n = 16`, и на
-        # масках /29 и /30 объявленная ёмкость оказывалась вчетверо больше
-        # настоящей: единственная защита от «пул уже списка» сравнивается
-        # именно с этим числом и на таких масках не срабатывала никогда, а
-        # пары «домен-адрес» вытеснялись из кэша на 16 мест над пулом из 4.
-        # Соединение к домену A уходило на хост домена B, без единой ошибки
-        # где бы то ни было. Найдено четвёртым аудитом, заход 3.
-        if (n < 1) n = 1
-        printf "%d", n
-    }'
-}
-
 # Действующие пул, метка и мосты -- одно значение для конфига движка, правил
 # nft, ip rule, запрета и проверок. Каждый читал своё: при негодной настройке
 # движок раздавал один пул, nft ловил другой, проверки искали третий, а ip
@@ -567,13 +539,6 @@ eff_mark() {
     # Как печатает ip rule show: строчными, без ведущих нулей.
     printf '0x%x' "$((_em))"
 }
-eff_ifs() {
-    if [ "${1:-}" = loud ]; then
-        nft_val interface "$(u interface)" '^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$' br-lan
-    else
-        nft_val interface "$(u interface)" '^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$' br-lan 2>/dev/null
-    fi
-}
 
 # Образец адреса из пула -- по всему пулу, а не по двум первым октетам: пул
 # шире /16 давал ложное «движок не отвечает» на трёх адресах из четырёх.
@@ -592,32 +557,13 @@ fakeip_re() {
     }'
 }
 
-# Порт входа для собственного трафика роутера; пусто -- не заворачивать
-# (выключено или порт занят другим входом byway). Одна функция на конфиг движка
-# и правила nft: при расхождении правила вели в никуда. Включение только по
-# «1»: на конфиге без ключа заворот включаться сам не должен.
-redir_port() {
-    [ "$(u router_via_vpn)" = "1" ] || return 0
-    _rdp=$(val_or redirect_port "$(u redirect_port)" '^[0-9]{1,5}$' 1604 "$1")
-    port_ok "$_rdp" || _rdp=1604
-    _rdt=$(u tproxy_port); _rdt=${_rdt:-1602}
-    _rdl=$(u local_proxy_port); _rdl=${_rdl:-1603}
-    if [ "$_rdp" = "$_rdt" ] || [ "$_rdp" = "$_rdl" ]; then
-        # >&2: ответ функции забирают подстановкой, жалоба из stdout попала бы
-        # в конфиг на место номера порта.
-        warnf "порт %s занят другим входом byway — свой трафик роутер в туннель не пошлёт" "$_rdp" >&2
-        return 0
-    fi
-    printf '%s' "$_rdp"
-}
-
 # Аутбаунды собирает ucode (uc/outbound.uc) для gen, check и probe; здесь --
-# метка сокетов, пока перехват на shell.
+# метка сокетов.
 
-# Метка исходящих для «VPN для программ на роутере» -- числом, пока перехват
-# на shell. Последняя строка: self_mark печатает жалобы в тот же вывод.
+# Метка исходящих для «VPN для программ на роутере» -- числом (uc/plumb.uc,
+# та же, что в правилах nft).
 ob_env_mark() {
-    if [ "$(u router_via_vpn)" = "1" ]; then self_mark_dec | tail -1; fi
+    if [ "$(u router_via_vpn)" = "1" ]; then bw_uc selfmark; fi
 }
 
 # Сборка конфига Xray: cmd_gen готовит окружение, конфиг собирает ucode
@@ -753,1117 +699,67 @@ cmd_sub() {
     BW_SUB_URL=${1:-} bw_uc sub
 }
 
-# Маршрут и ip rule для помеченного трафика; метка своего трафика роутера.
+# Перехват (nft, маршрут, dnsmasq, запрет «не пускать мимо VPN») -- в ucode
+# (uc/plumb.uc). Здесь замок и снятие по сигналу, имена, которые читают
+# сторож и проверки (service/*), и обёртки команд.
 
-# Номер таблицы не больше 255: busybox ip на 1602 отвечает 'invalid argument to
-# table ID' (проверено 2026-09-03).
+TABLE=byway
 RT_TABLE=100
+BLOCK_MARK=/tmp/byway-blocked
+DNSSEC="dhcp.@dnsmasq[0]"
+# Умолчание пула IPv6 для конфига движка -- константа Xray (fakedns.go).
+POOL6_DEF="fc00::/18"
 
-# Отметка «маршрут завёл byway», в памяти: маршрут перезагрузку не переживает.
-RT_MINE=/tmp/byway-route-mine
-
-RT_MINE6=/tmp/byway-route-mine6
-
-# Метка на исходящих сокетах движка (sockopt.mark), не та же, что у обвязки.
-# Цепочка output ловит по адресу назначения, а движок на том же хосте: пакет,
-# не восстановленный в домен, заворачивался бы обратно -- петля съедает лимит
-# файлов, и движок перестаёт принимать всё. Исключить можно только меткой, и
-# бит другой, чем у mark: ip rule ловит по маске любую метку с ним.
-self_mark() {
-    # Образец заякорен: иначе мусор после префикса шёл в правила nft, а в
-    # конфиг движка -- другое число, и метки расходились.
-    _sm=$(nft_val self_mark "$(u self_mark)" \
-          '^(0[xX][0-9a-fA-F]{1,8}|[0-9]{1,10})$' 0x400000)
-    if [ "$(( _sm ))" -gt 4294967295 ] || [ "$(( _sm ))" -le 0 ]; then
-        warnf "self_mark %s не влезает в 32 бита -- взято умолчание 0x400000" "$_sm"
-        _sm=0x400000
-    fi
-    # Бит не должен пересекаться с mark: пакеты движка ушли бы в таблицу 100 на
-    # петлю, а все проверки зелёные (проба отвечает от локального fakedns).
-    _smk=$(eff_mark)
-    if [ "$(( _sm & _smk ))" -ne 0 ]; then
-        _sm=0x400000
-        [ "$(( _sm & _smk ))" -ne 0 ] && _sm=0x800000
-        warnf "self_mark пересекается битами с mark %s -- взято %s" "$_smk" "$_sm"
-    fi
-    printf '%s' "$_sm"
-}
-
-# То же десятичным: в конфиг движка идёт числом JSON. Арифметика оболочки, а не
-# `printf '%d'`: при негодном числе тот дописывает запасной вывод к частичному.
-self_mark_dec() {
-    printf '%d' "$(( $(self_mark) ))"
-}
-
-# Образец по fwmark и таблице, а не по «lookup 100»: чужой tproxy (openclash,
-# passwall, nikki) занимает ту же таблицу, и его правило принималось за своё.
-# Конец закреплён: «lookup 100» совпадает и с «lookup 1000».
+# Образец ip rule по fwmark и таблице (сторож считает правила). Конец
+# закреплён: «lookup 100» совпадает и с «lookup 1000».
 rule_re() {
     _rm=$(eff_mark)
     printf 'fwmark %s(/%s)?[[:space:]]+lookup %s([[:space:]]|$)' "$_rm" "$_rm" "$RT_TABLE"
 }
 
-# ip rule: помеченное -- в локальную таблицу, иначе tproxy-сокет пакета не
-# увидит.
-route_up() {
-    # Чужие маршруты в таблице не трогаем, но говорим: наложение
-    # непредсказуемо.
-    if ip route show table "$RT_TABLE" 2>/dev/null | grep -qv "^local default dev lo"; then
-        if ip route show table "$RT_TABLE" 2>/dev/null | grep -q .; then
-            warnf "в таблице маршрутизации %s есть чужие маршруты -- byway их не трогает" "$RT_TABLE"
-        fi
-    fi
-    _mark=$(eff_mark)
-    ip rule show 2>/dev/null | grep -qE "$(rule_re)" ||
-        ip rule add fwmark "$_mark/$_mark" lookup "$RT_TABLE"
-    # Отметка «маршрут наш»: формой от чужого не отличить; в памяти, как и
-    # маршрут.
-    ip route show table "$RT_TABLE" 2>/dev/null | grep -q "^local default" ||
-        { ip route add local default dev lo table "$RT_TABLE" && : > "$RT_MINE"; }
-    # IPv6 -- та же таблица: маршруты v4 и v6 живут в разных пространствах.
-    if v6on; then
-        ip -6 rule show 2>/dev/null | grep -qE "$(rule_re)" ||
-            ip -6 rule add fwmark "$_mark/$_mark" lookup "$RT_TABLE"
-        # `list table all`, а не `show table N`: у busybox
-        # `ip -6 route show table 100` при существующем маршруте молчит (код
-        # 0), повторный подъём ловил «File exists», RT_MINE6 не ставилась, и
-        # route_down не убирал за собой (стенд 22.03.7, 2026-09-08).
-        ip -6 route list table all 2>/dev/null |
-            grep -q "^local default dev lo table $RT_TABLE" ||
-            { ip -6 route add local ::/0 dev lo table "$RT_TABLE" && : > "$RT_MINE6"; }
-    fi
+plumb_env() {
+    BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR \
+    BW_BADLIST=$BADLIST BW_PKGFIX=$PKG_FIX BW_VERSION=$BYWAY_VERSION BW_LANG=$BW_LANG "$@"
 }
 
-route_down() {
-    _mark=$(eff_mark)
-    while ip rule show 2>/dev/null | grep -qE "$(rule_re)"; do
-        ip rule del fwmark "$_mark/$_mark" lookup "$RT_TABLE" 2>/dev/null || break
-    done
-    # Убирается только свой маршрут (по RT_MINE, не по форме): таблицу мог
-    # занять другой tproxy, и flush сломал бы соседа.
-    if [ -f "$RT_MINE" ]; then
-        ip route del local default dev lo table "$RT_TABLE" 2>/dev/null || true
-        rm -f "$RT_MINE" 2>/dev/null || true
-    elif ip route show table "$RT_TABLE" 2>/dev/null |
-         grep -qv "^local default dev lo"; then
-        # Говорим, только когда в таблице есть чужое: осиротевший
-        # `local default dev lo` без отметки безобиден (у установок до 0.1.4
-        # отметки нет).
-        warnf "маршрут в таблице %s оставлен: его завёл не byway" "$RT_TABLE"
-    fi
-    # Без проверки v6on: настройку могли выключить после подъёма, и убрать
-    # правило и маршрут v6 было бы некому.
-    while ip -6 rule show 2>/dev/null | grep -qE "$(rule_re)"; do
-        ip -6 rule del fwmark "$_mark/$_mark" lookup "$RT_TABLE" 2>/dev/null || break
-    done
-    if [ -f "$RT_MINE6" ]; then
-        ip -6 route del local ::/0 dev lo table "$RT_TABLE" 2>/dev/null || true
-        rm -f "$RT_MINE6" 2>/dev/null || true
-    fi
-}
-
-# Таблица nft перехвата: наборы адресов и правила tproxy.
-
-# -- обвязка nft ------------------------------------------------------------
-# Трафик доверенных мостов к пулу fakeip и подсетям списка уходит в tproxy-вход
-# Xray, остальное не трогается. Своя таблица, а не правила в fw4: откат --
-# `nft delete table inet byway`, fw4 чужие таблицы при перезагрузке не сносит.
-# `tproxy ip to :порт` без адреса: форма с 127.0.0.1 требует route_localnet=1,
-# то есть снятия защиты от подделки адресов. Метка ставится через `or`:
-# троттлинг метит трафик 0x2 (/etc/conncheck.nft), присваивание затёрло бы её и
-# сломало шейпер; ip rule поэтому сверяет по маске.
-
-TABLE=byway
-
-# Хостлист zapret: путь в одном месте, сверяют с ним из двух мест.
-ZAPHOSTS=/opt/zapret/ipset/zapret-hosts-user.txt
-
-# Приватное и зарезервированное. 198.18.0.0/15 (пул fakeip) сюда не входит:
-# общий return съел бы пул, и этот набор можно проверять первым.
-RESERVED="0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 224.0.0.0/4, 240.0.0.0/4"
-
-# fc00::/7 входит, хотя пул v6 внутри него: правило пула стоит в цепочке выше.
-# Без него в режиме «всё через VPN» домашний NAS на fd00:: ушёл бы в туннель.
-RESERVED6="::1/128, ::/128, ::ffff:0:0/96, fe80::/10, ff00::/8, fc00::/7"
-
-# Умолчание -- константа Xray (fakedns.go, FakeIPv6Pool): ULA в интернете не
-# маршрутизируется, с настоящим адресом пул не столкнётся.
-POOL6_DEF="fc00::/18"
-
-# Заворот IPv6 выключен по умолчанию (как у passwall, OpenClash). Выключен --
-# клиент получает AAAA и идёт мимо туннеля напрямую; об этом говорит doctor.
-v6on() { [ "$(u ipv6)" = "1" ]; }
-
-# Элементы набора IPv6 из файла списка (отдельно от set_elements: у семейств
-# разные наборы). Проверяется форма, а не весь разбор -- судит ядро; задача --
-# не дать мусору обрушить всю таблицу (inet одна на оба семейства). Отвергнутое
-# уходит в $BADLIST, byway называет его при сборке.
-set_elements6() {
-    [ -f "$1" ] || return 0
-    awk -v bad="$BADLIST" '
-      { gsub(/[[:space:]\r]/, "") }
-      $0 == ""                  { next }
-      /^(\/\/|#)/               { next }
-      /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ { next }   # это IPv4, не наше
-      {
-        e = $0; pfx = ""
-        i = index(e, "/")
-        if (i) { pfx = substr(e, i + 1); e = substr(e, 1, i - 1) }
-        # ⚠️ Форма разбирается ЦЕЛИКОМ, а не «не больше восьми групп». Прежняя
-        # редакция проверяла только верхнюю границу числа групп и длину
-        # каждой, и признавала годными «2001:db8:», «1:::2» и пустую группу
-        # посреди адреса. Строка уходила в elements, а ядро отвергало ВЕСЬ
-        # документ одной транзакцией -- вместе с ветками по доменам и по
-        # IPv4, потому что таблица inet одна на оба семейства. На сторожевом
-        # пути вывод cmd_plumb on глушится, и наружу уходил только флаг
-        # «(failed)» без текста ошибки nft. Найдено четвёртым аудитом, заход 3.
-        ok = 1
-        if (e !~ /^[0-9a-fA-F:]+$/) ok = 0
-        if (index(e, ":") == 0) ok = 0
-        # Двойное двоеточие допустимо ровно одно.
-        t = e; c = 0
-        while ((j = index(t, "::")) > 0) { c++; t = substr(t, j + 2) }
-        if (c > 1) ok = 0
-        if (ok && c == 1) {
-            # Режем по «::» и считаем половины. Пустая ПОЛОВИНА законна
-            # («::1», «fe80::»), пустая ГРУППА внутри половины -- нет: это
-            # и есть «1:::2» и адрес с одиночным двоеточием по краю.
-            p = index(e, "::")
-            lft = substr(e, 1, p - 1); rgt = substr(e, p + 2); ng = 0
-            if (lft != "") { nl = split(lft, gl, ":")
-                             for (k = 1; k <= nl; k++)
-                                 if (gl[k] == "" || length(gl[k]) > 4) ok = 0
-                             ng += nl }
-            if (rgt != "") { nr = split(rgt, gr, ":")
-                             for (k = 1; k <= nr; k++)
-                                 if (gr[k] == "" || length(gr[k]) > 4) ok = 0
-                             ng += nr }
-            # «::» обязано сжимать хотя бы одну группу.
-            if (ng > 7) ok = 0
-        } else if (ok) {
-            n = split(e, g, ":")
-            if (n != 8) ok = 0
-            for (k = 1; k <= n; k++)
-                if (g[k] == "" || length(g[k]) > 4) ok = 0
-        }
-        if (pfx != "") { if (pfx !~ /^[0-9]+$/ || pfx + 0 > 128) ok = 0 }
-        if (!ok) { print $0 >> bad; next }
-        if (m++) printf ", "
-        printf "%s", $0
-      }' "$1"
-}
-
-# Элементы набора IPv4 из файла списка через запятую; пустой список -- пустая
-# строка (набор создаётся всё равно, иначе правило сошлётся на несуществующий).
-# Пропускается только адрес или сеть IPv4: одна чужая строка отвергалась ядром
-# вместе со всем набором. Отброшенное уходит в $BADLIST и называется вслух.
-set_elements() {
-    [ -f "$1" ] || return 0
-    awk -v bad="$BADLIST" '
-      { gsub(/[[:space:]\r]/, "") }
-      $0 == ""                  { next }
-      /^(\/\/|#)/               { next }
-      # Это IPv6, им занят set_elements6. Зеркальная строка-пропуск: без неё
-      # годная подсеть IPv6 уходила в общий список отброшенных, и `byway
-      # report` печатал «отброшено строк: N» по числу заведённых записей v6 --
-      # отчёт для обращения врал про данные пользователя. Найдено четвёртым
-      # аудитом, заход 3.
-      /:/                       { next }
-      {
-        ok = 1
-        if ($0 !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/) ok = 0
-        else {
-          n = split($0, a, /[.\/]/)
-          for (i = 1; i <= 4; i++) if (a[i] + 0 > 255) ok = 0
-          if (n == 5 && a[5] + 0 > 32) ok = 0
-        }
-        if (!ok) { print $0 >> bad; next }
-        if (m++) printf ", "
-        printf "%s", $0
-      }' "$1"
-}
-
-nft_ruleset() {
-    _pool=$(eff_pool)
-    _mark=$(eff_mark loud)
-    _port=$(nft_val tproxy_port "$(u tproxy_port)" '^[0-9]{1,5}$' 1602)
-    _ifs=$(eff_ifs loud)
-    _iflist=$(echo "$_ifs" | awk '{for(i=1;i<=NF;i++) printf "%s\"%s\"", (i>1?", ":""), $i}')
-    _nets=$(set_elements "$(merged_subnets)")
-
-    _pool6=$(nft_val fakeip6_pool "$(u fakeip6_pool)" \
-             '^[0-9a-fA-F:]+/[0-9]{1,3}$' "$POOL6_DEF")
-    _nets6=$(set_elements6 "$(merged_subnets)")
-    _rport=$(redir_port "$(_t 'правил nft')")
-    # IPv6 -- в той же таблице inet. _v6self считается до сборки цепочки
-    # заворота: иначе правило v6 в неё не попадало, а nft -c этого не видел.
-    # Порядок у v6 иной, чем у v4: пул fc00::/18 лежит внутри fc00::/7 (он в
-    # privnets6), поэтому правило пула выше отсечки приватного. Две отсечки по
-    # fib нужны, потому что глобального префикса роутера в privnets6 нет
-    # (выдаёт провайдер): иначе в режиме «всё через VPN» трафик к самому
-    # роутеру и к соседям по дому уходил бы в catch-all.
-    _v6sets=""; _v6pre=""; _v6catch=""; _v6self=""
-    if v6on; then
-        if [ -n "$_nets6" ]; then _n6line="elements = { $_nets6 }"; else _n6line=""; fi
-        _v6sets="
-	set fakeip6 {
-		type ipv6_addr
-		flags interval
-		elements = { $_pool6 }
-	}
-	set privnets6 {
-		type ipv6_addr
-		flags interval
-		elements = { $RESERVED6 }
-	}
-	set subnets6 {
-		type ipv6_addr
-		flags interval
-		auto-merge
-		$_n6line
-	}"
-        _v6pre="
-		ip6 daddr @fakeip6 meta l4proto { tcp, udp } counter tproxy ip6 to :$_port meta mark set meta mark or $_mark accept
-		ip6 daddr @fakeip6 counter drop
-		ip6 daddr @privnets6 return
-		meta nfproto ipv6 fib daddr . iif type { local, broadcast, multicast } return
-		meta nfproto ipv6 fib daddr oifname { $_iflist } return"
-        _v6self="
-		ip6 daddr @fakeip6 meta l4proto tcp counter redirect to :$_rport"
-    fi
-
-    # Цепочка output (заворот трафика самого роутера) -- только при включённом
-    # redir. Заворачивается один пул fakeip, не подсети списка: в подсети можно
-    # вписать диапазон хостера, и движок завернул бы в себя своё же соединение
-    # к серверу. Приоритет -100 числом: имя dstnat nftables 1.0.2 здесь не
-    # понимает и отвергает всю таблицу (стенд 22.03.7, 2026-09-07).
-    if [ -n "$_rport" ]; then
-        # Пропуск своего трафика движка -- первым правилом (см. self_mark).
-        _selfchain="
-	chain output {
-		type nat hook output priority -100; policy accept;
-		meta mark $(self_mark) return
-		ip daddr @fakeip meta l4proto tcp counter redirect to :$_rport$_v6self
-	}"
-    else
-        _selfchain=""
-    fi
-
-    # Свои адреса роутера движку закрыты (Д-3, 2026-10-04). finalRules в
-    # конфиге движка закрывают частное, но не публичный адрес WAN и не
-    # глобальный v6: гость через имя, разрешённое в такой адрес, доходил до
-    # служб роутера на 0.0.0.0 (uhttpd, dropbear) -- соединение идёт по lo,
-    # а input его пропускает. fib видит адрес роутера, каким бы он ни был.
-    # Движок узнаём по uid процесса (не от root), иначе по self_mark (её
-    # ставит direct при router_via_vpn=1); нечем узнать -- правила нет.
-    # Петля и порт 53 вне правила: resolv.conf роутера смотрит в 127.0.0.1,
-    # и Go-резолвер движка ходит туда за адресом сервера. Только новые
-    # соединения: ответы движка клиентам на петле -- уже установленные.
-    _eng=""
-    _euid=$(awk '/^Uid:/ { print $2 }' "/proc/$(xray_pid)/status" 2>/dev/null || true)
-    if [ -n "$_euid" ] && [ "$_euid" != 0 ]; then
-        _eng="meta skuid $_euid"
-    elif [ "$(u router_via_vpn)" = "1" ]; then
-        _eng="meta mark $(self_mark)"
-    fi
-    _localchain=""
-    if [ -n "$_eng" ]; then
-        _localchain="
-	chain engine_local {
-		type filter hook output priority filter; policy accept;
-		$_eng ct state new meta nfproto ipv4 ip daddr != 127.0.0.0/8 meta l4proto { tcp, udp } th dport != 53 fib daddr type local counter reject
-		$_eng ct state new meta nfproto ipv6 ip6 daddr != ::1 meta l4proto { tcp, udp } th dport != 53 fib daddr type local counter reject
-	}"
-    fi
-
-    # Режим списков: пул fakeip и подсети. Режим «всё через VPN»: всё, что
-    # дошло сюда, -- приватное и адреса роутера отсечены выше набором privnets.
-    if [ "$(u list_mode)" = "all" ]; then
-        # Семейство у tproxy явное: `ip to` для пакета IPv6 не сработает, и
-        # наоборот.
-        _catch="meta nfproto ipv4 meta l4proto { tcp, udp } counter tproxy ip to :$_port meta mark set meta mark or $_mark accept"
-        if v6on; then _v6catch="
-		meta nfproto ipv6 meta l4proto { tcp, udp } counter tproxy ip6 to :$_port meta mark set meta mark or $_mark accept"; fi
-    else
-        _catch="ip daddr @fakeip meta l4proto { tcp, udp } counter tproxy ip to :$_port meta mark set meta mark or $_mark accept
-		ip daddr @subnets meta l4proto { tcp, udp } counter tproxy ip to :$_port meta mark set meta mark or $_mark accept"
-        if v6on; then _v6catch="
-		ip6 daddr @subnets6 meta l4proto { tcp, udp } counter tproxy ip6 to :$_port meta mark set meta mark or $_mark accept"; fi
-    fi
-    # Не завернулось -- брось. tproxy без слушающего сокета (движок упал, procd
-    # ждёт respawn) пакет не роняет, а пропускает дальше по цепочке, и тот
-    # уходил в WAN напрямую. Пул fakeip наружу не нужен никогда; подсети списка
-    # и «всё через VPN» -- только при «Не пускать». С живым движком сюда не
-    # доходит: tproxy кончается accept.
-    _miss="
-		ip daddr @fakeip counter drop"
-    if [ "$(u on_failure)" != "open" ]; then
-        if [ "$(u list_mode)" = "all" ]; then
-            _miss="$_miss
-		meta nfproto ipv4 meta l4proto { tcp, udp } counter drop"
-            if v6on; then _miss="$_miss
-		meta nfproto ipv6 meta l4proto { tcp, udp } counter drop"; fi
-        else
-            _miss="$_miss
-		ip daddr @subnets meta l4proto { tcp, udp } counter drop"
-            if v6on; then _miss="$_miss
-		ip6 daddr @subnets6 meta l4proto { tcp, udp } counter drop"; fi
-        fi
-    fi
-    # `elements = {  }` -- синтаксическая ошибка nft: пустой subnets.lst
-    # обрушил бы всю таблицу. Набор без элементов nft принимает.
-    if [ -n "$_nets" ]; then _netsline="elements = { $_nets }"; else _netsline=""; fi
-
-    # Redir-in при включённом IPv6 слушает «::», то есть все интерфейсы.
-    # Заворот приходит на него через lo (iif lo return выше), так что порт для
-    # остальных закрывается безусловно.
-    _rdrop=""
-    if [ -n "$_rport" ]; then
-        _rdrop="
-		meta l4proto tcp th dport $_rport counter drop"
-    fi
-    # block_quic (пусто = включено): ключи поверх TCP везут UDP внутри TCP, и
-    # QUIC там висит молча (Discord 2026-10-01, сообщения по 15--38 с); reject
-    # переводит клиента на HTTP/2. Правило в input по метке перехвата (в
-    # prerouting reject нельзя), только на Initial QUIC v1/v2: OpenVPN, DTLS и
-    # WireGuard на udp/443 не задеваются. Синтаксис принят nftables 1.0.2.
-    _quic=""
-    if [ "$(u block_quic)" != "0" ]; then
-        _quic="
-		meta mark & $_mark == $_mark udp dport 443 @th,64,8 & 0xc0 == 0xc0 @th,72,32 { 0x00000001, 0x6b3343cf } counter reject"
-    fi
-
-    # Прелюдия table/delete: `nft -f` доливает в существующую таблицу, и
-    # `nft -c` при старой таблице в ядре давал «interval overlaps» на
-    # безупречном наборе (сужение пула /15 -> /24). Заодно снятие и укладка
-    # идут одной транзакцией, без окна без правил.
-    cat <<NFT
-table inet $TABLE
-delete table inet $TABLE
-table inet $TABLE {
-	set fakeip {
-		type ipv4_addr
-		flags interval
-		elements = { $_pool }
-	}
-	# ⚠️ Имя набора -- НЕ «reserved», и это не вкусовщина. У nftables 1.0.2
-	# (OpenWrt 22.03, наша нижняя граница) слово reserved -- ключевое, и
-	# набор с таким именем отвергается вместе со ВСЕЙ таблицей: обвязка не
-	# встаёт вовсе. Установка при этом проходит, движок стартует, порт
-	# слушает -- снаружи всё выглядит исправным. Проверено на стенде
-	# 2026-09-07: набор с этим именем ядро 22.03 не принимает, privnets
-	# принимает; на 25.12.5 проходят оба.
-	#
-	# Отсюда урок дороже самой правки: проверка разбором доказывает
-	# согласие ТОГО ядра, на котором запущена, а не самого старого из
-	# поддерживаемых. Стенд nft-check.sh гонял правила против ядра нашего
-	# роутера и потому молчал всё это время.
-	#
-	# И ни одной обратной кавычки в этом комментарии: он идёт в набор
-	# через heredoc без кавычек у метки, то есть оболочка ВЫПОЛНИТ всё,
-	# что в них стоит. Именно так первая редакция этого текста запустила
-	# reserved и nft -c на роутере. Третий раз за день.
-	set privnets {
-		type ipv4_addr
-		flags interval
-		elements = { $RESERVED }
-	}
-	set subnets {
-		type ipv4_addr
-		flags interval
-		auto-merge
-		$_netsline
-	}$_v6sets
-	chain prerouting {
-		type filter hook prerouting priority mangle; policy accept;
-
-		# Только доверенные мосты. br-iot сюда не входит намеренно.
-		iifname != { $_iflist } return
-
-		# Приватное и адреса самого роутера -- вон, и ПЕРВЫМ делом.
-		# Пул 198.18.0.0/15 в этот набор не входит, поэтому он ничего из
-		# нужного не съедает.
-		#
-		# Раньше этот return стоял третьим, а короткое замыкание по сокету --
-		# первым, и получалось, что пакет, адресованный САМОМУ РОУТЕРУ на порт
-		# tproxy, успевал получить метку. Правило firewall принимает по метке,
-		# и гостевая зона с политикой input REJECT переставала держать гостя:
-		# вход Xray превращался в форвардер, доступный из гостевой сети.
-		ip daddr @privnets return$_v6pre
-
-		# Короткое замыкание для пакетов уже установленной сессии: сокет
-		# найден и он прозрачный. Экономит разбор на каждом пакете. Стоит
-		# после return выше, поэтому до адресов роутера не дотягивается.
-		meta l4proto { tcp, udp } socket transparent 1 meta mark set meta mark or $_mark accept
-
-		$_catch$_v6catch$_miss
-	}
-
-	# Вход tproxy слушает 0.0.0.0 -- иначе он не работает вовсе: tproxy НЕ
-	# переписывает адрес назначения, и на петле пакет с исходным 198.18.x.x
-	# просто не появится. Плата за это -- открытый порт, до которого дотянется
-	# любое устройство доверенной сети: подключившись к нему напрямую, оно
-	# получает вход Xray в своё распоряжение.
-	#
-	# Закрываем здесь, а не политикой зоны: настоящий перехваченный трафик
-	# приходит в input с ИСХОДНЫМ портом назначения (443 и прочие), а не с
-	# нашим. Значит правило по dport бьёт ровно по прямым обращениям и
-	# работающего туннеля не касается вовсе.
-	#
-	# Семейство inet -- значит и IPv4, и IPv6 одним правилом: слушающий
-	# сокет отвечает на обоих, и закрывать надо оба.
-	chain input {
-		type filter hook input priority filter - 10; policy accept;
-		iif lo return$_quic
-		meta l4proto { tcp, udp } th dport $_port counter drop$_rdrop
-	}
-$_selfchain$_localchain
-}
-NFT
-}
-
-cmd_nft() { nft_ruleset; }
-
-# Дешёвый слепок обвязки для init-скрипта: те же входные данные, что у
-# nft_ruleset, но без сборки (суммы файлов подсетей). Слепок берётся несколько
-# раз на один `uci commit`, полная сборка списков не укладывалась в 20 с
-# панели.
-nft_sig() {
-    # block_quic и on_failure обязательны: они живут только в правилах nft,
-    # без них reload не видел смены.
-    printf '%s|%s|%s|%s|%s|%s|%s|' \
-        "$(u fakeip_pool)" "$(u mark)" "$(u tproxy_port)" \
-        "$(u interface)" "$(u list_mode)" "$(u block_quic)" "$(u on_failure)"
-    {
-        md5sum "$LISTS/subnets.lst" 2>/dev/null | cut -d' ' -f1
-        for _ns in $(u preset); do
-            md5sum "$PRESETS_DIR/$_ns.sub" 2>/dev/null | cut -d' ' -f1
-        done
-    } | md5sum | cut -d' ' -f1
-}
-
-cmd_nftsig() { nft_sig; }
-
-# dnsmasq на DNS-вход Xray и обратно; снимок прежних резолверов.
-
-CANARY=/use-application-dns.net/
-
-# -- dnsmasq ----------------------------------------------------------------
-# Резолвер уводится на DNS-вход Xray. noresolv обязателен: без него dnsmasq
-# шлёт запрос и провайдеру, берёт первый ответ, и часть доменов получает
-# настоящий адрес вместо fakeip -- маршрут работает через раз, и не видно.
-# Прежние значения -- в /etc/byway/dns-saved, откат их возвращает. Кэш dnsmasq
-# не обнуляется: пул fakedns на 131 тыс. адресов не вытесняется, но таблица не
-# переживает рестарт Xray -- старт службы сбрасывает кэш по HUP.
-DNSSEC="dhcp.@dnsmasq[0]"
-
-# Снимок dnsmasq -- в файл, не в UCI: `uci commit byway` дёргает procd-триггер
-# перезагрузки службы и пишет во флеш на каждый цикл plumb off/on (ubi
-# 43.7 МБ). Файл в /etc/byway переживает перезагрузку и внесён в keep-список
-# прошивки.
-DNSSAVE=$LISTS/dns-saved
-
-dns_save_read() {   # $1 -- noresolv | server
-    [ -f "$DNSSAVE" ] || return 0
-    case "$1" in
-      noresolv) sed -n '1s/^noresolv=//p' "$DNSSAVE" ;;
-      server)   sed -n 's/^server=//p' "$DNSSAVE" ;;
-      listen)   sed -n 's/^listen=//p' "$DNSSAVE" ;;
-    esac
-}
-
-# На кого нацелен РАБОТАЮЩИЙ dnsmasq: 0 -- какой-то процесс поднят с нашим
-# адресом, 1 -- конфиги прочитаны, адреса нет, 2 -- не знаю (процессов нет или
-# конфиг не прочитался). Читается файл из `-C` командной строки процесса (у
-# ujail он после `--`), не UCI: наша правка UCI -- некоммиченная дельта и на
-# запущенный процесс не влияет. Процессов может быть несколько (гостевой
-# экземпляр), HUP конфиг не перечитывает. Лишний рестарт -- 9 с без DNS,
-# пропущенный -- дом без DNS, поэтому на «не знаю» вызывающие рестартуют.
-dns_live_ok() {   # $1 -- наш адрес
-    # Процессов нет -- «не знаю»: dnsmasq остановлен чужой рукой (LuCI держит
-    # его выключенным 9 с), а ответ «не наш» оставил бы в его конфиге наш адрес
-    # без движка.
-    _dpids=$(pgrep -x dnsmasq 2>/dev/null || true)
-    [ -n "$_dpids" ] || return 2
-    _dseen=0
-    for _dpid in $_dpids; do
-        _dcf=$(tr '\0' '\n' < "/proc/$_dpid/cmdline" 2>/dev/null |
-               awk 'p { print; exit } /^-C$/ { p = 1 }')
-        [ -n "$_dcf" ] && [ -r "$_dcf" ] || continue
-        _dseen=1
-        # if, а не `&& return`: несовпадение при set -e выходит из скрипта.
-        if grep -qx "server=$1" "$_dcf" && grep -qx "no-resolv" "$_dcf"; then
-            return 0
-        fi
-    done
-    [ "$_dseen" = "1" ] || return 2
-    return 1
-}
-
-# HUP чистит кэш и перечитывает hosts, не роняя сокеты; рестарт -- 9 с без DNS
-# (замер 2026-09-07). Сброс после рестарта движка обязателен: таблица fakedns в
-# памяти Xray (claude.ai был 198.18.68.107, стал 198.19.231.105).
-dns_flush() {
-    killall -HUP dnsmasq 2>/dev/null || true
-}
-
-dns_up() {
-    _l=$(dns_addr)
-    if [ ! -f "$DNSSAVE" ]; then
-        {
-            printf 'noresolv=%s\n' "$(uci -q get "$DNSSEC.noresolv" 2>/dev/null || echo 0)"
-            for s in $(uci -q get "$DNSSEC.server" 2>/dev/null); do
-                # Свой адрес в снимок не пишем, но только его, а не всю петлю:
-                # чужой резолвер на 127.* (https-dns-proxy, stubby) терялся бы
-                # навсегда. Если dns_listen сменили без снимка, прежний наш
-                # адрес попадёт как чужой.
-                [ "$s" = "$_l" ] && continue
-                printf 'server=%s\n' "$s"
-            done
-            # Свой адрес отдельной строкой: по нему, а не по текущей настройке,
-            # dns_down решает, наша ли правка в dnsmasq (после смены dns_listen
-            # они расходятся).
-            printf 'listen=%s\n' "$_l"
-        } > "$DNSSAVE"
-    fi
-    # Доменные записи server=/дом/адрес остаются: это раздельный резолв своей
-    # сети.
-    for s in $(uci -q get "$DNSSEC.server" 2>/dev/null); do
-        case "$s" in
-          /*) ;;
-          *) uci -q del_list "$DNSSEC.server=$s" 2>/dev/null || true ;;
-        esac
-    done
-    uci add_list "$DNSSEC.server=$_l"
-    # Канарейка: NXDOMAIN на use-application-dns.net выключает DoH у Firefox
-    # (иначе он идёт мимо byway); `server=/имя/` без адреса даёт NXDOMAIN.
-    _dnew=0
-    case " $(uci -q get "$DNSSEC.server" 2>/dev/null) " in
-      *" $CANARY "*) ;;
-      *) uci add_list "$DNSSEC.server=$CANARY"; _dnew=1 ;;
-    esac
-    uci set "$DNSSEC.noresolv=1"
-    # Не коммитим: дельта в /tmp/.uci умирает с tmpfs. Закоммиченная правка
-    # переживала потерю питания и sysupgrade при мёртвом Xray, и дом оставался
-    # с резолвером в пустоту. Плата: «Сохранить» на странице DHCP в LuCI
-    # закоммитит и нашу дельту -- тогда `byway plumb off`. Рестарт -- только
-    # если есть что менять (9 с без DNS у дома), кэш сбросит HUP. Новую строку
-    # server dnsmasq читает лишь при рестарте: после HUP канарейка не вставала
-    # (боевой, 2026-10-02).
-    if dns_live_ok "$_l" && [ "$_dnew" = 0 ]; then
-        dns_flush
-    elif [ "${DNS_DEFER_RESTART:-0}" = 1 ]; then
-        # Следом block_off снимает файл запрета и перезапускает dnsmasq сам:
-        # один перезапуск вместо двух (по девять секунд без DNS у дома).
-        :
-    else
-        /etc/init.d/dnsmasq restart >/dev/null 2>&1
-    fi
-}
-
-dns_down() {
-    # revert снимает некоммиченную дельту без записи во флеш.
-    uci -q revert dhcp 2>/dev/null || true
-
-    # Дельту могли закоммитить со стороны («Сохранить» в LuCI) -- тогда
-    # возвращаем явно. Свой адрес ищем среди значений списка (uci get отдаёт их
-    # через пробел) и берём из снимка, не из текущей настройки: после смены
-    # dns_listen они расходятся.
-    _ours=$(dns_save_read listen)
-    [ -n "$_ours" ] || _ours=$(dns_addr)
-    case " $(uci -q get "$DNSSEC.server" 2>/dev/null) " in
-      *" $_ours "*)
-        # Снимок один, при первом подъёме: заведённые позже доменные записи
-        # delete снёс бы.
-        _dcur=$(uci -q get "$DNSSEC.server" 2>/dev/null || true)
-        uci -q delete "$DNSSEC.server" 2>/dev/null || true
-        _dseen=" "
-        for s in $(dns_save_read server); do
-            case "$_dseen" in *" $s "*) continue ;; esac
-            _dseen="$_dseen$s "
-            uci add_list "$DNSSEC.server=$s"
-        done
-        # Доменные записи, появившиеся после снимка, возвращаем; остальное
-        # решает снимок.
-        for s in $_dcur; do
-            case "$s" in "$CANARY") continue ;; /*) ;; *) continue ;; esac
-            case "$_dseen" in *" $s "*) continue ;; esac
-            _dseen="$_dseen$s "
-            uci add_list "$DNSSEC.server=$s"
-        done
-        if [ "$(dns_save_read noresolv)" = "1" ]; then
-            uci set "$DNSSEC.noresolv=1"
-        else
-            uci -q delete "$DNSSEC.noresolv" 2>/dev/null || true
-        fi
-        uci commit dhcp
-        ;;
-    esac
-
-    rm -f "$DNSSAVE" 2>/dev/null || true
-
-    # Зеркально dns_up: резолвер не наш -- рестарт чистая потеря (plumb off на
-    # роутере без обвязки дёргал DNS дома), кэш сбрасываем всё равно. «Не знаю»
-    # (2) считаем нашим: пропущенный рестарт хуже лишнего.
-    _dlo=0; dns_live_ok "$_ours" || _dlo=$?
-    if [ "$_dlo" != "1" ]; then
-        /etc/init.d/dnsmasq restart >/dev/null 2>&1
-    else
-        dns_flush
-    fi
-}
-
-dnsmasq_confdir() {
-    _cdir=$(grep -h '^conf-dir=' /var/etc/dnsmasq.conf.* 2>/dev/null |
-            head -1 | cut -d= -f2- | cut -d, -f1)
-    # `if` и return 0, а не `[ ] && printf`: код 1 при ненайденном каталоге
-    # через присваивание у вызывающего убивает byway под set -e.
-    if [ -n "$_cdir" ] && [ -d "$_cdir" ]; then printf '%s' "$_cdir"; fi
-    return 0
-}
-
-# Запрет «Не пускать мимо VPN»: dnsmasq и nft закрывают список, пока нет туннеля.
-
-# ── kill switch ────────────────────────────────────────────────────────────
-# Закрытая модель (on_failure): без туннеля нет и доступа к списку. Домены --
-# через dnsmasq (address=/домен/ в его каталоге добавок, тот в памяти): без
-# движка резолвер отдаёт настоящие адреса, по адресу домен не узнать.
-# Подсети -- правилами nft. Каталог добавок берётся из конфига dnsmasq: в имени
-# хеш секции UCI (/tmp/dnsmasq.cfg01411c.d), после сброса он другой.
-BLOCK_MARK=/tmp/byway-blocked
-
-block_on() {
-    # Открытая модель: запрет, оставшийся от закрытой, снимается здесь. Иначе
-    # переключение на open при падающем движке его не снимало: подъём не
-    # проходит, сторож снимает обвязку с --keep-block (Д-2, 2026-10-04).
-    if [ "$(u on_failure)" = "open" ]; then
-        [ -f "$BLOCK_MARK" ] && block_off
-        return 0
-    fi
-    _ifs=$(eff_ifs)
-    _ifl=$(echo "$_ifs" | awk '{for(i=1;i<=NF;i++) printf "%s\"%s\"", (i>1?", ":""), $i}')
-    # Стоящий запрет пересобирается на месте, если сменились режим, сети, IPv6
-    # или списки.
-    _bsig=$( { u list_mode; echo "$_ifs"; v6on && echo v6; cat "$(merged_domains)" "$(merged_subnets)" 2>/dev/null; } | md5sum | cut -c1-32)
-    # И стоит ли он в ядре: чужой `nft flush ruleset` снимал таблицу, а запрет
-    # по файлам в /tmp числился стоящим.
-    if [ -f "$BLOCK_MARK" ] && [ "$(cat "$BLOCK_MARK.sig" 2>/dev/null)" = "$_bsig" ] &&
-       block_intact; then
-        return 0
-    fi
-    printf '%s\n' "$_bsig" > "$BLOCK_MARK.sig"
-
-    # Режим «всё через VPN» закрывается отдельным правилом, не выжимкой из
-    # списков: в этом режиме поставочные списки пусты, запрет не закрыл бы
-    # ничего, а статус сообщил бы «доступ закрыт». Цепляется к forward, не к
-    # output: движок должен достучаться до ноды, LuCI и ssh идут через input.
-    # oifname пропускает свои мосты. Цепочка `forward`, не `fwd`: fwd
-    # зарезервировано в nft, и ядро отвергает всю таблицу.
-    if [ "$(u list_mode)" = "all" ]; then
-        # Остаток режима списков (имена) здесь не нужен.
-        _cdir=$(dnsmasq_confdir)
-        if [ -n "$_cdir" ] && [ -f "$_cdir/byway-block.conf" ]; then
-            rm -f "$_cdir/byway-block.conf"
-            /etc/init.d/dnsmasq restart >/dev/null 2>&1
-        fi
-        # Прелюдия table/delete -- замена одной транзакцией (см. nft_ruleset).
-        _nfterr=$(nft -f - 2>&1 <<NFTA || true
-table inet ${TABLE}_block
-delete table inet ${TABLE}_block
-table inet ${TABLE}_block {
-	set privnets {
-		type ipv4_addr
-		flags interval
-		elements = { $RESERVED }
-	}
-	chain forward {
-		type filter hook forward priority filter - 5; policy accept;
-		iifname != { $_ifl } return
-		oifname { $_ifl } return
-		ip daddr @privnets return
-		counter reject
-	}
-}
-NFTA
-)
-        [ -n "$_nfterr" ] && warnf "«не пускать мимо VPN»: ядро не приняло правило — %s" \
-            "$(printf '%s' "$_nfterr" | head -2 | tr '\n' ' ')"
-        if nft list table inet "${TABLE}_block" >/dev/null 2>&1; then
-            printf 'all\n' > "$BLOCK_MARK"
-            printf 'table\n' > "$BLOCK_MARK.parts"
-            # Не «весь трафик»: цепочка отсекает сети вне byway.main.interface.
-            warn "туннеля нет, и трафик перечисленных сетей мимо VPN закрыт: так велит настройка «не пускать мимо VPN». Сети вне byway.main.interface запрет не закрывает"
-        else
-            # Молчать здесь нельзя: человек включил запрет и вправе знать, что
-            # его нет.
-            printf 'none\n' > "$BLOCK_MARK"; rm -f "$BLOCK_MARK.parts" 2>/dev/null
-            warn "«не пускать мимо VPN»: ядро не приняло правило запрета — трафик идёт НАПРЯМУЮ"
-        fi
-        return 0
-    fi
-    block_dns
-    block_nets
-    if [ -n "$_nets" ] || [ -n "$_nets6" ]; then
-        _nfterr=$(nft -f - 2>&1 <<NFTB || true
-table inet ${TABLE}_block
-delete table inet ${TABLE}_block
-table inet ${TABLE}_block {$_b4set$_b6set
-	chain forward {
-		type filter hook forward priority filter - 5; policy accept;
-		iifname != { $_ifl } return$_b4rule$_b6rule
-	}
-}
-NFTB
-)
-        [ -n "$_nfterr" ] && warnf "«не пускать мимо VPN»: подсети закрыть не вышло — %s" \
-            "$(printf '%s' "$_nfterr" | head -2 | tr '\n' ' ')"
-        nft list table inet "${TABLE}_block" >/dev/null 2>&1 && _bl_net=1
-    else
-        nft delete table inet "${TABLE}_block" 2>/dev/null || true
-    fi
-    # Строка про закрытый доступ -- только когда есть что закрывать.
-    if [ "${_bl_dom:-0}" -gt 0 ] || [ "${_bl_net:-0}" = 1 ]; then
-        printf 'lists\n' > "$BLOCK_MARK"
-        { [ "${_bl_dom:-0}" -gt 0 ] && echo conf; [ "${_bl_net:-0}" = 1 ] && echo table; } > "$BLOCK_MARK.parts"
-        warnf "туннеля нет, и доступ к списку закрыт: доменов %s, подсети %s" \
-              "$_bl_dom" "$([ "${_bl_net:-0}" = 1 ] && _t да || _t нет)"
-    else
-        printf 'none\n' > "$BLOCK_MARK"; rm -f "$BLOCK_MARK.parts" 2>/dev/null
-        warn "«не пускать мимо VPN» включено, но закрывать нечего: списки пусты — трафик идёт НАПРЯМУЮ"
-    fi
-}
-
-# Шаг block_on: домены списка закрываются через dnsmasq (address=/имя/).
-block_dns() {
-    _bl_dom=0
-    _bl_net=0
-    _cdir=$(dnsmasq_confdir)
-    if [ -z "$_cdir" ]; then
-        warn "«не пускать мимо VPN»: не найден каталог конфигов dnsmasq — домены закрыть нечем"
-    else
-        _bf=$_cdir/byway-block.conf
-        # Через plain_domains, не сырым awk: формы Xray (`full:`, `domain:`)
-        # писались в dnsmasq буквально -- файл проходит `--test`, но
-        # закрывается несуществующий домен. keyword: и regexp: именем закрыть
-        # нельзя (dnsmasq сопоставляет суффиксом) -- об этом говорим вслух.
-        _bl_src=$(merged_domains)
-        _bl_all=$(grep -cvE '^[[:space:]]*(//|#|$)' "$_bl_src" 2>/dev/null || true)
-        _bl_all=${_bl_all:-0}
-        # `address=/имя/` без адреса -- NXDOMAIN на любой тип; с 0.0.0.0
-        # закрывалась лишь A, а AAAA и HTTPS dnsmasq 2.86+ уходили провайдеру
-        # (2026-10-02).
-        plain_domains "$_bl_src" |
-          awk '{ printf "address=/%s/\n", $0 }' > "$_bf.new"
-        # Синтаксис проверяем до подмены: битый файл не даст dnsmasq подняться.
-        _bl_dom=$(grep -c . "$_bf.new" 2>/dev/null || true); _bl_dom=${_bl_dom:-0}
-        if [ "$_bl_all" -gt "$_bl_dom" ]; then
-            warnf "«не пускать мимо VPN»: %s записей списка нельзя закрыть по имени (keyword:, regexp: и подобные) — они останутся ОТКРЫТЫМИ" \
-                  "$((_bl_all - _bl_dom))"
-        fi
-        if cmp -s "$_bf.new" "$_bf"; then
-            rm -f "$_bf.new"
-        elif dnsmasq --test -C "$_bf.new" >/dev/null 2>&1; then
-            mv "$_bf.new" "$_bf"
-            /etc/init.d/dnsmasq restart >/dev/null 2>&1
-        else
-            _bl_dom=0
-            rm -f "$_bf.new"
-            warn "«не пускать мимо VPN»: dnsmasq не принял список — домены остались ОТКРЫТЫМИ"
-        fi
-    fi
-    return 0
-}
-
-# Шаг block_on: наборы подсетей v4 и v6 для таблицы запрета.
-block_nets() {
-    _nets=$(set_elements "$(merged_subnets)")
-    # Подсети v6 закрываются тоже: при включённом заворачивании они
-    # перехватываются, а закрывались только v4 -- запрет обещал больше, чем
-    # делал.
-    _nets6=""
-    if v6on; then _nets6=$(set_elements6 "$(merged_subnets)"); fi
-    _b4set=""; _b4rule=""
-    if [ -n "$_nets" ]; then
-        _b4set="
-	set blocked {
-		type ipv4_addr
-		flags interval
-		auto-merge
-		elements = { $_nets }
-	}"
-        _b4rule="
-		ip daddr @blocked counter reject"
-    fi
-    _b6set=""; _b6rule=""
-    if [ -n "$_nets6" ]; then
-        _b6set="
-	set blocked6 {
-		type ipv6_addr
-		flags interval
-		auto-merge
-		elements = { $_nets6 }
-	}"
-        _b6rule="
-		ip6 daddr @blocked6 counter reject"
-    fi
-    return 0
-}
-
-block_off() {
-    _cdir=$(dnsmasq_confdir)
-    if [ -n "$_cdir" ] && [ -f "$_cdir/byway-block.conf" ]; then
-        rm -f "$_cdir/byway-block.conf"
-        /etc/init.d/dnsmasq restart >/dev/null 2>&1
-    fi
-    nft delete table inet "${TABLE}_block" 2>/dev/null || true
-    rm -f "$BLOCK_MARK" "$BLOCK_MARK.sig" "$BLOCK_MARK.parts" 2>/dev/null || true
-}
-
-# Стоит ли запрет в ядре и в dnsmasq -- по списку частей, записанному при
-# укладке. Списка нет (запрет от прежней версии) -- судить нечем, верим файлу.
-block_intact() {
-    [ -f "$BLOCK_MARK.parts" ] || return 0
-    for _bp in $(cat "$BLOCK_MARK.parts" 2>/dev/null); do
-        case "$_bp" in
-          table) nft list table inet "${TABLE}_block" >/dev/null 2>&1 || return 1 ;;
-          conf)  _bcd=$(dnsmasq_confdir)
-                 [ -n "$_bcd" ] && [ -f "$_bcd/byway-block.conf" ] || return 1 ;;
-        esac
-    done
-    return 0
-}
-
-# cmd_plumb on|off|close -- единственный вход для службы и сторожа, под замком.
-
-# После обновления прошивки модулей tproxy нет (ставил их установщик, а
-# прошивка с сохранением настроек пакеты не переносит): ядро отвечает общим
-# «не принято», а причина -- в двух пакетах.
-plumb_mod_hint() {
-    for _pm in nft_tproxy nft_socket; do
-        grep -q "^$_pm " /proc/modules 2>/dev/null && continue
-        # Встроенный в ядро модуль в /proc/modules не виден (П4).
-        [ -d "/sys/module/$_pm" ] && continue
-        modprobe "$_pm" 2>/dev/null && continue
-        warnf "нет модуля ядра %s — поставить: %s kmod-nft-tproxy kmod-nft-socket" "$_pm" "$PKG_FIX"
-        return 0
-    done
-    return 0
-}
-
+# cmd_plumb on|off|close -- единственный вход для службы и сторожа, под
+# замком: у перехвата пять хозяев (старт службы, её фоновый цикл до 65 с,
+# reload, сторож из cron, консоль). return, а не die: cmd_watch зовёт через
+# `if`, exit оборвал бы весь прогон сторожа.
 cmd_plumb() {
-    # Замок: у обвязки пять хозяев (старт службы, её фоновый цикл до 65 с,
-    # reload, сторож из cron, консоль) и общая дельта UCI dhcp с правилами
-    # ядра. return, а не die: cmd_watch зовёт через `if`, exit оборвал бы весь
-    # прогон сторожа.
     _plock=/var/run/byway-plumb.lock
     take_lock "$_plock" "$(_t 'настройка перехвата')" || {
         warn "перехват уже настраивается другим запуском -- пропущено"
         return 1
     }
-    # По INT/TERM -- выйти, а не продолжить: stop_service убивает идущий
-    # подъём, чтобы тот не ставил перехват поверх снятого.
+    # ucode -- фоном, и shell ждёт его через wait: по INT/TERM (stop_service
+    # убивает идущий подъём, чтобы тот не ставил перехват поверх снятого)
+    # ловушка гасит его. Ждал бы shell ucode напрямую -- ловушка сработала бы
+    # только после конца подъёма.
+    _ppid=""
     trap 'rm -rf "$_plock" 2>/dev/null; true' EXIT
-    trap 'rm -rf "$_plock" 2>/dev/null; exit 143' INT TERM
-    case "${1:-}" in
-      on)
-        plumb_fwrule
-        # Метку «сняли намеренно» снимаем сразу: иначе неудачный подъём
-        # оставлял сторожа запертым.
-        rm -f "$PLUMB_DOWN" 2>/dev/null || true
-        plumb_wait
-        if [ $_i -ge 15 ]; then
-            # Возвращаем dnsmasq провайдеру: иначе дельта UCI осталась бы на
-            # нашем адресе.
-            dns_down
-            # Закрыть до сообщения: между ними страница ушла бы мимо туннеля.
-            block_on
-            # return, а не dief: сюда сторож заходит чаще всего (движок жив, но
-            # не отвечает), а exit обрывал бы весь его прогон -- журнал,
-            # списки, автообновление.
-            warnf "Xray-core не отвечает на %s:53 — перехват не включён, dnsmasq возвращён провайдеру" "$_l"
-            rm -rf "$_plock" 2>/dev/null || true
-            return 1
-        fi
-
-        # Сначала -c, и только потом снос старой таблицы: опечатка в подсетях
-        # не должна оставить роутер без обвязки. Правила -- в переменной, не в
-        # файле: фиксированное имя в общем /tmp открывается дважды (проверка и
-        # применение видят разное) и пишет по симлинку, а занять его может
-        # не-root (dnsmasq).
-        _rules=$(nft_ruleset)
-        # return 1, а не die: сторож зовёт через `if`, exit убил бы весь его
-        # прогон.
-        printf '%s\n' "$_rules" | nft -c -f - || {
-            # Резолвер -- провайдеру, запрет -- по настройке, как в соседних
-            # ветках отказа. На пути stop --keep-dns dnsmasq остаётся на нас, и
-            # без правил дом получал бы подставные адреса без перехвата.
-            warn "правила не приняты ядром, перехват не включён"
-            plumb_mod_hint
-            dns_down
-            block_on
-            rm -rf "$_plock" 2>/dev/null || true
-            return 1
-        }
-        # Маршрут до правил: его отказ не должен оставлять таблицу nft
-        # (2026-09-03: правила легли, маршрута нет, подсети ушли в tproxy в
-        # никуда).
-        route_up
-
-        # Таблицу сносит и кладёт сам набор, одной транзакцией. Итог укладки
-        # читается: `nft -c` доказывает разбор, а не применение, и между
-        # проверкой и укладкой идёт route_up -- чужой процесс (fw4, hotplug)
-        # мог изменить таблицы. Без проверки дом получал подставные адреса без
-        # правил перехвата.
-        _nfte=""
-        _nfte=$(printf '%s\n' "$_rules" | nft -f - 2>&1) || _nfte=${_nfte:-отказ без сообщения}
-        if [ -n "$_nfte" ]; then
-            warnf "правила не легли в ядро — %s" \
-                  "$(printf '%s' "$_nfte" | head -2 | tr '\n' ' ')"
-            plumb_mod_hint
-            # Маршрут снимаем: без правил он остался бы висеть в таблице 100.
-            route_down
-            # nft -f -- одна транзакция: при отказе прежняя таблица остаётся и
-            # метит пакеты, а route_down снял правило и маршрут -- помеченным
-            # ехать некуда (домены глохнут, подсети идут мимо туннеля).
-            # Осиротевшую таблицу сносим.
-            if nft list table inet "$TABLE" >/dev/null 2>&1; then
-                _delerr=$(nft delete table inet "$TABLE" 2>&1 || true)
-                [ -n "$_delerr" ] &&
-                    warnf "прежняя таблица не снялась — %s" "$_delerr"
-            fi
-            # Резолвер -- провайдеру, запрет -- по настройке (как выше).
-            dns_down
-            block_on
-            rm -rf "$_plock" 2>/dev/null || true
-            return 1
-        fi
-        # Стоит запрет «не пускать» (файл в каталоге dnsmasq) -- его снимет
-        # block_off следующей строкой вместе с рестартом dnsmasq.
-        _bcd=$(dnsmasq_confdir)
-        DNS_DEFER_RESTART=0
-        if [ -n "$_bcd" ] && [ -f "$_bcd/byway-block.conf" ]; then DNS_DEFER_RESTART=1; fi
-        dns_up
-        DNS_DEFER_RESTART=0
-        block_off
-        rm -rf "$_plock" 2>/dev/null || true
-        sayf "перехват включён: таблица inet %s, правило fwmark, dnsmasq -> %s" "$TABLE" "$(dns_addr)"
-        ;;
-      off)
-        # Метка PLUMB_DOWN -- первым действием: dns_down рестартует dnsmasq
-        # (секунды), и сторож в это окно видел «обвязки нет при живом движке» и
-        # поднимал её поверх незаконченного снятия. --service метку не ставит:
-        # если следующий старт провалится, сторож остался бы заперт до
-        # перезагрузки. Флаги ищем во всей строке аргументов, не в $2 и $3.
-        _pf=" $* "
-        case "$_pf" in
-          *" --service "*) ;;
-          *) : > "$PLUMB_DOWN" 2>/dev/null || true ;;
-        esac
-        nft delete table inet $TABLE 2>/dev/null || true
-        route_down
-        # --keep-dns ставит рестарт службы, где следом идёт подъём: dnsmasq
-        # вниз и обратно -- два окна по 9 с без DNS. Если движок не встанет,
-        # plumb on сам зовёт dns_down. Отключить руками: byway plumb off
-        case "$_pf" in
-          *" --keep-dns "*) dns_flush ;;
-          *) dns_down ;;
-        esac
-        # Запрет снимается вместе с обвязкой (иначе `plumb off` выглядел бы
-        # поломкой интернета), кроме --keep-block: при мёртвом движке сторож
-        # снимает обвязку, а запрет снимет ветка «движок вернулся». Флаг, а не
-        # --service: после остановки службы запертый дом оставлять нельзя.
-        case "$_pf" in
-          *" --keep-block "*) ;;
-          *) block_off ;;
-        esac
-        rm -rf "$_plock" 2>/dev/null || true
-        case "$_pf" in
-          *" --keep-dns "*) say "перехват снят, резолвер оставлен на месте" ;;
-          *)                say "перехват снят, dnsmasq возвращён" ;;
-        esac
-        ;;
-      close)
-        # Закрыть, не поднимая обвязку (start_service при on_failure=closed).
-        # Иначе после перезагрузки запрет встаёт лишь после ожидания движка (до
-        # 15 с трижды), а dnsmasq уже отдаёт настоящие адреса: утечка ровно в
-        # момент, ради которого запрет и включают.
-        block_on
-        ;;
-      *) die "byway plumb on|off|close" ;;
-    esac
+    trap '[ -n "$_ppid" ] && kill "$_ppid" 2>/dev/null; rm -rf "$_plock" 2>/dev/null; exit 143' INT TERM
+    # Простой командой, не через plumb_env: фоном функция идёт подоболочкой,
+    # $! -- её номер, и kill оставлял ucode доделывать подъём.
+    bw_uc_prep
+    BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR \
+    BW_BADLIST=$BADLIST BW_PKGFIX=$PKG_FIX BW_VERSION=$BYWAY_VERSION BW_LANG=$BW_LANG \
+        ucode -S "$BW_UCF" plumb "$@" &
+    _ppid=$!
+    _prc=0
+    wait "$_ppid" || _prc=$?
+    _ppid=""
+    rm -rf "$_plock" 2>/dev/null || true
+    return "$_prc"
 }
 
-# Шаг plumb on: правило firewall byway-tproxy сверяется с меткой (нет --
-# заводится).
-plumb_fwrule() {
-        # Правило с меткой пишет установщик один раз, а метка настраивается:
-        # после смены зона с input REJECT (гостевая) перестаёт пропускать
-        # помеченный трафик, а doctor считает правила, не значение. Сверка --
-        # до укладки своей таблицы: перезагрузка firewall сносит ruleset
-        # целиком.
-        _fwm=$(eff_mark)
-        _fwr=$(uci -q get firewall.bywaytproxy.mark 2>/dev/null || true)
-        # Правила нет (удалили, сброс firewall) -- заводим как установщик: без
-        # него гостевая зона теряет туннель.
-        if [ -z "$(uci -q get firewall.bywaytproxy 2>/dev/null)" ]; then
-            uci -q set firewall.bywaytproxy=rule
-            uci -q set firewall.bywaytproxy.name='byway-tproxy'
-            uci -q set firewall.bywaytproxy.src='*'
-            uci -q set firewall.bywaytproxy.proto='all'
-            uci -q set firewall.bywaytproxy.mark="$_fwm/$_fwm"
-            uci -q set firewall.bywaytproxy.target='ACCEPT'
-            uci commit firewall
-            /etc/init.d/firewall reload >/dev/null 2>&1 || true
-            say "правила firewall для помеченного трафика не было — заведено заново"
-            _fwr="$_fwm/$_fwm"
-        fi
-        if [ -n "$_fwr" ] && [ "$_fwr" != "$_fwm/$_fwm" ]; then
-            sayf "метка сменилась (%s -> %s) — правило firewall переписывается" \
-                 "$_fwr" "$_fwm/$_fwm"
-            uci -q set firewall.bywaytproxy.mark="$_fwm/$_fwm"
-            uci commit firewall
-            /etc/init.d/firewall reload >/dev/null 2>&1 || true
-        fi
-    return 0
-}
+# Снять запрет (сторож: служба выключена).
+block_off() { plumb_env bw_uc plumb unblock; }
 
-# Шаг plumb on: ждёт, пока Xray ответит на DNS-входе (до 15 с); _i=15 -- отказ.
-plumb_wait() {
-        # Xray должен отвечать до любой правки: dns_up уводит весь резолв на
-        # его вход с noresolv, и при мёртвом Xray дом остался бы без DNS.
-        _l=$(dns_addr)
-        # Проба -- домен из объединённого списка: FakeDNS отвечает локально,
-        # без WAN, так что меряется Xray, а не канал. Посторонний домен не
-        # годился: его нет в fakedns ни в одном режиме.
-        _probe=$(plain_domains "$(merged_domains)" | head -1)
-        _i=0
-        _gone=0
-        while [ $_i -lt 15 ]; do
-            if [ -n "$_probe" ]; then
-                nslookup "$_probe" "$_l" 2>/dev/null | awk '/^Address/{print $NF}' |
-                    grep -qE "^$(fakeip_re)" && break
-            else
-                # Списка нет -- достаточно, что резолвер отвечает.
-                nslookup example.com "$_l" >/dev/null 2>&1 && break
-            fi
-            # Процесса движка нет пять проб подряд -- он падает при старте,
-            # досиживать срок незачем: на рестарте дом без DNS, пока движок не
-            # ответит. Пять, а не один: на холодной загрузке procd поднимает
-            # движок не сразу.
-            if [ -z "$(xray_pid)" ]; then
-                _gone=$((_gone + 1))
-                if [ "$_gone" -ge 5 ]; then
-                    warn "движок не запущен — перехват не включён, ожидание прервано"
-                    _i=15
-                    break
-                fi
-            else
-                _gone=0
-            fi
-            _i=$((_i + 1)); sleep 1
-        done
-    return 0
-}
+cmd_nft() { plumb_env bw_uc nft; }
+
+# Слепок обвязки для init-скрипта (reload сверяет его).
+cmd_nftsig() { plumb_env bw_uc nftsig; }
 
 # Сторож из cron (cmd_watch): возврат ядра, починка перехвата, обновление
 # списков и byway по расписанию, журнал состояния.
@@ -4208,7 +3104,12 @@ function _f(fmt, ...args) { return _pf(_t(fmt), args); }
 let PLAIN = false;
 function _mark(c, m) { return PLAIN ? m + ' ' : '\x1b[1;' + c + 'm' + m + '\x1b[0m '; }
 function _say(s)   { print(_mark(32, '[*]'), s, '\n'); }
-function _warn(s)  { print(_mark(33, '[!]'), s, '\n'); }
+// WARN_ERR -- жалобы в stderr (byway nft: вывод идёт прямо в `nft -f`).
+let WARN_ERR = null;
+function _warn(s)  {
+	if (WARN_ERR) WARN_ERR.write(_mark(33, '[!]') + s + '\n');
+	else print(_mark(33, '[!]'), s, '\n');
+}
 function die_raw(s) { print(_mark(31, '[x]'), s, '\n'); exit(1); }
 
 function say(s)  { _say(_t(s)); }
@@ -7445,6 +6346,952 @@ function cmd_report() {
 	}
 }
 
+// Перехват (бывшие plumb/*.sh): таблица nft, маршрут и ip rule, dnsmasq на
+// DNS-вход Xray, запрет «не пускать мимо VPN». Замок и снятие по сигналу --
+// у shell (plumb/plumb.sh): ucode сигналов не ловит.
+//
+// Внешние программы (nft, ip, uci, dnsmasq) -- теми же командами, что прежде:
+// правка UCI dhcp и firewall -- через uci, не курсором. Дельта dhcp остаётся
+// некоммиченной, как от `uci set`, и курсор 22.03 с save() по имени пакета
+// молча не пишет (см. uc/transfer.uc).
+
+const PL_TABLE = 'byway';
+const PL_BTABLE = 'byway_block';
+// Номер таблицы не больше 255: busybox ip на 1602 отвечает 'invalid argument
+// to table ID' (2026-09-03).
+const PL_RT = '100';
+// Отметка «маршрут завёл byway», в памяти: маршрут перезагрузку не переживает.
+const PL_RT_MINE = '/tmp/byway-route-mine';
+const PL_RT_MINE6 = '/tmp/byway-route-mine6';
+const PL_BLOCK = '/tmp/byway-blocked';
+const PL_DOWN = '/tmp/byway-plumb-down';
+const PL_DNSSEC = 'dhcp.@dnsmasq[0]';
+// NXDOMAIN на use-application-dns.net выключает DoH у Firefox (иначе он идёт
+// мимо byway); `server=/имя/` без адреса даёт NXDOMAIN.
+const PL_CANARY = '/use-application-dns.net/';
+// Набор правил -- файлом в /var/run (root 755), не в общем /tmp: проверка и
+// укладка читают один и тот же файл, занять имя чужой не может.
+const PL_NFT = '/var/run/byway.nft';
+const PL_BNFT = '/var/run/byway-block.nft';
+
+// Приватное и зарезервированное. 198.18.0.0/15 (пул fakeip) сюда не входит:
+// общий return съел бы пул. Список тот же, что в g_pool_sane и в правиле
+// блокировки движка: править вместе.
+const PL_RESERVED = '0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 224.0.0.0/4, 240.0.0.0/4';
+// fc00::/7 входит, хотя пул v6 внутри него: правило пула стоит в цепочке
+// выше. Без него в режиме «всё через VPN» домашний NAS на fd00:: ушёл бы в
+// туннель.
+const PL_RESERVED6 = '::1/128, ::/128, ::ffff:0:0/96, fe80::/10, ff00::/8, fc00::/7';
+// Умолчание -- константа Xray (fakedns.go, FakeIPv6Pool).
+const PL_POOL6_DEF = 'fc00::/18';
+
+const PL_HEX = '0123456789abcdefABCDEF';
+
+// ── общее ─────────────────────────────────────────────────────────────────
+function pl_where() { return _t('правил nft'); }
+
+// Заворот IPv6 выключен по умолчанию (как у passwall, OpenClash).
+function pl_v6on() { return u('ipv6') == '1'; }
+
+// Адрес DNS-входа с умолчанием: поле в панели можно очистить.
+function pl_dns_addr() { return u('dns_listen') || '127.0.0.42'; }
+
+// Строки вывода без последнего перевода строки; пустой вывод -- пусто.
+function pl_lines(s) {
+	s = rtrim(s ?? '', '\n');
+	return s === '' ? [] : split(s, '\n');
+}
+
+// Сообщение программы для строки предупреждения: две первые строки через
+// пробел (как `head -2 | tr '\n' ' '`).
+function pl_head2(s) {
+	let l = pl_lines(s);
+	return length(l) > 1 ? l[0] + ' ' + l[1] + ' ' : (l[0] ?? '');
+}
+
+function pl_uci_get(p) { return rtrim(run([ 'uci', '-q', 'get', p ]).out, '\n'); }
+function pl_quiet(argv) { return run(argv).code; }
+function pl_dns_restart() { run([ '/etc/init.d/dnsmasq', 'restart' ]); }
+function pl_has_table(t) { return run([ 'nft', 'list', 'table', 'inet', t ]).code == 0; }
+
+// Действующая метка (eff_mark): как печатает ip rule show -- строчными, без
+// ведущих нулей. loud -- жаловаться на негодную настройку.
+function pl_mark(loud) {
+	if (!loud) return st_mark();
+	let m = g_val_or('mark', u('mark'), /^0x[0-9a-fA-F]{1,8}$/, '0x100000', pl_where());
+	return sprintf('0x%x', hex(substr(m, 2)));
+}
+
+// Мосты (eff_ifs): имена через пробел.
+function pl_ifs(loud) {
+	let re = /^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$/, v = u('interface');
+	if (loud) return g_val_or('interface', v, re, 'br-lan', pl_where());
+	return (v === '' || match(v, /[\x01-\x1f\x7f]/) || !match(v, re)) ? 'br-lan' : v;
+}
+
+// "a", "b" для набора nft.
+function pl_iflist(ifs) { return join(', ', map(split(ifs, ' '), (i) => '"' + i + '"')); }
+
+// Число из строки, как арифметика оболочки: 0x -- шестнадцатеричное, ведущий
+// ноль -- восьмеричное; негодное -- null.
+function pl_num(s) {
+	if (substr(s, 0, 2) == '0x' || substr(s, 0, 2) == '0X') return hex(substr(s, 2));
+	if (length(s) > 1 && substr(s, 0, 1) == '0') {
+		if (ltrim(s, '01234567') !== '') return null;
+		let n = 0;
+		for (let i = 1; i < length(s); i++) n = n * 8 + int(substr(s, i, 1));
+		return n;
+	}
+	return int(s);
+}
+
+// Метка на исходящих сокетах движка (sockopt.mark), не та же, что у обвязки.
+// Цепочка output ловит по адресу назначения, а движок на том же хосте: пакет,
+// не восстановленный в домен, заворачивался бы обратно. Бит другой, чем у
+// mark: ip rule ловит по маске любую метку с ним. Итог -- { s: как в
+// настройке, n: числом }; quiet -- без жалоб (сборка конфига).
+// Прежде жалобы шли в тот же вывод, что и число, и попадали в набор nft:
+// ядро отвергало всю таблицу (стенд глушил warnf и этого не видел).
+function pl_self_mark(quiet) {
+	let s = u('self_mark'), re = /^(0[xX][0-9a-fA-F]{1,8}|[0-9]{1,10})$/;
+	if (quiet) {
+		if (s === '' || match(s, /[\x01-\x1f\x7f]/) || !match(s, re)) s = '0x400000';
+	} else {
+		s = g_val_or('self_mark', s, re, '0x400000', pl_where());
+	}
+	let n = pl_num(s);
+	if (n == null || n > 4294967295 || n <= 0) {
+		if (!quiet) warnf('self_mark %s не влезает в 32 бита -- взято умолчание 0x400000', s);
+		s = '0x400000';
+		n = 0x400000;
+	}
+	// Бит пересекается с mark: пакеты движка ушли бы в таблицу 100 на петлю,
+	// а все проверки зелёные (проба отвечает от локального fakedns).
+	let mk = pl_mark(false);
+	if (n & hex(substr(mk, 2))) {
+		s = '0x400000';
+		n = 0x400000;
+		if (n & hex(substr(mk, 2))) { s = '0x800000'; n = 0x800000; }
+		if (!quiet) warnf('self_mark пересекается битами с mark %s -- взято %s', mk, s);
+	}
+	return { s: s, n: n };
+}
+
+// bw_uc selfmark: метка числом для конфига движка (sockopt.mark).
+function cmd_selfmark() { print(pl_self_mark(true).n); }
+
+// Каталог добавок dnsmasq из его конфига: в имени хеш секции UCI
+// (/tmp/dnsmasq.cfg01411c.d), после сброса он другой.
+function pl_confdir() {
+	let o = getenv('BW_CONFDIR');
+	if (o != null) return o;
+	let fl = filter(fs.lsdir('/var/etc') ?? [], (f) => substr(f, 0, 13) == 'dnsmasq.conf.');
+	for (let f in sort(fl))
+		for (let l in pl_lines(fs.readfile('/var/etc/' + f))) {
+			if (substr(l, 0, 9) != 'conf-dir=') continue;
+			let d = split(substr(l, 9), ',')[0];
+			return (d !== '' && fs.stat(d)?.type == 'directory') ? d : '';
+		}
+	return '';
+}
+
+// pid движка (st_xray_pid); BW_EPID -- подставной для стенда правил.
+function pl_xray_pid() { return getenv('BW_EPID') ?? st_xray_pid(); }
+
+// Склейки списков (uc/merge.uc); BW_SUBNETS и BW_MERGED -- подставные для
+// стенда правил.
+function pl_subs() { return getenv('BW_SUBNETS') ?? mg_path('subnets'); }
+function pl_doms() { return getenv('BW_MERGED') ?? mg_path('domains'); }
+
+// ── наборы адресов ────────────────────────────────────────────────────────
+// Пробелы вырезаются целиком, и внутри строки: «1.2.3.4 /24» -- это
+// 1.2.3.4/24 (как gsub в прежнем awk).
+function pl_squeeze(l) {
+	if (index(l, ' ') >= 0 || index(l, '\t') >= 0 || index(l, '\r') >= 0 ||
+	    index(l, '\x0b') >= 0 || index(l, '\x0c') >= 0 || index(l, '\n') >= 0)
+		l = replace(l, /[ \t\r\n\x0b\x0c]/g, '');
+	return l;
+}
+
+// a.b.c.d или a.b.c.d/n с цифрами в каждой части (без проверки величины).
+function pl_v4_form(l) {
+	let s = index(l, '/'), a = s < 0 ? l : substr(l, 0, s);
+	if (s >= 0 && (substr(l, s + 1) === '' || !_only(substr(l, s + 1), '0123456789'))) return null;
+	let o = split(a, '.');
+	if (length(o) != 4) return null;
+	for (let x in o) if (x === '' || !_only(x, '0123456789')) return null;
+	return { o: o, p: s < 0 ? null : substr(l, s + 1) };
+}
+
+// IPv6 разбирается ЦЕЛИКОМ, а не «не больше восьми групп»: «2001:db8:»,
+// «1:::2» и пустая группа посреди адреса уходили в elements, и ядро
+// отвергало весь документ -- с ветками по доменам и по IPv4 (таблица inet
+// одна на оба семейства). Четвёртый аудит, заход 3.
+function pl_v6_ok(l) {
+	let s = index(l, '/'), e = s < 0 ? l : substr(l, 0, s);
+	if (s >= 0) {
+		// Пустая длина после «/» прежде проходила (ядро отвергало набор).
+		let p = substr(l, s + 1);
+		if (p === '' || !_only(p, '0123456789') || _numgt(p, 128)) return false;
+	}
+	if (e === '' || !_only(e, PL_HEX + ':') || index(e, ':') < 0) return false;
+	let c = 0, t = e, j;
+	while ((j = index(t, '::')) >= 0) { c++; t = substr(t, j + 2); }
+	if (c > 1) return false;
+	if (c == 1) {
+		let p = index(e, '::'), ng = 0;
+		for (let h in [ substr(e, 0, p), substr(e, p + 2) ]) {
+			if (h === '') continue;
+			let g = split(h, ':');
+			for (let x in g) if (x === '' || length(x) > 4) return false;
+			ng += length(g);
+		}
+		// «::» обязано сжимать хотя бы одну группу.
+		return ng <= 7;
+	}
+	let g = split(e, ':');
+	if (length(g) != 8) return false;
+	for (let x in g) if (x === '' || length(x) > 4) return false;
+	return true;
+}
+
+// Элементы наборов из файла списка: v4 и v6 через запятую; отвергнутое -- в
+// bad4/bad6 (это IPv6 -- не порча для v4, и наоборот). Пропускается только
+// адрес или сеть своего семейства: одна чужая строка отвергалась ядром
+// вместе со всем набором.
+function pl_elements(file) {
+	let r = { v4: [], v6: [], bad4: [], bad6: [] };
+	let f = fs.open(file, 'r'), l;
+	if (!f) return r;
+	while ((l = f.read('line')) != null && l !== '') {
+		l = pl_squeeze(l);
+		if (l === '' || substr(l, 0, 1) == '#' || substr(l, 0, 2) == '//') continue;
+		let f4 = pl_v4_form(l);
+		if (index(l, ':') < 0) {
+			let ok = f4 != null;
+			if (ok) {
+				for (let x in f4.o) if (_numgt(x, 255)) ok = false;
+				if (f4.p != null && _numgt(f4.p, 32)) ok = false;
+			}
+			push(ok ? r.v4 : r.bad4, l);
+		}
+		// Форма v4 -- не наша (её судит набор v4).
+		if (f4 == null) push(pl_v6_ok(l) ? r.v6 : r.bad6, l);
+	}
+	f.close();
+	return r;
+}
+
+// Отвергнутые строки -- в список отброшенных, byway называет их при сборке.
+function pl_bad(lines) {
+	let b = getenv('BW_BADLIST');
+	if (!b || !length(lines)) return;
+	let f = fs.open(b, 'a');
+	if (f) { f.write(join('\n', lines) + '\n'); f.close(); }
+}
+
+// ── набор правил перехвата ────────────────────────────────────────────────
+// Трафик доверенных мостов к пулу fakeip и подсетям списка уходит в
+// tproxy-вход Xray, остальное не трогается. Своя таблица, а не правила в fw4:
+// откат -- `nft delete table inet byway`, fw4 чужие таблицы не сносит.
+// `tproxy ip to :порт` без адреса: форма с 127.0.0.1 требует route_localnet=1.
+// Метка ставится через `or`: троттлинг метит трафик 0x2, присваивание затёрло
+// бы её; ip rule поэтому сверяет по маске.
+function pl_ruleset() {
+	let pool = st_pool(), mark = pl_mark(true);
+	let port = g_val_or('tproxy_port', u('tproxy_port'), /^[0-9]{1,5}$/, '1602', pl_where());
+	let ifl = pl_iflist(pl_ifs(true));
+	let el = pl_elements(pl_subs());
+	pl_bad(el.bad4);
+	pl_bad(el.bad6);
+	let nets = join(', ', el.v4), nets6 = join(', ', el.v6);
+	let pool6 = g_val_or('fakeip6_pool', u('fakeip6_pool'), /^[0-9a-fA-F:]+\/[0-9]{1,3}$/, PL_POOL6_DEF, pl_where());
+	let rport = g_redir_port(pl_where());
+	let v6 = pl_v6on(), all = u('list_mode') == 'all';
+	let tp4 = 'counter tproxy ip to :' + port + ' meta mark set meta mark or ' + mark + ' accept';
+	let tp6 = 'counter tproxy ip6 to :' + port + ' meta mark set meta mark or ' + mark + ' accept';
+	let sm = null;
+
+	// IPv6 -- в той же таблице inet. Пул fc00::/18 лежит внутри fc00::/7 (он в
+	// privnets6), поэтому правило пула выше отсечки приватного. Две отсечки по
+	// fib: глобального префикса роутера в privnets6 нет (выдаёт провайдер).
+	let v6sets = '', v6pre = '', v6catch = '', v6self = '';
+	if (v6) {
+		v6sets = '\n\tset fakeip6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\telements = { ' + pool6 + ' }\n\t}' +
+			'\n\tset privnets6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\telements = { ' + PL_RESERVED6 + ' }\n\t}' +
+			'\n\tset subnets6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\t' +
+			(nets6 !== '' ? 'elements = { ' + nets6 + ' }' : '') + '\n\t}';
+		v6pre = '\n\t\tip6 daddr @fakeip6 meta l4proto { tcp, udp } ' + tp6 +
+			'\n\t\tip6 daddr @fakeip6 counter drop' +
+			'\n\t\tip6 daddr @privnets6 return' +
+			'\n\t\tmeta nfproto ipv6 fib daddr . iif type { local, broadcast, multicast } return' +
+			'\n\t\tmeta nfproto ipv6 fib daddr oifname { ' + ifl + ' } return';
+		v6self = '\n\t\tip6 daddr @fakeip6 meta l4proto tcp counter redirect to :' + rport;
+	}
+
+	// Цепочка output (заворот трафика самого роутера) -- только при включённом
+	// redir. Заворачивается один пул, не подсети: в подсети можно вписать
+	// диапазон хостера, и движок завернул бы в себя своё же соединение к
+	// серверу. Приоритет -100 числом: имя dstnat nftables 1.0.2 здесь не
+	// понимает (22.03.7, 2026-09-07). Пропуск своего трафика движка -- первым.
+	let selfchain = '';
+	if (rport !== '') {
+		sm ??= pl_self_mark(false);
+		selfchain = '\n\tchain output {\n\t\ttype nat hook output priority -100; policy accept;' +
+			'\n\t\tmeta mark ' + sm.s + ' return' +
+			'\n\t\tip daddr @fakeip meta l4proto tcp counter redirect to :' + rport + v6self + '\n\t}';
+	}
+
+	// Свои адреса роутера движку закрыты (Д-3, 2026-10-04): гость через имя,
+	// разрешённое в публичный адрес WAN или глобальный v6, доходил до служб
+	// роутера на 0.0.0.0. Движок узнаём по uid процесса (не от root), иначе по
+	// self_mark (её ставит direct при router_via_vpn=1). Петля и порт 53 вне
+	// правила: Go-резолвер движка ходит на 127.0.0.1 за адресом сервера.
+	let eng = '', pid = pl_xray_pid();
+	let euid = pid !== '' ? match(fs.readfile('/proc/' + pid + '/status') ?? '', /\nUid:[ \t]+([0-9]+)/) : null;
+	if (euid && euid[1] != '0') eng = 'meta skuid ' + euid[1];
+	else if (u('router_via_vpn') == '1') { sm ??= pl_self_mark(false); eng = 'meta mark ' + sm.s; }
+	let localchain = '';
+	if (eng !== '')
+		localchain = '\n\tchain engine_local {\n\t\ttype filter hook output priority filter; policy accept;' +
+			'\n\t\t' + eng + ' ct state new meta nfproto ipv4 ip daddr != 127.0.0.0/8 meta l4proto { tcp, udp } th dport != 53 fib daddr type local counter reject' +
+			'\n\t\t' + eng + ' ct state new meta nfproto ipv6 ip6 daddr != ::1 meta l4proto { tcp, udp } th dport != 53 fib daddr type local counter reject\n\t}';
+
+	// Режим списков: пул и подсети. «Всё через VPN»: всё, что дошло сюда,
+	// -- приватное и адреса роутера отсечены выше. Семейство у tproxy явное.
+	let lcatch;
+	if (all) {
+		lcatch = 'meta nfproto ipv4 meta l4proto { tcp, udp } ' + tp4;
+		if (v6) v6catch = '\n\t\tmeta nfproto ipv6 meta l4proto { tcp, udp } ' + tp6;
+	} else {
+		lcatch = 'ip daddr @fakeip meta l4proto { tcp, udp } ' + tp4 +
+			'\n\t\tip daddr @subnets meta l4proto { tcp, udp } ' + tp4;
+		if (v6) v6catch = '\n\t\tip6 daddr @subnets6 meta l4proto { tcp, udp } ' + tp6;
+	}
+	// Не завернулось -- брось: tproxy без слушающего сокета (движок упал)
+	// пакет пропускает дальше, и тот уходил в WAN напрямую. Пул наружу не
+	// нужен никогда; подсети и «всё через VPN» -- только при «Не пускать».
+	let miss = '\n\t\tip daddr @fakeip counter drop';
+	if (u('on_failure') != 'open') {
+		if (all) {
+			miss += '\n\t\tmeta nfproto ipv4 meta l4proto { tcp, udp } counter drop';
+			if (v6) miss += '\n\t\tmeta nfproto ipv6 meta l4proto { tcp, udp } counter drop';
+		} else {
+			miss += '\n\t\tip daddr @subnets meta l4proto { tcp, udp } counter drop';
+			if (v6) miss += '\n\t\tip6 daddr @subnets6 meta l4proto { tcp, udp } counter drop';
+		}
+	}
+	// Redir-in при IPv6 слушает «::»: заворот приходит через lo (iif lo
+	// return), так что порт для остальных закрывается безусловно.
+	let rdrop = rport !== '' ? '\n\t\tmeta l4proto tcp th dport ' + rport + ' counter drop' : '';
+	// block_quic (пусто = включено): ключи поверх TCP везут UDP внутри TCP, и
+	// QUIC там висит молча (Discord 2026-10-01); reject переводит клиента на
+	// HTTP/2. В input по метке (в prerouting reject нельзя), только Initial
+	// QUIC v1/v2. Синтаксис принят nftables 1.0.2.
+	let quic = u('block_quic') != '0' ?
+		'\n\t\tmeta mark & ' + mark + ' == ' + mark + ' udp dport 443 @th,64,8 & 0xc0 == 0xc0 @th,72,32 { 0x00000001, 0x6b3343cf } counter reject' : '';
+
+	// Прелюдия table/delete: `nft -f` доливает в существующую таблицу (и
+	// `nft -c` давал «interval overlaps» на сужении пула); снятие и укладка --
+	// одна транзакция. `elements = {  }` -- синтаксическая ошибка, набор без
+	// элементов nft принимает. Имя набора -- privnets, НЕ reserved: у nftables
+	// 1.0.2 это ключевое слово, и таблица отвергается целиком (2026-09-07).
+	// Порядок prerouting: приватное и адреса роутера -- первым return (иначе
+	// пакет самому роутеру на порт tproxy получал метку, и гостевая зона с
+	// input REJECT переставала держать гостя), потом короткое замыкание по
+	// прозрачному сокету.
+	// Вход tproxy слушает 0.0.0.0 (tproxy не переписывает адрес назначения),
+	// и порт закрыт в input по dport: перехваченный трафик приходит туда с
+	// исходным портом назначения, правило бьёт только по прямым обращениям.
+	return 'table inet ' + PL_TABLE + '\ndelete table inet ' + PL_TABLE + '\ntable inet ' + PL_TABLE + ' {\n' +
+		'\tset fakeip {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\telements = { ' + pool + ' }\n\t}\n' +
+		'\tset privnets {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\telements = { ' + PL_RESERVED + ' }\n\t}\n' +
+		'\tset subnets {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\t' +
+		(nets !== '' ? 'elements = { ' + nets + ' }' : '') + '\n\t}' + v6sets + '\n' +
+		'\tchain prerouting {\n\t\ttype filter hook prerouting priority mangle; policy accept;\n' +
+		'\t\tiifname != { ' + ifl + ' } return\n' +
+		'\t\tip daddr @privnets return' + v6pre + '\n' +
+		'\t\tmeta l4proto { tcp, udp } socket transparent 1 meta mark set meta mark or ' + mark + ' accept\n' +
+		'\t\t' + lcatch + v6catch + miss + '\n\t}\n' +
+		'\tchain input {\n\t\ttype filter hook input priority filter - 10; policy accept;\n' +
+		'\t\tiif lo return' + quic + '\n' +
+		'\t\tmeta l4proto { tcp, udp } th dport ' + port + ' counter drop' + rdrop + '\n\t}\n' +
+		selfchain + localchain + '\n}\n';
+}
+
+// bw_uc nft: набор правил, не применяя (byway nft; стенд nft-check.sh).
+// Жалобы -- в stderr: вывод отдают прямо в `nft -f`.
+function cmd_nft() {
+	WARN_ERR = fs.stderr;
+	print(pl_ruleset());
+}
+
+// bw_uc nftsig: дешёвый слепок обвязки для init-скрипта -- входные данные
+// правил без сборки (суммы файлов подсетей). block_quic и on_failure живут
+// только в правилах nft: без них reload не видел смены.
+function cmd_nftsig() {
+	let f = [ getenv('BW_LISTS') + '/subnets.lst' ];
+	for (let p in split(trim(u('preset')), /[ \t\n]+/))
+		if (p !== '') push(f, getenv('BW_PRESETS') + '/' + p + '.sub');
+	print(join('|', map([ 'fakeip_pool', 'mark', 'tproxy_port', 'interface', 'list_mode', 'block_quic', 'on_failure' ], u)), '|');
+	print(run([ 'sh', '-c', 'md5sum "$@" 2>/dev/null | cut -d" " -f1 | md5sum | cut -d" " -f1', 'sh', ...f ]).out);
+}
+
+// ── маршрут ───────────────────────────────────────────────────────────────
+// Образец по fwmark и таблице, а не по «lookup 100»: чужой tproxy (openclash,
+// passwall, nikki) занимает ту же таблицу. Конец закреплён: «lookup 100»
+// совпадает и с «lookup 1000».
+function pl_rule_re(m) {
+	return regexp('fwmark ' + m + '(/' + m + ')?[[:space:]]+lookup ' + PL_RT + '([[:space:]]|$)');
+}
+function pl_has_rule(fam, re) {
+	for (let l in pl_lines(run([ 'ip', ...fam, 'rule', 'show' ]).out)) if (match(l, re)) return true;
+	return false;
+}
+
+// Отказ команды -- её сообщение вслух и ложь (прежде так обрывал set -e).
+function pl_try(argv) {
+	let r = run(argv, true);
+	if (r.code != 0 && r.out !== '') print(r.out);
+	return r.code == 0;
+}
+
+// ip rule: помеченное -- в локальную таблицу, иначе tproxy-сокет пакета не
+// увидит. Ложь -- маршрут не заведён.
+function pl_route_up() {
+	let rt = pl_lines(run([ 'ip', 'route', 'show', 'table', PL_RT ]).out);
+	// Чужие маршруты не трогаем, но говорим: наложение непредсказуемо.
+	if (length(filter(rt, (l) => substr(l, 0, 20) != 'local default dev lo')))
+		warnf('в таблице маршрутизации %s есть чужие маршруты -- byway их не трогает', PL_RT);
+	let m = pl_mark(false), re = pl_rule_re(m);
+	if (!pl_has_rule([], re) && !pl_try([ 'ip', 'rule', 'add', 'fwmark', m + '/' + m, 'lookup', PL_RT ])) return false;
+	// Отметка «маршрут наш»: формой от чужого не отличить.
+	if (!length(filter(rt, (l) => substr(l, 0, 13) == 'local default'))) {
+		if (!pl_try([ 'ip', 'route', 'add', 'local', 'default', 'dev', 'lo', 'table', PL_RT ])) return false;
+		fs.writefile(PL_RT_MINE, '');
+	}
+	if (pl_v6on()) {
+		if (!pl_has_rule([ '-6' ], re) && !pl_try([ 'ip', '-6', 'rule', 'add', 'fwmark', m + '/' + m, 'lookup', PL_RT ]))
+			return false;
+		// `list table all`, а не `show table N`: у busybox
+		// `ip -6 route show table 100` при существующем маршруте молчит (22.03.7,
+		// 2026-09-08).
+		let six = pl_lines(run([ 'ip', '-6', 'route', 'list', 'table', 'all' ]).out);
+		if (!length(filter(six, (l) => substr(l, 0, 27 + length(PL_RT)) == 'local default dev lo table ' + PL_RT))) {
+			if (!pl_try([ 'ip', '-6', 'route', 'add', 'local', '::/0', 'dev', 'lo', 'table', PL_RT ])) return false;
+			fs.writefile(PL_RT_MINE6, '');
+		}
+	}
+	return true;
+}
+
+function pl_route_down() {
+	let m = pl_mark(false), re = pl_rule_re(m);
+	while (pl_has_rule([], re))
+		if (pl_quiet([ 'ip', 'rule', 'del', 'fwmark', m + '/' + m, 'lookup', PL_RT ]) != 0) break;
+	// Убирается только свой маршрут (по отметке, не по форме): таблицу мог
+	// занять другой tproxy, и flush сломал бы соседа.
+	if (fs.stat(PL_RT_MINE)) {
+		pl_quiet([ 'ip', 'route', 'del', 'local', 'default', 'dev', 'lo', 'table', PL_RT ]);
+		fs.unlink(PL_RT_MINE);
+	} else if (length(filter(pl_lines(run([ 'ip', 'route', 'show', 'table', PL_RT ]).out),
+	                         (l) => substr(l, 0, 20) != 'local default dev lo'))) {
+		// Осиротевший `local default dev lo` без отметки безобиден (у установок
+		// до 0.1.4 отметки нет): говорим, только когда в таблице есть чужое.
+		warnf('маршрут в таблице %s оставлен: его завёл не byway', PL_RT);
+	}
+	// Без проверки ipv6: настройку могли выключить после подъёма.
+	while (pl_has_rule([ '-6' ], re))
+		if (pl_quiet([ 'ip', '-6', 'rule', 'del', 'fwmark', m + '/' + m, 'lookup', PL_RT ]) != 0) break;
+	if (fs.stat(PL_RT_MINE6)) {
+		pl_quiet([ 'ip', '-6', 'route', 'del', 'local', '::/0', 'dev', 'lo', 'table', PL_RT ]);
+		fs.unlink(PL_RT_MINE6);
+	}
+}
+
+// ── dnsmasq ───────────────────────────────────────────────────────────────
+// Резолвер уводится на DNS-вход Xray. noresolv обязателен: без него dnsmasq
+// шлёт запрос и провайдеру, и часть доменов получает настоящий адрес вместо
+// fakeip. Прежние значения -- в /etc/byway/dns-saved (в UCI -- запись во флеш
+// и procd-триггер на каждый цикл), откат их возвращает.
+function pl_dnssave() { return getenv('BW_LISTS') + '/dns-saved'; }
+
+function pl_save_read(k) {
+	let t = fs.readfile(pl_dnssave());
+	if (t == null) return '';
+	let l = pl_lines(t);
+	if (k == 'noresolv') return substr(l[0] ?? '', 0, 9) == 'noresolv=' ? substr(l[0], 9) : '';
+	let p = k + '=', r = [];
+	for (let x in l) if (substr(x, 0, length(p)) == p) push(r, substr(x, length(p)));
+	return join('\n', r);
+}
+
+function pl_words(s) { return filter(split(s, /[ \t\n]+/), (w) => w !== ''); }
+function pl_servers() { return pl_words(pl_uci_get(PL_DNSSEC + '.server')); }
+
+// На кого нацелен РАБОТАЮЩИЙ dnsmasq: 0 -- какой-то процесс с нашим адресом,
+// 1 -- конфиги прочитаны, адреса нет, 2 -- не знаю. Читается файл из `-C`
+// командной строки процесса (у ujail он после `--`), не UCI: наша дельта на
+// запущенный процесс не влияет. Лишний рестарт -- 9 с без DNS, пропущенный --
+// дом без DNS, поэтому на «не знаю» вызывающие рестартуют.
+function pl_live_ok(addr) {
+	let pids = pl_words(run([ 'pgrep', '-x', 'dnsmasq' ]).out), seen = false;
+	// Процессов нет -- «не знаю»: dnsmasq остановлен чужой рукой (LuCI держит
+	// его выключенным 9 с).
+	if (!length(pids)) return 2;
+	for (let p in pids) {
+		let a = split(fs.readfile('/proc/' + p + '/cmdline') ?? '', '\0'), cf = null;
+		for (let i = 0; i < length(a) - 1; i++) if (a[i] == '-C') { cf = a[i + 1]; break; }
+		let t = cf ? fs.readfile(cf) : null;
+		if (t == null) continue;
+		seen = true;
+		let l = pl_lines(t);
+		if (index(l, 'server=' + addr) >= 0 && index(l, 'no-resolv') >= 0) return 0;
+	}
+	return seen ? 1 : 2;
+}
+
+// HUP чистит кэш и перечитывает hosts, не роняя сокеты. Сброс после рестарта
+// движка обязателен: таблица fakedns живёт в памяти Xray.
+function pl_dns_flush() { pl_quiet([ 'killall', '-HUP', 'dnsmasq' ]); }
+
+// defer -- рестарт сделает следующий шаг (block_off снимает файл запрета).
+function pl_dns_up(defer) {
+	let l = pl_dns_addr(), sv = pl_dnssave();
+	if (!fs.stat(sv)) {
+		let nr = run([ 'uci', '-q', 'get', PL_DNSSEC + '.noresolv' ]);
+		let t = 'noresolv=' + (nr.code == 0 ? rtrim(nr.out, '\n') : '0') + '\n';
+		// Свой адрес в снимок не пишем, но только его: чужой резолвер на 127.*
+		// (https-dns-proxy, stubby) терялся бы навсегда.
+		for (let s in pl_servers()) if (s != l) t += 'server=' + s + '\n';
+		// Свой адрес -- отдельной строкой: по нему dns_down решает, наша ли
+		// правка (после смены dns_listen они расходятся).
+		fs.writefile(sv, t + 'listen=' + l + '\n');
+	}
+	// Доменные записи server=/дом/адрес остаются: раздельный резолв своей сети.
+	for (let s in pl_servers())
+		if (substr(s, 0, 1) != '/') pl_quiet([ 'uci', '-q', 'del_list', PL_DNSSEC + '.server=' + s ]);
+	pl_try([ 'uci', 'add_list', PL_DNSSEC + '.server=' + l ]);
+	let dnew = false;
+	if (index(pl_servers(), PL_CANARY) < 0) {
+		pl_try([ 'uci', 'add_list', PL_DNSSEC + '.server=' + PL_CANARY ]);
+		dnew = true;
+	}
+	pl_try([ 'uci', 'set', PL_DNSSEC + '.noresolv=1' ]);
+	// Не коммитим: дельта в /tmp/.uci умирает с tmpfs (закоммиченная правка
+	// переживала потерю питания при мёртвом Xray). «Сохранить» на странице DHCP
+	// в LuCI закоммитит и нашу дельту -- тогда `byway plumb off`. Новую строку
+	// server dnsmasq читает лишь при рестарте: после HUP канарейка не вставала
+	// (2026-10-02).
+	if (pl_live_ok(l) == 0 && !dnew) pl_dns_flush();
+	else if (!defer) pl_dns_restart();
+}
+
+function pl_dns_down() {
+	// revert снимает некоммиченную дельту без записи во флеш.
+	pl_quiet([ 'uci', '-q', 'revert', 'dhcp' ]);
+	// Дельту могли закоммитить со стороны -- тогда возвращаем явно. Свой
+	// адрес -- из снимка, не из настройки: после смены dns_listen они
+	// расходятся.
+	let ours = pl_save_read('listen');
+	if (ours === '') ours = pl_dns_addr();
+	let cur = pl_servers();
+	if (index(cur, ours) >= 0) {
+		pl_quiet([ 'uci', '-q', 'delete', PL_DNSSEC + '.server' ]);
+		let seen = [];
+		for (let s in pl_words(pl_save_read('server'))) {
+			if (index(seen, s) >= 0) continue;
+			push(seen, s);
+			pl_try([ 'uci', 'add_list', PL_DNSSEC + '.server=' + s ]);
+		}
+		// Доменные записи, появившиеся после снимка, возвращаем.
+		for (let s in cur) {
+			if (s == PL_CANARY || substr(s, 0, 1) != '/' || index(seen, s) >= 0) continue;
+			push(seen, s);
+			pl_try([ 'uci', 'add_list', PL_DNSSEC + '.server=' + s ]);
+		}
+		if (pl_save_read('noresolv') == '1') pl_try([ 'uci', 'set', PL_DNSSEC + '.noresolv=1' ]);
+		else pl_quiet([ 'uci', '-q', 'delete', PL_DNSSEC + '.noresolv' ]);
+		pl_try([ 'uci', 'commit', 'dhcp' ]);
+	}
+	fs.unlink(pl_dnssave());
+	// Резолвер не наш -- рестарт чистая потеря, кэш сбрасываем всё равно.
+	// «Не знаю» считаем нашим: пропущенный рестарт хуже лишнего.
+	if (pl_live_ok(ours) != 1) pl_dns_restart();
+	else pl_dns_flush();
+}
+
+// ── запрет «не пускать мимо VPN» ──────────────────────────────────────────
+// Закрытая модель (on_failure): без туннеля нет и доступа к списку. Домены --
+// через dnsmasq (address=/домен/ в его каталоге добавок): без движка резолвер
+// отдаёт настоящие адреса, по адресу домен не узнать. Подсети -- правилами nft.
+
+// Режим «всё через VPN» -- отдельным правилом, не выжимкой из списков (они в
+// нём пусты). К forward, не к output: движок должен достучаться до ноды, LuCI
+// и ssh идут через input. Цепочка `forward`, не `fwd`: fwd зарезервировано.
+function pl_block_all(ifl) {
+	return 'table inet ' + PL_BTABLE + '\ndelete table inet ' + PL_BTABLE + '\ntable inet ' + PL_BTABLE + ' {\n' +
+		'\tset privnets {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\telements = { ' + PL_RESERVED + ' }\n\t}\n' +
+		'\tchain forward {\n\t\ttype filter hook forward priority filter - 5; policy accept;\n' +
+		'\t\tiifname != { ' + ifl + ' } return\n\t\toifname { ' + ifl + ' } return\n' +
+		'\t\tip daddr @privnets return\n\t\tcounter reject\n\t}\n}\n';
+}
+
+// Подсети v4 и v6 (v6 -- только при заворачивании IPv6: иначе их трафик и не
+// перехватывается). Пусто -- закрывать подсети нечем.
+function pl_block_lists(ifl, nets, nets6) {
+	let sets = '', rules = '';
+	if (nets !== '') {
+		sets += '\n\tset blocked {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { ' + nets + ' }\n\t}';
+		rules += '\n\t\tip daddr @blocked counter reject';
+	}
+	if (nets6 !== '') {
+		sets += '\n\tset blocked6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { ' + nets6 + ' }\n\t}';
+		rules += '\n\t\tip6 daddr @blocked6 counter reject';
+	}
+	if (sets === '') return null;
+	return 'table inet ' + PL_BTABLE + '\ndelete table inet ' + PL_BTABLE + '\ntable inet ' + PL_BTABLE + ' {' + sets + '\n' +
+		'\tchain forward {\n\t\ttype filter hook forward priority filter - 5; policy accept;\n' +
+		'\t\tiifname != { ' + ifl + ' } return' + rules + '\n\t}\n}\n';
+}
+
+// Набор -- в файл и в ядро; итог -- сообщение ядра (пусто -- принято).
+function pl_nft_load(file, text) {
+	fs.unlink(file);
+	let f = fs.open(file, 'w', 0600);
+	if (!f) return _f('не записан %s', file);
+	f.write(text);
+	f.close();
+	let r = run([ 'nft', '-f', file ], true);
+	fs.unlink(file);
+	return r.code == 0 ? r.out : (r.out !== '' ? r.out : 'отказ без сообщения');
+}
+
+// Стоит ли запрет в ядре и в dnsmasq -- по списку частей, записанному при
+// укладке. Списка нет (запрет от прежней версии) -- верим файлу.
+function pl_block_intact() {
+	let p = fs.readfile(PL_BLOCK + '.parts');
+	if (p == null) return true;
+	for (let w in pl_words(p)) {
+		if (w == 'table' && !pl_has_table(PL_BTABLE)) return false;
+		if (w == 'conf') {
+			let d = pl_confdir();
+			if (d === '' || !fs.stat(d + '/byway-block.conf')) return false;
+		}
+	}
+	return true;
+}
+
+function pl_block_off() {
+	let d = pl_confdir();
+	if (d !== '' && fs.stat(d + '/byway-block.conf')) {
+		fs.unlink(d + '/byway-block.conf');
+		pl_dns_restart();
+	}
+	pl_quiet([ 'nft', 'delete', 'table', 'inet', PL_BTABLE ]);
+	for (let f in [ PL_BLOCK, PL_BLOCK + '.sig', PL_BLOCK + '.parts' ]) fs.unlink(f);
+}
+
+// Домены списка -- файлом для dnsmasq (address=/имя/ без адреса: NXDOMAIN на
+// любой тип; с 0.0.0.0 закрывалась лишь A). Формы Xray (`full:`, `domain:`)
+// -- снятыми: файл прошёл бы `--test`, но закрывал несуществующий домен.
+// Итог -- закрыто и всего записей; не записан -- null.
+function pl_block_conf(src, file) {
+	let n = 0, i = fs.open(src, 'r'), o = fs.open(file, 'w'), l;
+	if (!o) { if (i) i.close(); return null; }
+	if (i) {
+		while ((l = i.read('line')) != null && l !== '') {
+			l = lj_plain(l);
+			if (l != null) { o.write('address=/' + l + '/\n'); n++; }
+		}
+		i.close();
+	}
+	o.close();
+	return { n: n, all: lj_count(src) };
+}
+
+// Итог -- число закрытых доменов.
+function pl_block_dns() {
+	let d = pl_confdir();
+	if (d === '') {
+		warn('«не пускать мимо VPN»: не найден каталог конфигов dnsmasq — домены закрыть нечем');
+		return 0;
+	}
+	let bf = d + '/byway-block.conf', c = pl_block_conf(pl_doms(), bf + '.new');
+	if (c == null) return 0;
+	let n = c.n, all = c.all;
+	// keyword: и regexp: именем закрыть нельзя (dnsmasq сопоставляет
+	// суффиксом) -- говорим вслух.
+	if (all > n)
+		warnf('«не пускать мимо VPN»: %s записей списка нельзя закрыть по имени (keyword:, regexp: и подобные) — они останутся ОТКРЫТЫМИ', all - n);
+	// Синтаксис -- до подмены: битый файл не даст dnsmasq подняться.
+	if (pl_quiet([ 'cmp', '-s', bf + '.new', bf ]) == 0) {
+		fs.unlink(bf + '.new');
+	} else if (pl_quiet([ 'dnsmasq', '--test', '-C', bf + '.new' ]) == 0) {
+		fs.rename(bf + '.new', bf);
+		pl_dns_restart();
+	} else {
+		n = 0;
+		fs.unlink(bf + '.new');
+		warn('«не пускать мимо VPN»: dnsmasq не принял список — домены остались ОТКРЫТЫМИ');
+	}
+	return n;
+}
+
+function pl_block_on() {
+	// Открытая модель: запрет, оставшийся от закрытой, снимается здесь (Д-2,
+	// 2026-10-04).
+	if (u('on_failure') == 'open') {
+		if (fs.stat(PL_BLOCK)) pl_block_off();
+		return;
+	}
+	let ifs = pl_ifs(false), ifl = pl_iflist(ifs), all = u('list_mode') == 'all', v6 = pl_v6on();
+	let doms = pl_doms(), subs = pl_subs();
+	// Стоящий запрет пересобирается на месте, если сменились режим, сети, IPv6
+	// или списки. И стоит ли он в ядре: чужой `nft flush ruleset` снимал
+	// таблицу, а запрет по файлам в /tmp числился стоящим.
+	let mode = u('list_mode');
+	if (mode !== '') mode += '\n';
+	let sig = trim(run([ 'sh', '-c', '{ printf "%s" "$1"; cat "$2" "$3"; } 2>/dev/null | md5sum | cut -c1-32',
+	                     'sh', mode + ifs + '\n' + (v6 ? 'v6\n' : ''), doms, subs ]).out);
+	if (fs.stat(PL_BLOCK) && rtrim(fs.readfile(PL_BLOCK + '.sig') ?? '', '\n') == sig && pl_block_intact())
+		return;
+	fs.writefile(PL_BLOCK + '.sig', sig + '\n');
+
+	if (all) {
+		// Остаток режима списков (имена) здесь не нужен.
+		let d = pl_confdir();
+		if (d !== '' && fs.stat(d + '/byway-block.conf')) {
+			fs.unlink(d + '/byway-block.conf');
+			pl_dns_restart();
+		}
+		let e = pl_nft_load(PL_BNFT, pl_block_all(ifl));
+		if (e !== '') warnf('«не пускать мимо VPN»: ядро не приняло правило — %s', pl_head2(e));
+		if (pl_has_table(PL_BTABLE)) {
+			fs.writefile(PL_BLOCK, 'all\n');
+			fs.writefile(PL_BLOCK + '.parts', 'table\n');
+			// Не «весь трафик»: цепочка отсекает сети вне byway.main.interface.
+			warn('туннеля нет, и трафик перечисленных сетей мимо VPN закрыт: так велит настройка «не пускать мимо VPN». Сети вне byway.main.interface запрет не закрывает');
+		} else {
+			// Молчать нельзя: человек включил запрет и вправе знать, что его нет.
+			fs.writefile(PL_BLOCK, 'none\n');
+			fs.unlink(PL_BLOCK + '.parts');
+			warn('«не пускать мимо VPN»: ядро не приняло правило запрета — трафик идёт НАПРЯМУЮ');
+		}
+		return;
+	}
+	let ndom = pl_block_dns(), nnet = false;
+	let el = pl_elements(subs);
+	pl_bad(el.bad4);
+	if (v6) pl_bad(el.bad6);
+	let text = pl_block_lists(ifl, join(', ', el.v4), v6 ? join(', ', el.v6) : '');
+	if (text != null) {
+		let e = pl_nft_load(PL_BNFT, text);
+		if (e !== '') warnf('«не пускать мимо VPN»: подсети закрыть не вышло — %s', pl_head2(e));
+		nnet = pl_has_table(PL_BTABLE);
+	} else {
+		pl_quiet([ 'nft', 'delete', 'table', 'inet', PL_BTABLE ]);
+	}
+	// Строка про закрытый доступ -- только когда есть что закрывать.
+	if (ndom > 0 || nnet) {
+		fs.writefile(PL_BLOCK, 'lists\n');
+		fs.writefile(PL_BLOCK + '.parts', (ndom > 0 ? 'conf\n' : '') + (nnet ? 'table\n' : ''));
+		warnf('туннеля нет, и доступ к списку закрыт: доменов %s, подсети %s', ndom, nnet ? _t('да') : _t('нет'));
+	} else {
+		fs.writefile(PL_BLOCK, 'none\n');
+		fs.unlink(PL_BLOCK + '.parts');
+		warn('«не пускать мимо VPN» включено, но закрывать нечего: списки пусты — трафик идёт НАПРЯМУЮ');
+	}
+}
+
+// bw_uc nftblock [conf ФАЙЛ]: набор запрета, не применяя; conf -- файл
+// доменов для dnsmasq и число закрытых (стенд nft-check.sh).
+function cmd_nftblock(what, file) {
+	WARN_ERR = fs.stderr;
+	if (what == 'conf') { print(pl_block_conf(pl_doms(), file)?.n ?? 'null', '\n'); return; }
+	let ifl = pl_iflist(pl_ifs(false));
+	if (u('list_mode') == 'all') { print(pl_block_all(ifl)); return; }
+	let el = pl_elements(pl_subs());
+	print(pl_block_lists(ifl, join(', ', el.v4), pl_v6on() ? join(', ', el.v6) : '') ?? '');
+}
+
+// ── подъём ────────────────────────────────────────────────────────────────
+// После обновления прошивки модулей tproxy нет (прошивка с сохранением
+// настроек пакеты не переносит): ядро отвечает общим «не принято».
+function pl_mod_hint() {
+	let mods = fs.readfile('/proc/modules') ?? '';
+	for (let m in [ 'nft_tproxy', 'nft_socket' ]) {
+		if (substr(mods, 0, length(m) + 1) == m + ' ' || index(mods, '\n' + m + ' ') >= 0) continue;
+		// Встроенный в ядро модуль в /proc/modules не виден (П4).
+		if (fs.stat('/sys/module/' + m)?.type == 'directory') continue;
+		if (pl_quiet([ 'modprobe', m ]) == 0) continue;
+		warnf('нет модуля ядра %s — поставить: %s kmod-nft-tproxy kmod-nft-socket', m, getenv('BW_PKGFIX'));
+		return;
+	}
+}
+
+// Правило firewall byway-tproxy сверяется с меткой (нет -- заводится): после
+// смены метки зона с input REJECT (гостевая) перестаёт пропускать помеченный
+// трафик. Сверка -- до укладки своей таблицы: перезагрузка firewall сносит
+// ruleset целиком.
+function pl_fwrule() {
+	let m = pl_mark(false), mm = m + '/' + m, r = pl_uci_get('firewall.bywaytproxy.mark');
+	if (pl_uci_get('firewall.bywaytproxy') === '') {
+		for (let kv in [ '=rule', '.name=byway-tproxy', '.src=*', '.proto=all', '.mark=' + mm, '.target=ACCEPT' ])
+			pl_quiet([ 'uci', '-q', 'set', 'firewall.bywaytproxy' + kv ]);
+		pl_try([ 'uci', 'commit', 'firewall' ]);
+		pl_quiet([ '/etc/init.d/firewall', 'reload' ]);
+		say('правила firewall для помеченного трафика не было — заведено заново');
+		r = mm;
+	}
+	if (r !== '' && r != mm) {
+		sayf('метка сменилась (%s -> %s) — правило firewall переписывается', r, mm);
+		pl_quiet([ 'uci', '-q', 'set', 'firewall.bywaytproxy.mark=' + mm ]);
+		pl_try([ 'uci', 'commit', 'firewall' ]);
+		pl_quiet([ '/etc/init.d/firewall', 'reload' ]);
+	}
+}
+
+// Ждёт, пока Xray ответит на DNS-входе (до 15 с). Xray должен отвечать до
+// любой правки: dns_up уводит весь резолв на его вход с noresolv. Проба --
+// домен из склейки: FakeDNS отвечает локально, без WAN.
+function pl_wait(l) {
+	let probe = st_plain_first(pl_doms()), pool = st_pool(), gone = 0;
+	for (let i = 0; i < 15; i++) {
+		if (probe !== '') {
+			for (let x in pl_lines(run([ 'nslookup', probe, l ]).out)) {
+				if (substr(x, 0, 7) != 'Address') continue;
+				let w = pl_words(x);
+				if (st_in_pool(w[length(w) - 1], pool)) return true;
+			}
+		} else if (run([ 'nslookup', 'example.com', l ]).code == 0) {
+			// Списка нет -- достаточно, что резолвер отвечает.
+			return true;
+		}
+		// Процесса движка нет пять проб подряд -- он падает при старте. Пять, а
+		// не один: на холодной загрузке procd поднимает движок не сразу.
+		if (st_xray_pid() === '') {
+			if (++gone >= 5) {
+				warn('движок не запущен — перехват не включён, ожидание прервано');
+				return false;
+			}
+		} else {
+			gone = 0;
+		}
+		system([ 'sleep', '1' ]);
+	}
+	return false;
+}
+
+// Отказ подъёма: резолвер -- провайдеру, запрет -- по настройке. На пути stop
+// --keep-dns dnsmasq остаётся на нас, и без правил дом получал бы подставные
+// адреса без перехвата.
+function pl_fail() {
+	pl_dns_down();
+	pl_block_on();
+	return 1;
+}
+
+function pl_on() {
+	pl_fwrule();
+	// Метку «сняли намеренно» -- сразу: иначе неудачный подъём оставлял
+	// сторожа запертым.
+	fs.unlink(PL_DOWN);
+	let l = pl_dns_addr();
+	if (!pl_wait(l)) {
+		// Закрыть до сообщения: между ними страница ушла бы мимо туннеля.
+		pl_dns_down();
+		pl_block_on();
+		warnf('Xray-core не отвечает на %s:53 — перехват не включён, dnsmasq возвращён провайдеру', l);
+		return 1;
+	}
+	// Сначала -c, и только потом снос старой таблицы: опечатка в подсетях не
+	// должна оставить роутер без обвязки.
+	let rules = pl_ruleset();
+	fs.unlink(PL_NFT);
+	let f = fs.open(PL_NFT, 'w', 0600);
+	if (!f) { warnf('не записан %s', PL_NFT); return pl_fail(); }
+	f.write(rules);
+	f.close();
+	let c = run([ 'nft', '-c', '-f', PL_NFT ], true);
+	if (c.code != 0) {
+		print(c.out);
+		warn('правила не приняты ядром, перехват не включён');
+		pl_mod_hint();
+		fs.unlink(PL_NFT);
+		return pl_fail();
+	}
+	// Маршрут до правил: его отказ не должен оставлять таблицу nft (2026-09-03:
+	// правила легли, маршрута нет, подсети ушли в tproxy в никуда). Прежде
+	// отказ обрывал byway через set -e -- с резолвером на нас при живом
+	// сторожевом вызове; теперь как остальные отказы.
+	if (!pl_route_up()) {
+		warn('маршрут для помеченного трафика не заведён — перехват не включён');
+		pl_route_down();
+		fs.unlink(PL_NFT);
+		return pl_fail();
+	}
+	// Итог укладки читается: между проверкой и укладкой чужой процесс (fw4,
+	// hotplug) мог изменить таблицы.
+	let a = run([ 'nft', '-f', PL_NFT ], true);
+	fs.unlink(PL_NFT);
+	let e = a.code == 0 ? a.out : (a.out !== '' ? a.out : 'отказ без сообщения');
+	if (e !== '') {
+		warnf('правила не легли в ядро — %s', pl_head2(e));
+		pl_mod_hint();
+		// Маршрут снимаем: без правил он висел бы в таблице 100. Прежняя
+		// таблица (nft -f -- одна транзакция) осталась бы метить пакеты, а
+		// ехать им некуда -- сносим.
+		pl_route_down();
+		if (pl_has_table(PL_TABLE)) {
+			let d = run([ 'nft', 'delete', 'table', 'inet', PL_TABLE ], true);
+			if (d.out !== '') warnf('прежняя таблица не снялась — %s', rtrim(d.out, '\n'));
+		}
+		return pl_fail();
+	}
+	// Стоит запрет (файл в каталоге dnsmasq) -- его снимет block_off следующей
+	// строкой вместе с рестартом dnsmasq: один рестарт вместо двух.
+	let d = pl_confdir();
+	pl_dns_up(d !== '' && fs.stat(d + '/byway-block.conf') != null);
+	pl_block_off();
+	sayf('перехват включён: таблица inet %s, правило fwmark, dnsmasq -> %s', PL_TABLE, l);
+	return 0;
+}
+
+// Флаги -- во всей строке доводов: --service (метку «сняли руками» не
+// ставить: следующий старт мог провалиться, и сторож остался бы заперт),
+// --keep-dns (следом старт: dnsmasq вниз и обратно -- два окна по 9 с без
+// DNS), --keep-block (при мёртвом движке запрет снимет ветка «движок
+// вернулся»).
+function pl_off(flags) {
+	// Метка -- первым действием: dns_down рестартует dnsmasq (секунды), и
+	// сторож в это окно поднимал обвязку поверх незаконченного снятия.
+	if (index(flags, '--service') < 0) fs.writefile(PL_DOWN, '');
+	pl_quiet([ 'nft', 'delete', 'table', 'inet', PL_TABLE ]);
+	pl_route_down();
+	let kd = index(flags, '--keep-dns') >= 0;
+	if (kd) pl_dns_flush();
+	else pl_dns_down();
+	// Запрет снимается вместе с обвязкой (иначе `plumb off` выглядел бы
+	// поломкой интернета): после остановки службы запертый дом оставлять нельзя.
+	if (index(flags, '--keep-block') < 0) pl_block_off();
+	if (kd) say('перехват снят, резолвер оставлен на месте');
+	else say('перехват снят, dnsmasq возвращён');
+	return 0;
+}
+
+// bw_uc plumb on|off|close|unblock [флаги]. close -- закрыть, не поднимая
+// обвязку (старт службы при on_failure=closed: иначе после перезагрузки запрет
+// встаёт лишь после ожидания движка, а dnsmasq уже отдаёт настоящие адреса).
+// unblock -- снять запрет (сторож: служба выключена).
+function cmd_plumb(what, ...flags) {
+	if (what == 'on') exit(pl_on());
+	if (what == 'off') exit(pl_off(flags));
+	if (what == 'close') { pl_block_on(); return; }
+	if (what == 'unblock') { pl_block_off(); return; }
+	die('byway plumb on|off|close');
+}
+
 // Готовые наборы (presets) и подписка (бывшие lists/presets.sh и
 // lists/sub.sh). Пресеты никто не проверяет, кроме их авторов (itdoginfo
 // 2026-09-04: из 37 новых записей 4 уже в хостлисте zapret, 2 -- убранный
@@ -7970,6 +7817,11 @@ const CMDS = {
 	clear: cmd_clear,
 	gen: cmd_gen,
 	merged: cmd_merged,
+	plumb: cmd_plumb,
+	nft: cmd_nft,
+	nftsig: cmd_nftsig,
+	nftblock: cmd_nftblock,
+	selfmark: cmd_selfmark,
 };
 
 let _cmd = ARGV[0] ?? '';

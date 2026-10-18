@@ -30,6 +30,11 @@ const CMDS = {
 	clear: cmd_clear,
 	gen: cmd_gen,
 	merged: cmd_merged,
+	plumb: cmd_plumb,
+	nft: cmd_nft,
+	nftsig: cmd_nftsig,
+	nftblock: cmd_nftblock,
+	selfmark: cmd_selfmark,
 };
 
 let _cmd = ARGV[0] ?? '';

@@ -74,7 +74,12 @@ function _f(fmt, ...args) { return _pf(_t(fmt), args); }
 let PLAIN = false;
 function _mark(c, m) { return PLAIN ? m + ' ' : '\x1b[1;' + c + 'm' + m + '\x1b[0m '; }
 function _say(s)   { print(_mark(32, '[*]'), s, '\n'); }
-function _warn(s)  { print(_mark(33, '[!]'), s, '\n'); }
+// WARN_ERR -- жалобы в stderr (byway nft: вывод идёт прямо в `nft -f`).
+let WARN_ERR = null;
+function _warn(s)  {
+	if (WARN_ERR) WARN_ERR.write(_mark(33, '[!]') + s + '\n');
+	else print(_mark(33, '[!]'), s, '\n');
+}
 function die_raw(s) { print(_mark(31, '[x]'), s, '\n'); exit(1); }
 
 function say(s)  { _say(_t(s)); }
