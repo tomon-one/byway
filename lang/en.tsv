@@ -37,8 +37,6 @@ dns\tok\tотвечает\n	dns\tok\tanswers\n
 подключение не настроено\n	no connection is set up\n
 пока пусто\n	empty so far\n
 пусто\n	empty\n
-byway %s — раздельное туннелирование через VPN\n\n	byway %s — split tunnelling through a VPN\n\n
-Команды:	Commands:
 архитектура: %s	architecture: %s
 свободно на флеше: %s МБ	free flash space: %s MB
 модуль %s	module %s
@@ -57,7 +55,6 @@ byway %s — раздельное туннелирование через VPN\n\
 служба: %s     режим: %s	service: %s     mode: %s
 Русские сайты мимо VPN: %s	Russian sites bypass the VPN: %s
 Автозапуск: %s	Autostart: %s
-byway: неизвестная команда «%s». Список: byway\n	byway: unknown command "%s". For the list of commands: byway\n
 транспорт   %s / %s%s\n	transport   %s / %s%s\n
 ключ        %s\n	key         %s\n
 свой конфиг	custom config
@@ -75,10 +72,6 @@ byway: неизвестная команда «%s». Список: byway\n	byway
   Сейчас: \033[1m%s\033[0m\n\n	  Now: \033[1m%s\033[0m\n\n
   Через VPN пойдёт весь трафик, включая загрузки и обновления.\n	  All traffic will go through the VPN, downloads and updates included.\n
   доменов %s, подсетей %s\n\n	  %s domains, %s subnets\n\n
-\n  уже есть\n	\n  already there\n
-\n  добавлено\n	\n  added\n
-\n  убрано\n	\n  removed\n
-\n  такой записи нет\n	\n  no such entry\n
   Туннеля не станет, интернет продолжит работать напрямую.\n	  The tunnel will be gone, the internet keeps working directly.\n
 \n  остановлена\n	\n  stopped\n
 \n  автозапуск выключен\n	\n  autostart off\n
@@ -195,8 +188,6 @@ dnsmasq не направлен на byway	dnsmasq does not point at byway
 По спискам — через VPN только перечисленное	By lists — only what is listed goes through the VPN
 Всё через VPN	Everything through the VPN
 Показать домены	Show the domains
-Добавить домен	Add a domain
-Убрать домен	Remove a domain
 Обновить готовые списки	Update the ready-made lists
 Перезапустить	Restart
 Остановить	Stop
@@ -220,31 +211,18 @@ dnsmasq не направлен на byway	dnsmasq does not point at byway
 Выбор	Choice
 Ключ	Key
 Адрес подписки	Subscription address
-Домен	Domain
 Куда сохранить [/tmp/settings-byway.txt]	Where to save [/tmp/settings-byway.txt]
 Файл	File
 Включить?	Enable?
 Остановить?	Stop?
 Принять?	Import?
-те же действия пунктами меню, без набора команд	the same actions as a numbered menu, no commands to type
-что сейчас работает	what is working right now
 быстрая проверка: служба, VPN, трафик, DNS	quick check: service, VPN, traffic, DNS
-проверка окружения: модули, утилиты, место, конфликты	environment check: modules, tools, space, conflicts
 пересобрать конфиг из настроек и списков	rebuild the config from the settings and the lists
-включить или снять перехват трафика (nft, маршрут, DNS)	set up or remove traffic interception (nft, route, DNS)
 разобрать ключ и проверить конфиг, без соединений	parse a key and verify the config, no connections made
-проверить ключ отдельно, не трогая работающий туннель	test the key separately, without touching the running tunnel
-скачать подписку	download a subscription
 обновить готовые списки	update the ready-made lists
-чем реально пользуются	what is actually used
 принять настройки из выгрузки; --no-key — ключ не трогать	import settings from an export; --no-key — leave the key alone
 очистить журнал состояния, статистику или то и другое	clear the state log, the statistics, or both
 версия	version
-check [ссылка]	check [link]
-probe [ссылка|--all]	probe [link|--all]
-sub АДРЕС	sub ADDRESS
-export [файл] [--with-key]	export [file] [--with-key]
-import ФАЙЛ [--no-key]	import FILE [--no-key]
 рядом включён %s	%s is also enabled
 рядом РАБОТАЕТ %s	%s is RUNNING alongside byway
 %s установлен, но выключен	%s is installed but disabled
@@ -268,8 +246,6 @@ vpn\twarn\tсвой конфиг: адрес сервера неизвестен
   секреты убраны, но перед отправкой файл стоит просмотреть	  secrets are removed, but look the file over before sending it
 Собрать отчёт для обращения — без ключа, но с диагностикой	Build a report to ask for help — no key, but with diagnostics
 Куда сохранить [/tmp/report-byway.txt]	Where to save it [/tmp/report-byway.txt]
-собрать отчёт для обращения, без ключа от VPN	build a report to ask for help, without the VPN key
-report [файл]	report [file]
 снято	generated
 # ключ от VPN, адрес сервера и адрес подписки сюда НЕ попадают	# the VPN key, the server address and the subscription address are NOT included
 == устройство ==	== device ==
@@ -311,7 +287,6 @@ report [файл]	report [file]
 не распаковалось -- ничего не тронуто	unpacking failed -- nothing was touched
 в пакете нет install.sh -- ничего не тронуто	there is no install.sh in the package -- nothing was touched
 установка	installing
-проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же, --rollback — вернуть прежнюю, --no-verify — без проверки подписи	check whether a new byway version exists and install it; --check — only check, --force — reinstall the same one, --rollback — restore the previous one, --no-verify — skip the signature check
 GitHub не ответил -- похоже, нет связи	GitHub did not answer -- looks like there is no connection
 на GitHub нет ни репозитория %s, ни его выпусков	GitHub has neither the %s repository nor its releases
 GitHub ответил «слишком часто спрашиваете» -- подождать час	GitHub answered "too many requests" -- wait an hour
@@ -562,8 +537,6 @@ GitHub не ответил — номер свежей версии неизве
 движок: %s не поднялся, возвращён %s	engine: %s did not come up, %s restored
 движок: %s не встал, возвращён %s	engine: %s did not install, %s restored
 движок: НИ НОВОЕ, НИ ПРЕЖНЕЕ ядро не легло на флеш -- туннеля нет	engine: NEITHER the new NOR the previous engine fit on flash -- no tunnel
-есть ли обновление ядра Xray-core, и его замена; без аргумента — ещё и подробности	whether an Xray-core update exists, and the replacement; without an argument — details too
-engine [ВЕРСИЯ|tested|newest|stable|restore|/tmp/ФАЙЛ]	engine [VERSION|tested|newest|stable|restore|/tmp/FILE]
 конфига движка	the engine config
 правил nft	the nft rules
 вход tproxy	tproxy inbound
@@ -579,7 +552,6 @@ engine [ВЕРСИЯ|tested|newest|stable|restore|/tmp/ФАЙЛ]	engine [VERSION
 словарь не скачался — язык не переключён	the dictionary did not download — the language is not switched
 загрузка английского словаря панели	downloading the English panel dictionary
 словарь панели не скачался — язык не переключён	the panel dictionary did not download — the language is not switched
-язык вывода и панели; английский словарь докачивается при переключении	output and panel language; the English dictionary is downloaded when switching
 \nОбновления\n	\nUpdates\n
 проверка новых версий выключена	the new version check is off
 новее %s не найдено	nothing newer than %s found
@@ -631,7 +603,6 @@ flow=%s у trojan Xray-core не поддерживает — пропущен	X
 движок вернулся -- перехват поднят	the core is back -- interception is up
 движок вернулся -- перехват поднят, запрет «не пускать мимо VPN» снят	the core is back -- interception is up, the "no traffic outside the VPN" block is lifted
 движок вернулся, но перехват не поднялся -- запрет «не пускать мимо VPN» остаётся	the core is back, but interception did not come up -- the "no traffic outside the VPN" block stays
-выгрузить настройки без ключа от VPN; --with-key — с ключом	export the settings without the VPN key; --with-key — with the key
 ИМЯ	NAME
 служба не работает (выключена или нет ключа) — ядро заменено без проверки туннеля: Xray %s	the service is not running (disabled or no key) — the core was replaced without a tunnel check: Xray %s
 ядро на месте: Xray %s	the core is in place: Xray %s
@@ -767,14 +738,83 @@ byway возьмёт другое значение сам (его видно в 
     … и ещё %s (весь список: sort -u %s)	    ... and %s more (full list: sort -u %s)
 dns_route=%s не понят — DNS идёт напрямую; допустимо direct или tunnel	dns_route=%s is not understood -- DNS goes direct; use direct or tunnel
 движок не найден или не исполняемый: %s	the core is missing or not executable: %s
-собранный конфиг движка без секретов: счётчики и правила	the built core config without secrets: counters and rules
-напечатать набор правил nft, не применяя его	print the nft ruleset without applying it
 то же в фоне, ход в журнале (так зовёт панель)	the same in the background, progress in the log (how the panel calls it)
 часть byway на ucode не извлечена в /var/run	the ucode part of byway was not extracted to /var/run
-byway: неизвестная команда «%s». Список: byway	byway: unknown command "%s". For the list of commands: byway
 пул %s без длины маски -- взято умолчание	pool %s has no mask length -- falling back to the default
 черновик конфига %s не записан: %s	the config draft %s was not written: %s
 конфиг не перенесён на место: %s	the config was not moved into place: %s
 настройки не записаны в UCI: %s	settings were not written to UCI: %s
 смена портов «%s» не похожа на список портов и пропущена — соединение идёт на основной порт	the port hopping «%s» does not look like a list of ports and is skipped — connecting to the main port
 смена портов hysteria2 нужна Xray-core 26.9.30 или новее, а стоит %s — соединение идёт только на порт %s; обновить: byway engine tested	hysteria2 port hopping needs Xray-core 26.9.30 or newer, but %s is installed — connecting to port %s only; to update: byway engine tested
+byway: неизвестная команда «%s». Все команды: byway help\n	byway: unknown command «%s». All commands: byway help\n
+Связи с сервером VPN нет: ключ вставлен не целиком, устарел, или сервер выключен либо заблокирован. Проверить ключ: byway probe; если «НЕ РАБОТАЕТ», возьмите свежий ключ у сервиса VPN и впишите: byway key 'ССЫЛКА'.	No link to the VPN server: the key is incomplete or out of date, or the server is down or blocked. Check the key: byway probe; if it says DOES NOT WORK, get a fresh key from the VPN service and set it: byway key 'LINK'.
+Сервер отвечает, но трафик через него не идёт. Чаще всего ключ устарел или в нём ошибка: byway probe, при неудаче — новый ключ: byway key 'ССЫЛКА'.	The server answers, but traffic does not get through it. Most often the key is out of date or has a mistake: byway probe, and if it fails — a new key: byway key 'LINK'.
+нужна ссылка: byway key 'vless://…' — в одинарных кавычках, иначе оболочка обрежет её на знаке &	a link is needed: byway key 'vless://…' — in single quotes, otherwise the shell cuts it at the & sign
+ключ не задан — вписать: byway key 'ССЫЛКА'	no key set — set one: byway key 'LINK'
+ключ %s	key %s
+Связь с VPN	Link to the VPN
+Трафик через VPN	Traffic through the VPN
+Служба не запущена. Включить и запустить: byway on. Не помогло — byway doctor назовёт причину.	The service is not running. Enable and start it: byway on. If that does not help, byway doctor names the cause.
+Резолвер byway не отвечает, и сайты из списков не откроются. Перезапустить: /etc/init.d/byway restart; не помогло — byway doctor.	The byway resolver does not answer, and listed sites will not open. Restart: /etc/init.d/byway restart; if that does not help — byway doctor.
+нет данных	no data
+ — раздельное туннелирование через VPN\n\n	 — split tunnelling through a VPN\n\n
+  С чего начать:\n	  Getting started:\n
+  2. Добавить сайты, которые должны идти через VPN:\n       byway add youtube.com instagram.com\n	  2. Add the sites that should go through the VPN:\n       byway add youtube.com instagram.com\n
+  3. Проверить: byway health — все четыре строки зелёные.\n	  3. Check: byway health — all four lines green.\n
+  Подробно, по шагам: https://github.com/tomon-one/byway/blob/main/docs/beginner.md\n	  Step by step: https://github.com/tomon-one/byway/blob/main/docs/beginner.en.md\n
+Подключение: 	Connection: 
+byway выключен	byway is off
+ — включить: byway on	 — turn it on: byway on
+Частые команды	Common commands
+вписать ключ и применить	set the key and apply
+добавить сайты или подсети в свои списки	add sites or subnets to your lists
+проверить: служба, VPN, трафик, DNS	check: service, VPN, traffic, DNS
+всё то же пунктами меню	all the same as a menu
+  Все команды: byway help	  All commands: byway help
+ — раздельное туннелирование через VPN\n	 — split tunnelling through a VPN\n
+Подключение	Connecting
+вписать ключ (проверяется до записи) и применить; ссылку — в одинарных кавычках	set the key (checked before it is saved) and apply; the link goes in single quotes
+включить или выключить byway	turn byway on or off
+проверить ключ отдельно, не трогая работающий туннель; --all — все ключи	check a key separately, without touching the running tunnel; --all — every key
+скачать ключи из подписки	download keys from a subscription
+добавить в свои списки и применить; сразу несколько, через пробел; «-» — читать список со ввода до Ctrl+D	add to your lists and apply; several at once, space-separated; «-» — read a list from input until Ctrl+D
+убрать из своих списков и применить	remove from your lists and apply
+чем на самом деле пользуются	what is actually used
+Состояние	Status
+что сейчас работает, подробно	what is running now, in detail
+проверка окружения: что не так и как исправить	environment check: what is wrong and how to fix it
+отчёт для обращения, без ключа от VPN	a report for a support request, without the VPN key
+Обслуживание	Maintenance
+те же действия пунктами меню	the same actions as a menu
+новая версия byway: --check — только проверить, --force — переставить ту же, --rollback — вернуть прежнюю, --no-verify — без проверки подписи	a new byway version: --check — only check, --force — reinstall the same, --rollback — return to the previous one, --no-verify — without checking the signature
+ядро Xray-core: без довода — есть ли обновление и подробности, с доводом — замена	the Xray-core engine: without an argument — whether there is an update, and details; with one — replace it
+язык вывода и панели	language of the output and the panel
+выгрузить настройки; по умолчанию без ключа	export settings; without the key by default
+Для опытных	For experienced users
+собранный конфиг без секретов: счётчики и правила	the built config without secrets: counts and rules
+правила перехвата, не применяя их	the interception rules, without applying them
+включить или снять перехват (nft, маршрут, DNS)	set up or remove interception (nft, route, DNS)
+не применилось	not applied
+ — работает прежняя настройка	 — the previous settings are in effect
+собрано, но byway выключен	built, but byway is off
+применено	applied
+ключ не принят — настройки не изменены	key rejected — settings not changed
+ключ записан, способ подключения — один ключ	key saved, connection mode — one key
+byway включён — ядро поднимается до 15 секунд; проверить: byway health	byway is on — the core takes up to 15 seconds to start; check: byway health
+byway выключен: интернет идёт напрямую, без VPN; включить: byway on	byway is off: the internet goes direct, without the VPN; turn it on: byway on
+что добавить: byway add youtube.com instagram.com 91.108.4.0/22; список со ввода: byway add -	what to add: byway add youtube.com instagram.com 91.108.4.0/22; a list from input: byway add -
+не похоже ни на сайт, ни на подсеть: %s	looks like neither a site nor a subnet: %s
+уже есть: %s	already there: %s
+  (подсеть)	  (subnet)
+  добавлять нечего\n	  nothing to add\n
+добавлено: %s	added: %s
+что убрать: byway del example.com 91.108.4.0/22	what to remove: byway del example.com 91.108.4.0/22
+нет в своих списках: %s	not in your lists: %s
+  убирать нечего\n	  nothing to remove\n
+убрано: %s	removed: %s
+byway: неизвестная команда «%s». Все команды: byway help	byway: unknown command «%s». All commands: byway help
+  1. Вписать ключ — ссылку от сервиса VPN, в одинарных кавычках:\n	  1. Set the key — the link from your VPN service, in single quotes:\n
+Добавить сайты или подсети	Add sites or subnets
+Убрать из своих списков	Remove from your lists
+Сайты или подсети через пробел	Sites or subnets, space-separated
+Что убрать (через пробел)	What to remove (space-separated)

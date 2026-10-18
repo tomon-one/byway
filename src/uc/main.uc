@@ -41,9 +41,16 @@ const CMDS = {
 	'engine-ram': cmd_engine_ram,
 	menu: cmd_menu,
 	pulse: cmd_pulse,
+	home: cmd_home,
+	help: cmd_help,
+	hfmt: cmd_hfmt,
+	key: cmd_key,
+	onoff: function (on) { cmd_onoff(on == '1'); },
+	add: cmd_add,
+	del: cmd_del,
 };
 
 let _cmd = ARGV[0] ?? '';
 if (CMDS[_cmd] == null)
-	dief('byway: неизвестная команда «%s». Список: byway', _cmd);
+	dief('byway: неизвестная команда «%s». Все команды: byway help', _cmd);
 CMDS[_cmd](...slice(ARGV, 1));

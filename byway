@@ -320,7 +320,9 @@ cmd_probe() {
               [ ! -f "$_pf" ] || : > "$_pf"
           done' EXIT INT TERM
     pr_env
-    BW_SELFMARK=$PR_MARK bw_uc probe "$@"
+    # BW_TTY -- в терминале таблица короче и цветом; панель читает прежний вид.
+    _ptty=""; [ -t 1 ] && _ptty=1
+    BW_TTY=$_ptty BW_SELFMARK=$PR_MARK bw_uc probe "$@"
 }
 
 # Показ собранного конфига без секретов -- в ucode (uc/probe.uc, cmd_show);
@@ -498,8 +500,14 @@ cmd_status() {
 # byway health: служба, VPN, трафик, DNS строками «ключ<таб>состояние<таб>
 # подробность» -- в ucode (uc/status.uc, cmd_health).
 
+# В терминале -- для человека (точки цветом и что делать, uc/cli.uc); не в
+# терминал (панель, скрипты) -- прежние строки «проверка<TAB>состояние<TAB>пояснение».
 cmd_health() {
-    BW_OUT=$OUT BW_PROBE=$PROBE_DOMAIN bw_uc health
+    if [ -t 1 ]; then
+        BW_OUT=$OUT BW_PROBE=$PROBE_DOMAIN bw_uc health | cli_uc hfmt
+    else
+        BW_OUT=$OUT BW_PROBE=$PROBE_DOMAIN bw_uc health
+    fi
 }
 
 # byway doctor и report -- в ucode (uc/doctor.uc). Здесь пути и номера,
@@ -797,20 +805,14 @@ cmd_menu() {
     BW_BADLIST=$BADLIST bw_uc menu
 }
 
-# Справка и разбор команды.
+# Разбор команды.
 
-# Длина строки в знаках, а не байтах: русская подпись иначе сдвигала колонку.
-# Снята в Ф7 как мёртвая по ошибке -- её зовёт _help (byway без доводов падал).
-_len() {
-    _lb=$(printf '%s' "$1" | wc -c)
-    _lc=$(printf '%s' "$1" | tr -dc '\200-\277' | wc -c)
-    echo $((_lb - _lc))
-}
-
-_help() {
-    _hc=$(_t "$1")
-    _hp=$((18 - $(_len "$_hc"))); [ "$_hp" -lt 1 ] && _hp=1
-    printf '  %s%s%s\n' "$_hc" "$(printf "%${_hp}s" '')" "$(_t "$2")"
+# Команды для человека (сводка, справка, ключ, списки) -- в ucode (uc/cli.uc);
+# самого byway они зовут как отдельный процесс (BW_SELF).
+cli_uc() {
+    BW_SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0") \
+    BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR \
+    BW_BADLIST=$BADLIST bw_uc "$@"
 }
 
 # Потолок журнала обращений. Без него потеря cron-задач растит журнал в
@@ -851,38 +853,15 @@ case "${1:-}" in
   nftsig) cmd_nftsig ;;
   plumb)  shift; cmd_plumb "$@" ;;
   status) cmd_status "${2:-}" ;;
-  ""|help|--help|-h)
-    # Без аргументов -- состояние и список команд.
-    printf "$(_t 'byway %s — раздельное туннелирование через VPN\n\n')" "$BYWAY_VERSION"
-    cmd_status 2>/dev/null || true
-    # Построчно, не одним heredoc: перевод ищется по строке целиком.
-    printf '
-%s
-' "$(_t 'Команды:')"
-    _help 'menu' 'те же действия пунктами меню, без набора команд'
-    _help 'status [--short]' 'что сейчас работает'
-    _help 'health' 'быстрая проверка: служба, VPN, трафик, DNS'
-    _help 'doctor' 'проверка окружения: модули, утилиты, место, конфликты'
-    _help 'gen' 'пересобрать конфиг из настроек и списков'
-    _help 'show' 'собранный конфиг движка без секретов: счётчики и правила'
-    _help 'nft' 'напечатать набор правил nft, не применяя его'
-    _help 'plumb on | off' 'включить или снять перехват трафика (nft, маршрут, DNS)'
-    _help 'check [ссылка]' 'разобрать ключ и проверить конфиг, без соединений'
-    _help 'probe [ссылка|--all]' 'проверить ключ отдельно, не трогая работающий туннель'
-    _help 'sub АДРЕС' 'скачать подписку'
-    _help 'presets' 'обновить готовые списки'
-    _help 'top [N]' 'чем реально пользуются'
-    _help 'update [--check|--force|--rollback|--no-verify]' 'проверить, есть ли новая версия byway, и поставить её; --check — только проверить, --force — переустановить ту же, --rollback — вернуть прежнюю, --no-verify — без проверки подписи'
-    _help 'engine [ВЕРСИЯ|tested|newest|stable|restore|/tmp/ФАЙЛ]' 'есть ли обновление ядра Xray-core, и его замена; без аргумента — ещё и подробности'
-    _help 'lang [ru|en]' 'язык вывода и панели; английский словарь докачивается при переключении'
-    _help 'report [файл]' 'собрать отчёт для обращения, без ключа от VPN'
-    _help 'export [файл] [--with-key]' 'выгрузить настройки без ключа от VPN; --with-key — с ключом'
-    _help 'import ФАЙЛ [--no-key]' 'принять настройки из выгрузки; --no-key — ключ не трогать'
-    _help 'job update|engine|probe|log' 'то же в фоне, ход в журнале (так зовёт панель)'
-    _help 'clear log|stat|all' 'очистить журнал состояния, статистику или то и другое'
-    _help 'version' 'версия'
-    ;;
-  *)     printf "$(_f 'byway: неизвестная команда «%s». Список: byway\n' "$1")"; exit 1 ;;
+  key)    shift; cli_uc key "$@" ;;
+  on)     cli_uc onoff 1 ;;
+  off)    cli_uc onoff ;;
+  add)    shift; cli_uc add "$@" ;;
+  del)    shift; cli_uc del "$@" ;;
+  # Без доводов -- сводка как «Основное» в панели; help -- все команды.
+  "")     cli_uc home ;;
+  help|--help|-h) cli_uc help ;;
+  *)     printf "$(_f 'byway: неизвестная команда «%s». Все команды: byway help\n' "$1")"; exit 1 ;;
 esac
 
 exit $?
@@ -1004,6 +983,15 @@ function run(argv, err) {
 	let out = p.read('all') ?? '';
 	return { code: p.close(), out: out };
 }
+
+// ── колонки в терминале ───────────────────────────────────────────────────
+// Длина в знаках, а не байтах: русская подпись иначе сдвигала колонку.
+function c_len(s) {
+	let n = 0;
+	for (let i = 0; i < length(s); i++) if ((ord(s, i) & 0xC0) != 0x80) n++;
+	return n;
+}
+function c_pad(s, w) { let n = w - c_len(s); return n > 0 ? s + sprintf('%' + n + 's', '') : s; }
 
 // ── движок ─────────────────────────────────────────────────────────────────
 // Путь к Xray -- из UCI (xray_bin): рядом пакетный и свежий ручной, переключение
@@ -2993,7 +2981,11 @@ function cmd_check(url) {
 }
 
 // Одна проба: true -- связь через ноду состоялась.
-function pr_one(x, url, soft) {
+// В терминале (BW_TTY от shell) -- строка на ключ, цветом; панель читает
+// прежний вид: заголовок «[*] ключ N имя» и строка под ним.
+let PR_TTY = getenv('BW_TTY') == '1';
+
+function pr_one(x, url, soft, name) {
 	let k = pr_key(url, soft);
 	if (!k) return false;
 	let N = k.N;
@@ -3003,10 +2995,11 @@ function pr_one(x, url, soft) {
 		inbounds: [ { tag: 's', listen: '127.0.0.1', port: port, protocol: 'socks', settings: { udp: true } } ],
 		outbounds: [ k.block ],
 	});
-	print(sprintf('  %-12s %-22s ', N.TYPE + '/' + N.SEC, N.HOST + ':' + N.PORT));
+	if (PR_TTY && name != null) print('  ', c_pad(name, 18), ' ');
+	print(sprintf(PR_TTY ? '\033[2m%-12s %-22s\033[0m ' : '  %-12s %-22s ', N.TYPE + '/' + N.SEC, N.HOST + ':' + N.PORT));
 	let t = run([ x, 'run', '-test', '-c', PR_CFG ], true);
 	if (t.code != 0) {
-		print(_t('конфиг отвергнут ядром\n'));
+		print(PR_TTY ? '\033[1;31m' + rtrim(_t('конфиг отвергнут ядром\n'), '\n') + '\033[0m\n' : _t('конфиг отвергнут ядром\n'));
 		for (let l in pr_tail(t.out, 2)) print('      ', l, '\n');
 		g_xray_hint(t.out);
 		pr_clear([ PR_CFG ]);
@@ -3031,13 +3024,17 @@ function pr_one(x, url, soft) {
 	let code = sp < 0 ? R : substr(R, 0, sp), time = substr(R, rindex(R, ' ') + 1);
 	// Любой трёхзначный код -- связь состоялась (302, 403 Cloudflare).
 	let ok = match(code, /^[1-5][0-9][0-9]$/) != null;
-	if (ok) {
+	if (ok && PR_TTY) {
+		print('\033[1;32m', rtrim(_f('РАБОТАЕТ  выход %-16s %s с\n', ip, sprintf('%.2f', +time)), '\n'), '\033[0m\n');
+	} else if (ok) {
 		print(_f('РАБОТАЕТ  выход %-16s %s с\n', ip, time));
 	} else {
-		print(_f('НЕ РАБОТАЕТ (код %s)\n', code !== '' ? code : _t('нет ответа')));
+		let nw = _f('НЕ РАБОТАЕТ (код %s)\n', code !== '' ? code : _t('нет ответа'));
+		print(PR_TTY ? '\033[1;31m' + rtrim(nw, '\n') + '\033[0m\n' : nw);
 		let bad = [];
 		for (let l in split(fs.readfile(PR_LOG) ?? '', '\n'))
-			if (match(l, /fail|error|reject/i)) push(bad, l);
+			// Предупреждения Xray («WebSocket устарел») -- не причина отказа.
+			if (match(l, /fail|error|reject/i) && !match(l, /\[(Warning|Info|Debug)\]/)) push(bad, l);
 		for (let l in slice(bad, length(bad) > 2 ? length(bad) - 2 : 0)) print('      ', l, '\n');
 	}
 	pr_clear([ PR_CFG, PR_LOG, PR_OUT ]);
@@ -3055,10 +3052,20 @@ function cmd_probe(arg) {
 		let i = 0, okn = 0;
 		for (let k in keys) {
 			i++;
-			let h = rindex(k, '#');
+			let h = rindex(k, '#'), nm = h < 0 ? '' : pk_pctd(substr(k, h + 1));
+			if (PR_TTY) {
+				fs.stdout?.flush();
+				if (pr_one(x, k, true, nm !== '' ? nm : _f('ключ %s', i))) okn++;
+				continue;
+			}
 			print('\n');
-			sayf('ключ %s %s', i, h < 0 ? '' : pk_pctd(substr(k, h + 1)));
+			sayf('ключ %s %s', i, nm);
 			if (pr_one(x, k, true)) okn++;
+		}
+		if (PR_TTY) {
+			let col = okn == i ? '\033[1;32m' : (okn ? '\033[1;33m' : '\033[1;31m');
+			print('\n  ', col, _f('работают %s из %s', okn, i), '\033[0m\n');
+			return;
 		}
 		print('\n');
 		sayf('работают %s из %s', okn, i);
@@ -7331,7 +7338,7 @@ function m_mode() {
 }
 
 function m_lists() {
-	let own = getenv('BW_LISTS') + '/domains.lst', sl = getenv('BW_LISTS') + '/subnets.lst';
+	let sl = getenv('BW_LISTS') + '/subnets.lst';
 	while (true) {
 		// Объединённый список, не только свой: в режиме «всё через VPN» своего
 		// нет по построению. Пересобирается при каждом обращении: после
@@ -7340,8 +7347,8 @@ function m_lists() {
 		m_head('Списки');
 		printf(_t('  доменов %s, подсетей %s\n\n'), lj_count(dl), lj_count(sl));
 		m_item(1, 'Показать домены');
-		m_item(2, 'Добавить домен');
-		m_item(3, 'Убрать домен');
+		m_item(2, 'Добавить сайты или подсети');
+		m_item(3, 'Убрать из своих списков');
 		m_item(4, 'Обновить готовые списки');
 		m_line();
 		m_item(0, 'Назад');
@@ -7353,35 +7360,15 @@ function m_lists() {
 			m_pause();
 		} else if (r == '2') {
 			print('\n');
-			let d = m_ask('Домен');
-			if (d !== '') {
-				// Проверка -- по объединённому, запись -- в свой файл:
-				// объединённый пересобирается, и дописанное туда пропадало.
-				if (index(pl_lines(fs.readfile(dl)), d) >= 0) {
-					print(_t('\n  уже есть\n'));
-				} else {
-					let t = fs.readfile(own) ?? '';
-					if (t !== '' && substr(t, -1) != '\n') t += '\n';
-					fs.writefile(own, t + d + '\n');
-					print(_t('\n  добавлено\n'));
-					m_apply();
-				}
-			}
+			// Та же проверка и раскладка, что у byway add: сайт или подсеть,
+			// несколько через пробел, повторы мимо.
+			let d = m_ask('Сайты или подсети через пробел');
+			if (d !== '') { print('\n'); sys([ m_self(), 'add', d ]); }
 			m_pause();
 		} else if (r == '3') {
 			print('\n');
-			let d = m_ask('Домен');
-			if (d !== '') {
-				let l = split(fs.readfile(own) ?? '', '\n');
-				if (index(l, d) >= 0) {
-					fs.writefile(own + '.new', join('\n', filter(l, (x) => x != d)));
-					fs.rename(own + '.new', own);
-					print(_t('\n  убрано\n'));
-					m_apply();
-				} else {
-					print(_t('\n  такой записи нет\n'));
-				}
-			}
+			let d = m_ask('Что убрать (через пробел)');
+			if (d !== '') { print('\n'); sys([ m_self(), 'del', d ]); }
 			m_pause();
 		} else if (r == '4') {
 			print('\n');
@@ -7573,6 +7560,278 @@ function cmd_menu() {
 	}
 }
 
+// Консоль для человека (владелец 2026-10-18: «функционал cli и luci
+// одинаковый», «улучшили luci, осталось cli»): ключ, включение и списки --
+// одной командой, сводка на `byway` без доводов -- как «Основное» в панели,
+// список команд -- по группам.
+
+const C_OK = '\033[1;32m', C_WARN = '\033[1;33m', C_BAD = '\033[1;31m', C_DIM = '\033[2m', C_B = '\033[1m', C_0 = '\033[0m';
+
+
+// Строка «команда — описание» с переносом описания по словам.
+function c_help(cmd, txt) {
+	let W = 78, I = 24, line;
+	// Длинная команда -- своей строкой, описание под ней с отступом.
+	if (c_len(cmd) > I - 3) { print('  ', C_B, cmd, C_0, '\n'); line = sprintf('%' + I + 's', ''); }
+	else line = '  ' + C_B + cmd + C_0 + sprintf('%' + (I - 2 - c_len(cmd)) + 's', '');
+	let cur = I;
+	for (let w in split(txt, ' ')) {
+		if (cur > I && cur + 1 + c_len(w) > W) { print(line, '\n'); line = sprintf('%' + I + 's', ''); cur = I; }
+		line += (cur > I ? ' ' : '') + w;
+		cur += (cur > I ? 1 : 0) + c_len(w);
+	}
+	print(line, '\n');
+}
+function c_group(t) { print('\n', C_B, t, C_0, '\n'); }
+
+// Ключа нет -- по способу подключения, как в панели.
+// В режимах нескольких ключей byway работает и на одиночном ключе, если
+// список пуст: «нет ключа» -- только когда пусто и там, и там.
+function c_nokey() {
+	if ((u('conn_mode') || 'key') == 'outbound') return trim(u('outbound_json')) === '';
+	return trim(u('node_url')) === '' && trim(u('node_urls')) === '';
+}
+
+// ── проверка для человека ────────────────────────────────────────────────
+// Вход -- строки byway health «проверка<TAB>состояние<TAB>пояснение» (их
+// же разбирает панель); выход -- точки цветом и что делать.
+function c_checks() {
+	return [ [ 'service', _t('Служба') ], [ 'vpn', _t('Связь с VPN') ], [ 'tunnel', _t('Трафик через VPN') ], [ 'dns', 'DNS' ] ];
+}
+
+// Стрелка с захватом seen на ucode 22.03/23.05 роняла бы программу -- проверка
+// отдельной функцией.
+function c_fail(seen, k) { return seen[k] != null && seen[k].st == 'fail'; }
+function c_advice(seen) {
+	if (c_nokey()) return [];
+	if (c_fail(seen, 'service'))
+		return [ _t('Служба не запущена. Включить и запустить: byway on. Не помогло — byway doctor назовёт причину.') ];
+	let out = [];
+	if (c_fail(seen, 'vpn'))
+		push(out, _t("Связи с сервером VPN нет: ключ вставлен не целиком, устарел, или сервер выключен либо заблокирован. Проверить ключ: byway probe; если «НЕ РАБОТАЕТ», возьмите свежий ключ у сервиса VPN и впишите: byway key 'ССЫЛКА'."));
+	else if (c_fail(seen, 'tunnel'))
+		push(out, _t("Сервер отвечает, но трафик через него не идёт. Чаще всего ключ устарел или в нём ошибка: byway probe, при неудаче — новый ключ: byway key 'ССЫЛКА'."));
+	if (c_fail(seen, 'dns') && !length(out))
+		push(out, _t('Резолвер byway не отвечает, и сайты из списков не откроются. Перезапустить: /etc/init.d/byway restart; не помогло — byway doctor.'));
+	return out;
+}
+
+function c_health(text) {
+	let seen = {};
+	for (let l in split(text ?? '', '\n')) {
+		let p = split(l, '\t');
+		if (length(p) >= 3) seen[p[0]] = { st: p[1], note: p[2] };
+	}
+	for (let c in c_checks()) {
+		let v = seen[c[0]] ?? { st: 'warn', note: _t('нет данных') };
+		let col = v.st == 'ok' ? C_OK : (v.st == 'fail' ? C_BAD : C_WARN);
+		print('  ', col, '●', C_0, ' ', c_pad(c[1], 17), C_DIM, v.note, C_0, '\n');
+	}
+	for (let a in c_advice(seen)) print('\n  ', C_BAD, '! ', C_0, a, '\n');
+}
+
+// bw_uc hfmt: строки health со входа -- для человека (byway health в терминале).
+function cmd_hfmt() { c_health(fs.stdin.read('all')); }
+
+// ── byway без доводов ─────────────────────────────────────────────────────
+function cmd_home() {
+	print(C_B, 'byway ', getenv('BW_VERSION'), C_0, _t(' — раздельное туннелирование через VPN\n\n'));
+	if (c_nokey()) {
+		print(_t('  С чего начать:\n'));
+		print(_t('  1. Вписать ключ — ссылку от сервиса VPN, в одинарных кавычках:\n'), "       byway key 'vless://…'\n");
+		print(_t('  2. Добавить сайты, которые должны идти через VPN:\n       byway add youtube.com instagram.com\n'));
+		print(_t('  3. Проверить: byway health — все четыре строки зелёные.\n'));
+		print(_t('  Подробно, по шагам: https://github.com/tomon-one/byway/blob/main/docs/beginner.md\n'));
+	} else {
+		c_health(run([ m_self(), 'health' ]).out);
+		let g = {};
+		for (let l in pl_lines(run([ m_self(), 'status', '--short' ]).out)) {
+			let m = match(l, /^(\S+)\s+(.*)$/);
+			if (m) g[m[1]] = trim(m[2]);
+		}
+		let name = g[_t('подключение')] ?? g[_t('ключ')], tr = g[_t('транспорт')];
+		if (name) print('\n  ', _t('Подключение: '), name, tr ? ' · ' + tr : '', '\n');
+		if (u('enabled') != '1') print('  ', C_WARN, _t('byway выключен'), C_0, _t(' — включить: byway on'), '\n');
+	}
+	c_group(_t('Частые команды'));
+	c_help("key 'ССЫЛКА'", _t('вписать ключ и применить'));
+	c_help('add САЙТ …', _t('добавить сайты или подсети в свои списки'));
+	c_help('health', _t('проверить: служба, VPN, трафик, DNS'));
+	c_help('menu', _t('всё то же пунктами меню'));
+	print('\n', _t('  Все команды: byway help'), '\n');
+}
+
+// ── byway help ────────────────────────────────────────────────────────────
+function cmd_help() {
+	print(C_B, 'byway ', getenv('BW_VERSION'), C_0, _t(' — раздельное туннелирование через VPN\n'));
+	c_group(_t('Подключение'));
+	c_help("key 'ССЫЛКА'", _t('вписать ключ (проверяется до записи) и применить; ссылку — в одинарных кавычках'));
+	c_help('on | off', _t('включить или выключить byway'));
+	c_help('probe [ССЫЛКА|--all]', _t('проверить ключ отдельно, не трогая работающий туннель; --all — все ключи'));
+	c_help('sub АДРЕС', _t('скачать ключи из подписки'));
+	c_group(_t('Списки'));
+	c_help('add САЙТ|ПОДСЕТЬ …', _t('добавить в свои списки и применить; сразу несколько, через пробел; «-» — читать список со ввода до Ctrl+D'));
+	c_help('del САЙТ|ПОДСЕТЬ …', _t('убрать из своих списков и применить'));
+	c_help('presets', _t('обновить готовые списки'));
+	c_help('top [N]', _t('чем на самом деле пользуются'));
+	c_group(_t('Состояние'));
+	c_help('health', _t('быстрая проверка: служба, VPN, трафик, DNS'));
+	c_help('status [--short]', _t('что сейчас работает, подробно'));
+	c_help('doctor', _t('проверка окружения: что не так и как исправить'));
+	c_help('report [файл]', _t('отчёт для обращения, без ключа от VPN'));
+	c_group(_t('Обслуживание'));
+	c_help('menu', _t('те же действия пунктами меню'));
+	c_help('update [--check|--force|--rollback|--no-verify]', _t('новая версия byway: --check — только проверить, --force — переставить ту же, --rollback — вернуть прежнюю, --no-verify — без проверки подписи'));
+	c_help('engine [ВЕРСИЯ|tested|newest|stable|restore|/tmp/ФАЙЛ]', _t('ядро Xray-core: без довода — есть ли обновление и подробности, с доводом — замена'));
+	c_help('lang [ru|en]', _t('язык вывода и панели'));
+	c_help('export [файл] [--with-key]', _t('выгрузить настройки; по умолчанию без ключа'));
+	c_help('import ФАЙЛ [--no-key]', _t('принять настройки из выгрузки; --no-key — ключ не трогать'));
+	c_help('clear log|stat|all', _t('очистить журнал состояния, статистику или то и другое'));
+	c_group(_t('Для опытных'));
+	c_help('check [ССЫЛКА]', _t('разобрать ключ и проверить конфиг, без соединений'));
+	c_help('gen', _t('пересобрать конфиг из настроек и списков'));
+	c_help('show', _t('собранный конфиг без секретов: счётчики и правила'));
+	c_help('nft', _t('правила перехвата, не применяя их'));
+	c_help('plumb on | off', _t('включить или снять перехват (nft, маршрут, DNS)'));
+	c_help('job update|engine|probe|log', _t('то же в фоне, ход в журнале (так зовёт панель)'));
+	c_help('version', _t('версия'));
+}
+
+// ── ключ и включение ──────────────────────────────────────────────────────
+// Применить: gen показывает, что собралось, reload службы перезапускает
+// только при отличии (как «Сохранить и применить» в панели).
+function c_apply() {
+	if (sys([ m_self(), 'gen' ]) != 0) {
+		print('  ', C_BAD, _t('не применилось'), C_0, _t(' — работает прежняя настройка'), '\n');
+		return false;
+	}
+	if (u('enabled') != '1') {
+		print('  ', C_WARN, _t('собрано, но byway выключен'), C_0, _t(' — включить: byway on'), '\n');
+		return true;
+	}
+	run([ '/etc/init.d/byway', 'reload' ]);
+	print('  ', C_OK, _t('применено'), C_0, '\n');
+	return true;
+}
+
+// bw_uc key ССЫЛКА: проверка до записи -- неразобранный ключ в настройках
+// оставил бы дом без туннеля и без понятной причины.
+function cmd_key(url) {
+	if (!url) die("нужна ссылка: byway key 'vless://…' — в одинарных кавычках, иначе оболочка обрежет её на знаке &");
+	let r = run([ m_self(), 'check', url ], true);
+	print(r.out);
+	if (r.code != 0) die('ключ не принят — настройки не изменены');
+	m_uci('node_url=' + url, 'conn_mode=key');
+	say('ключ записан, способ подключения — один ключ');
+	c_apply();
+}
+
+// bw_uc on | off. Выключение -- остановкой службы: она снимает перехват и
+// запрет «Не пускать», дом остаётся с интернетом без VPN.
+function cmd_onoff(on) {
+	m_uci('enabled=' + (on ? '1' : '0'));
+	if (on) {
+		run([ '/etc/init.d/byway', 'enable' ]);
+		sys([ '/etc/init.d/byway', 'restart' ]);
+		say('byway включён — ядро поднимается до 15 секунд; проверить: byway health');
+		if (c_nokey()) warn("ключ не задан — вписать: byway key 'ССЫЛКА'");
+	} else {
+		sys([ '/etc/init.d/byway', 'stop' ]);
+		say('byway выключен: интернет идёт напрямую, без VPN; включить: byway on');
+	}
+}
+
+// ── свои списки ───────────────────────────────────────────────────────────
+// Записи из доводов: несколько через пробел или запятую, «-» -- со ввода
+// (вставить список и Ctrl+D). Комментарии и пустые -- мимо.
+function c_items(args) {
+	let out = [];
+	for (let a in args) {
+		let t = a == '-' ? (fs.stdin.read('all') ?? '') : a;
+		// Комментарий -- до конца строки, потом слова: иначе «# видео»
+		// давало запись «видео».
+		for (let ln in split(t, '\n')) {
+			let c = index(ln, '#'), d = index(ln, '//');
+			// «//» после «:» -- часть ссылки (https://), не комментарий.
+			if (d > 0 && substr(ln, d - 1, 1) == ':') d = index(substr(ln, d + 2), '//') >= 0 ? d + 2 + index(substr(ln, d + 2), '//') : -1;
+			if (c >= 0) ln = substr(ln, 0, c);
+			if (d >= 0 && (c < 0 || d < c)) ln = substr(ln, 0, d);
+			for (let l in split(ln, /[ \t\r,]+/)) {
+				l = trim(l);
+				if (l !== '') push(out, l);
+			}
+		}
+	}
+	return out;
+}
+
+// Ссылка вида https://www.example.com/path -- имя сайта; регистр -- строчный.
+function c_host(l) {
+	let m = match(l, /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/([^\/?#:]+)/);
+	if (m) l = m[1];
+	return lc(l);
+}
+
+// Подсеть или адрес (IPv4 a.b.c.d[/n], IPv6 с двоеточием без приставки
+// full:/keyword:…) -- в subnets.lst, остальное -- в domains.lst.
+function c_kind(l) {
+	if (match(l, /^[0-9.]+(\/[0-9]+)?$/)) return 'subnets';
+	if (index(l, ':') >= 0 && match(l, /^[0-9a-fA-F:]+(\/[0-9]{1,3})?$/)) return 'subnets';
+	return 'domains';
+}
+
+function c_file(kind) { return getenv('BW_LISTS') + '/' + kind + '.lst'; }
+function c_read(kind) { return map(pl_lines(fs.readfile(c_file(kind))), (x) => trim(x)); }
+function c_write(kind, lines) {
+	let f = c_file(kind), t = join('\n', lines);
+	if (t !== '') t += '\n';
+	fs.writefile(f + '.new', t);
+	return fs.rename(f + '.new', f);
+}
+
+// bw_uc add ЗАПИСЬ … : проверка -- той же меркой, что при сборке (lj_entry),
+// повторы -- мимо, в конце -- применить.
+function cmd_add(...args) {
+	let items = c_items(args);
+	if (!length(items)) die('что добавить: byway add youtube.com instagram.com 91.108.4.0/22; список со ввода: byway add -');
+	let cur = { domains: c_read('domains'), subnets: c_read('subnets') }, n = 0, add = { domains: [], subnets: [] };
+	for (let raw in items) {
+		let l = c_host(raw), k = c_kind(l);
+		if (lj_entry(l, k == 'domains', '') == null) { print('  ', C_BAD, '✗', C_0, ' ', _f('не похоже ни на сайт, ни на подсеть: %s', raw), '\n'); continue; }
+		if (index(cur[k], l) >= 0 || index(add[k], l) >= 0) { print('  ', C_DIM, '=', C_0, ' ', _f('уже есть: %s', l), '\n'); continue; }
+		push(add[k], l);
+		print('  ', C_OK, '+', C_0, ' ', l, C_DIM, k == 'subnets' ? _t('  (подсеть)') : '', C_0, '\n');
+		n++;
+	}
+	if (!n) { print(_t('  добавлять нечего\n')); return; }
+	for (let k in [ 'domains', 'subnets' ])
+		if (length(add[k])) c_write(k, [ ...cur[k], ...add[k] ]);
+	sayf('добавлено: %s', n);
+	c_apply();
+}
+
+// bw_uc del ЗАПИСЬ … : только из своих списков; запись из готового списка
+// убирается вместе с ним.
+function cmd_del(...args) {
+	let items = c_items(args);
+	if (!length(items)) die('что убрать: byway del example.com 91.108.4.0/22');
+	let cur = { domains: c_read('domains'), subnets: c_read('subnets') }, n = 0;
+	for (let raw in items) {
+		let l = c_host(raw), k = c_kind(l);
+		if (index(cur[k], l) < 0) { print('  ', C_DIM, '=', C_0, ' ', _f('нет в своих списках: %s', l), '\n'); continue; }
+		let keep = [];
+		for (let x in cur[k]) if (x != l) push(keep, x);
+		cur[k] = keep;
+		print('  ', C_WARN, '−', C_0, ' ', l, '\n');
+		n++;
+	}
+	if (!n) { print(_t('  убирать нечего\n')); return; }
+	c_write('domains', cur.domains);
+	c_write('subnets', cur.subnets);
+	sayf('убрано: %s', n);
+	c_apply();
+}
+
 // Разбор команды. Сюда попадают только перенесённые на ucode команды: прочие
 // разбирает shell (ui/main.sh) и зовёт bw_uc лишь для этих.
 
@@ -7616,11 +7875,18 @@ const CMDS = {
 	'engine-ram': cmd_engine_ram,
 	menu: cmd_menu,
 	pulse: cmd_pulse,
+	home: cmd_home,
+	help: cmd_help,
+	hfmt: cmd_hfmt,
+	key: cmd_key,
+	onoff: function (on) { cmd_onoff(on == '1'); },
+	add: cmd_add,
+	del: cmd_del,
 };
 
 let _cmd = ARGV[0] ?? '';
 if (CMDS[_cmd] == null)
-	dief('byway: неизвестная команда «%s». Список: byway', _cmd);
+	dief('byway: неизвестная команда «%s». Все команды: byway help', _cmd);
 CMDS[_cmd](...slice(ARGV, 1));
 
 #@uc-end

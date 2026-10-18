@@ -73,7 +73,11 @@ function cmd_check(url) {
 }
 
 // Одна проба: true -- связь через ноду состоялась.
-function pr_one(x, url, soft) {
+// В терминале (BW_TTY от shell) -- строка на ключ, цветом; панель читает
+// прежний вид: заголовок «[*] ключ N имя» и строка под ним.
+let PR_TTY = getenv('BW_TTY') == '1';
+
+function pr_one(x, url, soft, name) {
 	let k = pr_key(url, soft);
 	if (!k) return false;
 	let N = k.N;
@@ -83,10 +87,11 @@ function pr_one(x, url, soft) {
 		inbounds: [ { tag: 's', listen: '127.0.0.1', port: port, protocol: 'socks', settings: { udp: true } } ],
 		outbounds: [ k.block ],
 	});
-	print(sprintf('  %-12s %-22s ', N.TYPE + '/' + N.SEC, N.HOST + ':' + N.PORT));
+	if (PR_TTY && name != null) print('  ', c_pad(name, 18), ' ');
+	print(sprintf(PR_TTY ? '\033[2m%-12s %-22s\033[0m ' : '  %-12s %-22s ', N.TYPE + '/' + N.SEC, N.HOST + ':' + N.PORT));
 	let t = run([ x, 'run', '-test', '-c', PR_CFG ], true);
 	if (t.code != 0) {
-		print(_t('конфиг отвергнут ядром\n'));
+		print(PR_TTY ? '\033[1;31m' + rtrim(_t('конфиг отвергнут ядром\n'), '\n') + '\033[0m\n' : _t('конфиг отвергнут ядром\n'));
 		for (let l in pr_tail(t.out, 2)) print('      ', l, '\n');
 		g_xray_hint(t.out);
 		pr_clear([ PR_CFG ]);
@@ -111,13 +116,17 @@ function pr_one(x, url, soft) {
 	let code = sp < 0 ? R : substr(R, 0, sp), time = substr(R, rindex(R, ' ') + 1);
 	// Любой трёхзначный код -- связь состоялась (302, 403 Cloudflare).
 	let ok = match(code, /^[1-5][0-9][0-9]$/) != null;
-	if (ok) {
+	if (ok && PR_TTY) {
+		print('\033[1;32m', rtrim(_f('РАБОТАЕТ  выход %-16s %s с\n', ip, sprintf('%.2f', +time)), '\n'), '\033[0m\n');
+	} else if (ok) {
 		print(_f('РАБОТАЕТ  выход %-16s %s с\n', ip, time));
 	} else {
-		print(_f('НЕ РАБОТАЕТ (код %s)\n', code !== '' ? code : _t('нет ответа')));
+		let nw = _f('НЕ РАБОТАЕТ (код %s)\n', code !== '' ? code : _t('нет ответа'));
+		print(PR_TTY ? '\033[1;31m' + rtrim(nw, '\n') + '\033[0m\n' : nw);
 		let bad = [];
 		for (let l in split(fs.readfile(PR_LOG) ?? '', '\n'))
-			if (match(l, /fail|error|reject/i)) push(bad, l);
+			// Предупреждения Xray («WebSocket устарел») -- не причина отказа.
+			if (match(l, /fail|error|reject/i) && !match(l, /\[(Warning|Info|Debug)\]/)) push(bad, l);
 		for (let l in slice(bad, length(bad) > 2 ? length(bad) - 2 : 0)) print('      ', l, '\n');
 	}
 	pr_clear([ PR_CFG, PR_LOG, PR_OUT ]);
@@ -135,10 +144,20 @@ function cmd_probe(arg) {
 		let i = 0, okn = 0;
 		for (let k in keys) {
 			i++;
-			let h = rindex(k, '#');
+			let h = rindex(k, '#'), nm = h < 0 ? '' : pk_pctd(substr(k, h + 1));
+			if (PR_TTY) {
+				fs.stdout?.flush();
+				if (pr_one(x, k, true, nm !== '' ? nm : _f('ключ %s', i))) okn++;
+				continue;
+			}
 			print('\n');
-			sayf('ключ %s %s', i, h < 0 ? '' : pk_pctd(substr(k, h + 1)));
+			sayf('ключ %s %s', i, nm);
 			if (pr_one(x, k, true)) okn++;
+		}
+		if (PR_TTY) {
+			let col = okn == i ? '\033[1;32m' : (okn ? '\033[1;33m' : '\033[1;31m');
+			print('\n  ', col, _f('работают %s из %s', okn, i), '\033[0m\n');
+			return;
 		}
 		print('\n');
 		sayf('работают %s из %s', okn, i);

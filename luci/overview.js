@@ -327,11 +327,10 @@ function healthBox(text) {
 /* Ключ ещё не задан -- в сохранённых настройках, по способу подключения. */
 function noKey() {
 	var g = function (o) { return uci.get('byway', 'main', o); };
-	switch (g('conn_mode') || 'key') {
-	case 'selector': case 'urltest': return !L.toArray(g('node_urls')).length;
-	case 'outbound': return !(g('outbound_json') || '').trim();
-	default: return !(g('node_url') || '').trim();
-	}
+	/* В режимах нескольких ключей byway работает и на одиночном ключе, если
+	   список пуст: «нет ключа» -- только когда пусто и там, и там. */
+	if ((g('conn_mode') || 'key') === 'outbound') return !(g('outbound_json') || '').trim();
+	return !(g('node_url') || '').trim() && !L.toArray(g('node_urls')).length;
 }
 
 /* Строки «ВНИМАНИЕ …» из статуса. byway печатает их ради человека, а панель

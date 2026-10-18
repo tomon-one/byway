@@ -21,5 +21,7 @@ cmd_probe() {
               [ ! -f "$_pf" ] || : > "$_pf"
           done' EXIT INT TERM
     pr_env
-    BW_SELFMARK=$PR_MARK bw_uc probe "$@"
+    # BW_TTY -- в терминале таблица короче и цветом; панель читает прежний вид.
+    _ptty=""; [ -t 1 ] && _ptty=1
+    BW_TTY=$_ptty BW_SELFMARK=$PR_MARK bw_uc probe "$@"
 }

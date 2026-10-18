@@ -175,6 +175,11 @@ t() {
       "LuCI на роутере нет — панель не ставится, управление из консоли: byway menu") printf %s "LuCI is not installed on the router — the panel is skipped; manage byway from the console: byway menu" ;;
       "Веб-панель в LuCI — настройка byway из браузера, около 150 КБ на флеше. Ставить?") printf %s "Web panel in LuCI — byway settings in the browser, about 150 KB of flash. Install it?" ;;
       "панель LuCI убрана") printf %s "the LuCI panel is removed" ;;
+      "нет пакета procd-ujail: без него ядро Xray будет работать от root — это небезопасно, ошибка в ядре даст доступ ко всему роутеру") printf %s "the procd-ujail package is missing: without it the Xray core will run as root — this is unsafe, a bug in the core would give access to the whole router" ;;
+      "Поставить procd-ujail, чтобы ядро работало от отдельного пользователя с узкими правами?") printf %s "Install procd-ujail so the core runs as a separate user with narrow permissions?" ;;
+      "procd-ujail поставлен: ядро будет работать не от root") printf %s "procd-ujail installed: the core will not run as root" ;;
+      "procd-ujail не поставился — ядро будет работать от root") printf %s "procd-ujail did not install — the core will run as root" ;;
+      "ядро будет работать от root; поставить позже:") printf %s "the core will run as root; to install it later:" ;;
       "файлы byway переживут обновление прошивки (/etc/sysupgrade.conf)") printf %s "byway files will survive a firmware upgrade (/etc/sysupgrade.conf)" ;;
       "byway доступен по имени из любой оболочки") printf %s "byway is available by name from any shell" ;;
       "задачи в cron: проверка состояния, обновлений и списков; учёт использования") printf %s "cron jobs: state, update and list checks; usage accounting" ;;
@@ -731,6 +736,26 @@ if [ -n "$MISSING_MODS" ]; then
         warn "  без них трафик в туннель не направляется; поставить вручную:"
         warn "  ${PKG:-apk} update && ${PKG:-apk} ${PKG_ADD:-add} kmod-nft-tproxy kmod-nft-socket"
         BAD=$((BAD + 1))
+    fi
+fi
+
+# procd-ujail: без него ядро Xray работает от root (init-скрипт,
+# xray_user_prep), с ним -- от пользователя byway с двумя узкими правами. Не
+# ставим молча (владелец 2026-10-18): спрашиваем и прямо говорим, чем грозит
+# отказ. Обычно он есть в прошивке; нет -- на сборках для маленьких флешек.
+if [ ! -x /sbin/ujail ]; then
+    warn "нет пакета procd-ujail: без него ядро Xray будет работать от root — это небезопасно, ошибка в ядре даст доступ ко всему роутеру"
+    if ask "Поставить procd-ujail, чтобы ядро работало от отдельного пользователя с узкими правами?" y; then
+        add_pkg procd-ujail || true
+        if [ -x /sbin/ujail ]; then
+            say "procd-ujail поставлен: ядро будет работать не от root"
+        else
+            warn "procd-ujail не поставился — ядро будет работать от root"
+            pkg_why
+        fi
+    else
+        warn "ядро будет работать от root; поставить позже:"
+        warn "  ${PKG:-apk} update && ${PKG:-apk} ${PKG_ADD:-add} procd-ujail && /etc/init.d/byway restart"
     fi
 fi
 

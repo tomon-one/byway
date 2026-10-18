@@ -251,17 +251,21 @@ stops rather than pretending it installed a tagged version: the unsigned
 command.
 The third way fetches byway once, entirely in front of you.
 
-**The installer asks up to three questions.** Mandatory pieces are installed
+**The installer asks up to four questions.** Mandatory pieces are installed
 without asking.
 
 1. **Language** — first, before any checks. Only the chosen language's
    dictionary is installed; the other can be added later with `byway lang`.
-2. **Xray-core version:** the one verified with byway (default), the newest
+2. **The `procd-ujail` package** — only if the firmware lacks it, yes by
+   default. Without it the Xray core runs as root: this is unsafe, a bug in the
+   core would give access to the whole router. With it, the core runs as a
+   separate `byway` user with two narrow permissions.
+3. **Xray-core version:** the one verified with byway (default), the newest
    with pre-releases, the newest stable, a number of your own, or none. Where to
    get it from, the installer decides for you — details in [Engine
    version](#engine-version). If an engine is already installed, there is no
    question.
-3. **The LuCI web UI** — last, yes by default. The default is "no" only on a
+4. **The LuCI web UI** — last, yes by default. The default is "no" only on a
    repeat run after the panel was removed; answering "no" while the panel is
    installed removes it. The panel files survive a firmware upgrade. If the
    router has no LuCI, there is no question and no panel: you manage byway from
@@ -569,10 +573,15 @@ a failure — [how byway works](docs/architecture.en.md).
 
 | command | what it does |
 |---|---|
-| `byway`, `byway --help` | state and the list of commands |
+| `byway` | summary: four checks in colour and what to do when one is red; without a key — three steps; common commands |
+| `byway help` | all commands, grouped |
+| `byway key 'LINK'` | set the key and apply; the key is checked before it is saved; put the link in single quotes, or the shell cuts it at `&` |
+| `byway on`, `byway off` | turn byway on or off; when off, the internet works without the VPN |
+| `byway add SITE\|SUBNET …` | add to your lists and apply: several at once, space-separated; a site may be a link (`https://…/path` — the name is taken); subnets and addresses go to the subnet list by themselves; invalid entries and repeats are named and skipped; `byway add -` reads a list from input until Ctrl+D |
+| `byway del SITE\|SUBNET …` | remove from your lists and apply |
 | `byway menu` | console menu |
 | `byway status [--short]` | what is working right now |
-| `byway health` | service, VPN link, traffic, DNS |
+| `byway health` | service, VPN link, traffic, DNS; in a terminal — in colour with advice, into a script or the panel — as `check<TAB>state<TAB>note` lines |
 | `byway doctor` | environment: modules, tools, space, conflicts; updates |
 | `byway gen` | rebuild the config from settings and lists; the engine picks it up after `/etc/init.d/byway reload` |
 | `byway plumb on\|off` | raise or remove interception |
@@ -584,7 +593,7 @@ a failure — [how byway works](docs/architecture.en.md).
 | `byway stat` | collect statistics now, without waiting for the schedule; also only with `show_usage` |
 | `byway update [--check\|--force\|--rollback\|--no-verify]` | whether a new byway version exists, and installing it; `--force` installs the latest GitHub release even if it is not newer than the installed one; `--rollback` returns the previous version from the copy; `--no-verify` skips the release signature check (when there is nothing to check with) |
 | `byway engine [--check\|VERSION\|tested\|newest\|stable\|restore\|/tmp/FILE]` | whether an Xray-core update exists, and replacing the engine; `--check` only finds out; `VERSION` of an engine already next to it switches without a download; `restore` installs a missing engine; `/tmp/FILE` is your own build (a `.gz` with the binary or the release `.zip`) |
-| `byway job update\|engine [VERSION]\|log` | internal, for the web UI: an update or an engine swap in the background; `log` shows progress, exit code 3 means still running |
+| `byway job update\|engine [VERSION]\|probe [LINK\|--all]\|log` | internal, for the panel: an update, a core replacement or a key check in the background; `log` — progress, code 3 — still running |
 | `byway lang ru\|en` | output and web UI language |
 | `byway report [file]` | a report for a bug thread: state and diagnostics, no key |
 | `byway export [file] [--with-key]` | export settings without the VPN key; `--with-key` puts it in |

@@ -49,7 +49,8 @@ through it.
    If `raw.githubusercontent.com` is unreachable, there is a line through a
    mirror in the README, section [Installing](../README.en.md#installing).
 
-3. The installer asks up to three questions: language, the
+3. The installer asks up to four questions: language, the `procd-ujail`
+   package (only if it is missing), the
    [core](glossary.en.md#the-xray-core-engine) version and the web panel. If
    unsure — Enter everywhere: the defaults fit.
 

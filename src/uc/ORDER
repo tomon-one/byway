@@ -18,4 +18,5 @@ engine.uc
 presets.uc
 transfer.uc
 menu.uc
+cli.uc
 main.uc

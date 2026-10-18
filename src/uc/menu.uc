@@ -156,7 +156,7 @@ function m_mode() {
 }
 
 function m_lists() {
-	let own = getenv('BW_LISTS') + '/domains.lst', sl = getenv('BW_LISTS') + '/subnets.lst';
+	let sl = getenv('BW_LISTS') + '/subnets.lst';
 	while (true) {
 		// Объединённый список, не только свой: в режиме «всё через VPN» своего
 		// нет по построению. Пересобирается при каждом обращении: после
@@ -165,8 +165,8 @@ function m_lists() {
 		m_head('Списки');
 		printf(_t('  доменов %s, подсетей %s\n\n'), lj_count(dl), lj_count(sl));
 		m_item(1, 'Показать домены');
-		m_item(2, 'Добавить домен');
-		m_item(3, 'Убрать домен');
+		m_item(2, 'Добавить сайты или подсети');
+		m_item(3, 'Убрать из своих списков');
 		m_item(4, 'Обновить готовые списки');
 		m_line();
 		m_item(0, 'Назад');
@@ -178,35 +178,15 @@ function m_lists() {
 			m_pause();
 		} else if (r == '2') {
 			print('\n');
-			let d = m_ask('Домен');
-			if (d !== '') {
-				// Проверка -- по объединённому, запись -- в свой файл:
-				// объединённый пересобирается, и дописанное туда пропадало.
-				if (index(pl_lines(fs.readfile(dl)), d) >= 0) {
-					print(_t('\n  уже есть\n'));
-				} else {
-					let t = fs.readfile(own) ?? '';
-					if (t !== '' && substr(t, -1) != '\n') t += '\n';
-					fs.writefile(own, t + d + '\n');
-					print(_t('\n  добавлено\n'));
-					m_apply();
-				}
-			}
+			// Та же проверка и раскладка, что у byway add: сайт или подсеть,
+			// несколько через пробел, повторы мимо.
+			let d = m_ask('Сайты или подсети через пробел');
+			if (d !== '') { print('\n'); sys([ m_self(), 'add', d ]); }
 			m_pause();
 		} else if (r == '3') {
 			print('\n');
-			let d = m_ask('Домен');
-			if (d !== '') {
-				let l = split(fs.readfile(own) ?? '', '\n');
-				if (index(l, d) >= 0) {
-					fs.writefile(own + '.new', join('\n', filter(l, (x) => x != d)));
-					fs.rename(own + '.new', own);
-					print(_t('\n  убрано\n'));
-					m_apply();
-				} else {
-					print(_t('\n  такой записи нет\n'));
-				}
-			}
+			let d = m_ask('Что убрать (через пробел)');
+			if (d !== '') { print('\n'); sys([ m_self(), 'del', d ]); }
 			m_pause();
 		} else if (r == '4') {
 			print('\n');
