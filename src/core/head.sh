@@ -106,21 +106,6 @@ xray_ver_num() {
 }
 [ -n "$XRAY" ] || XRAY=$(command -v xray || echo /usr/bin/xray)
 
-# Подсказки к отказам движка, текст которых не говорит, что делать;
-# $1 -- вывод run -test.
-# vless и trojan без TLS к публичному адресу Xray-core отвергает с 26.7.11
-# (validateOutboundTransportSecurity; частный адрес -- исключение).
-xray_hint() {
-    case "$1" in
-      *"without TLS"*)
-        warn "  Xray-core с 26.7.11 не пускает vless и trojan без TLS или reality к публичному адресу"
-        warn "  нужен ключ с security=tls или reality; без шифрования транспорта — только сервер в частной сети" ;;
-      *'"allowInsecure"'*)
-        warn "  Xray-core с 26.3.27 не даёт отключать проверку сертификата сервера (allowInsecure)"
-        warn "  нужен отпечаток сертификата в ключе (pcs= или pinSHA256=) либо настоящий сертификат на сервере" ;;
-    esac
-}
-
 # apk с OpenWrt 25.12, opkg на прежних: подсказка не должна давать
 # команду чужого менеджера.
 PKG_FIX="apk update && apk add"

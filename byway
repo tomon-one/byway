@@ -107,21 +107,6 @@ xray_ver_num() {
 }
 [ -n "$XRAY" ] || XRAY=$(command -v xray || echo /usr/bin/xray)
 
-# Подсказки к отказам движка, текст которых не говорит, что делать;
-# $1 -- вывод run -test.
-# vless и trojan без TLS к публичному адресу Xray-core отвергает с 26.7.11
-# (validateOutboundTransportSecurity; частный адрес -- исключение).
-xray_hint() {
-    case "$1" in
-      *"without TLS"*)
-        warn "  Xray-core с 26.7.11 не пускает vless и trojan без TLS или reality к публичному адресу"
-        warn "  нужен ключ с security=tls или reality; без шифрования транспорта — только сервер в частной сети" ;;
-      *'"allowInsecure"'*)
-        warn "  Xray-core с 26.3.27 не даёт отключать проверку сертификата сервера (allowInsecure)"
-        warn "  нужен отпечаток сертификата в ключе (pcs= или pinSHA256=) либо настоящий сертификат на сервере" ;;
-    esac
-}
-
 # apk с OpenWrt 25.12, opkg на прежних: подсказка не должна давать
 # команду чужого менеджера.
 PKG_FIX="apk update && apk add"
@@ -636,26 +621,13 @@ redir_port() {
     printf '%s' "$_rdp"
 }
 
-# Аутбаунд одного ключа для пробы (config/probe.sh): разбор, транспорт, защита
-# и блок JSON -- в ucode (uc/outbound.uc); здесь вызов и eval его команд: N_*,
-# блок, сообщения по порядку (как у разбора ключа). gen собирает аутбаунды сам.
+# Аутбаунды собирает ucode (uc/outbound.uc) для gen, check и probe; здесь --
+# метка сокетов, пока перехват на shell.
 
 # Метка исходящих для «VPN для программ на роутере» -- числом, пока перехват
 # на shell. Последняя строка: self_mark печатает жалобы в тот же вывод.
 ob_env_mark() {
     if [ "$(u router_via_vpn)" = "1" ]; then self_mark_dec | tail -1; fi
-}
-
-# Один ключ: N_*, блок PB, адреса сервера OB_HOSTS. 1 -- тег, 2 -- ссылка
-# (пусто -- ключ или свой конфиг из настроек), 3 -- quiet: без сообщений
-# разбора.
-ob_eval() {
-    xray_ver_num >/dev/null
-    _obm=$(ob_env_mark)
-    _obo=$(BW_URL=${2:-} BW_SNI=${N_SNI:-} BW_WSHOST=${N_WSHOST:-} \
-           BW_XRAYVER=$XRAYVER BW_XRAY=$XRAY BW_SELFMARK=$_obm \
-           bw_uc outbound "$1" "${3:-}") || die "аутбаунд не собрался: сбой ucode"
-    eval "$_obo"
 }
 
 # Сборка конфига Xray: cmd_gen готовит окружение, конфиг собирает ucode
@@ -708,137 +680,38 @@ server_addr() {   # $1 -- имя
     printf '%s' "$_sa"
 }
 
-# Проверки ключа без боевого конфига: probe (соединение) и check (разбор).
+# Проверки ключа без боевого конфига: check (разбор и run -test) и probe
+# (соединение через ноду) -- в ucode (uc/probe.uc). Здесь окружение и уборка:
+# ucode сигналы не ловит, и прерванная проба оставила бы движок и черновик с uuid.
 
-# Проверка ключа в изоляции: свой конфиг с временным socks-входом, боевой
-# конфиг, nft и dnsmasq не трогаются -- можно на работающем роутере.
-# PROBE_URL -- проверить через ноду конкретный сайт, а не только выход.
-cmd_probe() {
-    [ -x "$XRAY" ] ||
-        dief "движка нет (%s) — ключ проверить нечем; сам ключ тут ни при чём" "$XRAY"
-    # --all -- каждый ключ автовыбора отдельным процессом.
-    if [ "${1:-}" = "--all" ]; then
-        _keys=$(uci -q get byway.main.node_urls || true)
-        [ -n "$_keys" ] || die "ключей автовыбора нет (byway.main.node_urls) — проверять нечего"
-        _i=0; _okn=0
-        for _k in $_keys; do
-            _i=$((_i + 1))
-            case "$_k" in *#*) _kl=$(pctd "${_k##*#}") ;; *) _kl="" ;; esac
-            printf '\n'; sayf "ключ %s %s" "$_i" "$_kl"
-            if "$0" probe "$_k"; then _okn=$((_okn + 1)); fi
-        done
-        printf '\n'; sayf "работают %s из %s" "$_okn" "$_i"
-        return 0
-    fi
-    # Без аргумента в режиме «свой конфиг» проверяется он, как у check.
-    if [ -z "${1:-}" ] && [ "$(u conn_mode)" = "outbound" ]; then
-        ob_eval proxy ""
-    else
-        URL=${1:-$(u node_url)}
-        [ -n "$URL" ] || die "ссылка не задана: передать аргументом либо записать в byway.main.node_url"
-        ob_eval proxy "$URL"
-    fi
-
-    PORT=${PROBE_PORT:-15080}
-    CFG=/tmp/byway-probe.json
-    LOG=/tmp/byway-probe.log
-    XP=""
-    # Ловушка -- до записи конфига: выход по «отвергнут ядром» иначе оставил бы
-    # файл с uuid в /tmp.
-    # `|| true`: движок к выходу обычно уже убит, kill по нему отвечает 1, и под
-    # set -e ловушка обрывалась с кодом 1 -- проверка рабочего ключа
-    # заканчивалась неудачей.
-    trap '[ -z "$XP" ] || kill $XP 2>/dev/null || true; : > "$CFG" 2>/dev/null; : > "$LOG" 2>/dev/null; : > /tmp/byway-probe.out 2>/dev/null' EXIT INT TERM
-    umask 077
-    cat > "$CFG" <<PROBE
-{
-  "log": { "loglevel": "warning" },
-  "inbounds": [ { "tag": "s", "listen": "127.0.0.1", "port": $PORT,
-                  "protocol": "socks", "settings": { "udp": true } } ],
-  "outbounds": [ $PB ]
-}
-PROBE
-
-    printf '  %-12s %-22s ' "$N_TYPE/$N_SEC" "$N_HOST:$N_PORT"
-    if ! "$XRAY" run -test -c "$CFG" >/dev/null 2>&1; then
-        printf "$(_t 'конфиг отвергнут ядром\n')"
-        _e=$("$XRAY" run -test -c "$CFG" 2>&1 || true)
-        printf '%s\n' "$_e" | tail -2 | sed 's/^/      /'
-        xray_hint "$_e"
-        return 1
-    fi
-    "$XRAY" run -c "$CFG" > "$LOG" 2>&1 &
-    XP=$!
-    sleep 3
-    # || R="": под set -e присваивание из неудачной подстановки молча убивает
-    # скрипт (2026-09-03, novayagazeta.ru).
-    R=$(curl -s --max-time 15 --socks5-hostname "127.0.0.1:$PORT"         -w '%{http_code} %{time_total}' -o /tmp/byway-probe.out         "${PROBE_URL:-https://api.ipify.org}" 2>/dev/null) || R=""
-    IP=$(cat /tmp/byway-probe.out 2>/dev/null | head -c 40)
-    kill $XP 2>/dev/null || true
-    wait $XP 2>/dev/null || true
-    CODE=${R%% *}; TIME=${R##* }
-    # Любой трёхзначный код -- связь состоялась (302, 403 Cloudflare без
-    # браузерного UA): успех проверки ноды.
-    case "$CODE" in [1-5][0-9][0-9]) OKC=1 ;; *) OKC=0 ;; esac
-    if [ "$OKC" = "1" ]; then
-        printf "$(_t 'РАБОТАЕТ  выход %-16s %s с\n')" "$IP" "$TIME"
-    else
-        printf "$(_t 'НЕ РАБОТАЕТ (код %s)\n')" "${CODE:-$(_t 'нет ответа')}"
-        grep -iE "fail|error|reject" "$LOG" | tail -2 | sed 's/^/      /'
-    fi
-    : > "$CFG"; : > "$LOG"; : > /tmp/byway-probe.out
-    # Код возврата -- исход проверки: probe --all по нему считает «работают N
-    # из M», а последняя команда выше успешна всегда.
-    [ "$OKC" = "1" ]
+pr_env() {
+    xray_ver_num >/dev/null
+    PR_MARK=$(ob_env_mark)
 }
 
-# ── разбор ссылки без единого соединения ───────────────────────────────────
-# Принимает ли Xray эту ссылку, без процесса и сокета (probe поднимает xray и
-# ходит наружу). Перед переключением ноды.
 cmd_check() {
-    # Без движка проверять нечем -- говорим прямо: иначе любой верный ключ
-    # объявлялся бы негодным, и меню не давало вписать ни одного.
-    [ -x "$XRAY" ] ||
-        dief "движка нет (%s) — ключ проверить нечем; сам ключ тут ни при чём" "$XRAY"
-    # Ссылку передаём в разбор, только если дана аргументом: иначе разбор сам
-    # выберет ключ из UCI или свой конфиг.
-    ob_eval proxy "${1:-}"
-
-    CFG=/tmp/byway-check.json
-    trap ': > "$CFG" 2>/dev/null' EXIT INT TERM
-    umask 077
-    cat > "$CFG" <<CHK
-{
-  "log": { "loglevel": "warning" },
-  "outbounds": [ $PB ]
-}
-CHK
-    printf '  %-12s %-10s %s:%s  ' "$N_TYPE" "$N_SEC" "$N_HOST" "$N_PORT"
-    if "$XRAY" run -test -c "$CFG" >/dev/null 2>&1; then
-        printf "$(_t 'ПРИНЯТ\n')"
-        : > "$CFG"
-        return 0
-    fi
-    printf "$(_t 'ОТВЕРГНУТ\n')"
-    _e=$("$XRAY" run -test -c "$CFG" 2>&1 || true)
-    printf '%s\n' "$_e" | tail -1 | sed 's/.*> /    /'
-    xray_hint "$_e"
-    : > "$CFG"
-    return 1
+    pr_env
+    BW_XRAY=$XRAY BW_XRAYVER=$XRAYVER BW_SELFMARK=$PR_MARK bw_uc check "$@"
 }
 
-# Показ собранного конфига без секретов.
+# PROBE_URL -- проверить через ноду конкретный сайт, а не только выход;
+# PROBE_PORT -- порт временного socks-входа. --all -- каждый ключ автовыбора.
+cmd_probe() {
+    trap '_pp=$(cat /var/run/byway/probe.pid 2>/dev/null || true)
+          [ -z "$_pp" ] || kill "$_pp" 2>/dev/null || true
+          rm -f /var/run/byway/probe.pid 2>/dev/null || true
+          for _pf in /tmp/byway-probe.json /tmp/byway-probe.log /tmp/byway-probe.out; do
+              [ ! -f "$_pf" ] || : > "$_pf"
+          done' EXIT INT TERM
+    pr_env
+    BW_XRAY=$XRAY BW_XRAYVER=$XRAYVER BW_SELFMARK=$PR_MARK bw_uc probe "$@"
+}
+
+# Показ собранного конфига без секретов -- в ucode (uc/probe.uc, cmd_show);
+# счётчики -- по объединённым спискам, их склейка пока на shell.
 
 cmd_show() {
-    [ -f "$OUT" ] || die "конфиг не собран, собрать: byway gen"
-    sayf "%s — %s байт" "$OUT" "$(wc -c < "$OUT")"
-    # Счётчики -- первыми: ради них команду зовут. Считаем по источнику: список
-    # печатается в конфиг дважды (fakedns и маршрут), и счёт по «"domain:»
-    # завышал вдвое, непостоянно (зависит от записей с префиксом).
-    printf "$(_t '    доменов в правиле: %s\n')" "$(count_list "$(merged_domains)")"
-    printf "$(_t '    подсетей:          %s\n')" "$(count_list "$(merged_subnets)")"
-    grep -oE '"(tag|protocol|network|security|address|ipPool)": *"[^"]*"' "$OUT" |
-      grep -viE 'uuid|id"' | sed 's/^/    /' | head -20
+    BW_OUT=$OUT BW_MERGED=$(merged_domains) BW_SUBNETS=$(merged_subnets) bw_uc show
 }
 
 # Общие списки доменов и подсетей: свои + готовые наборы, склейка и чистка.
@@ -6818,8 +6691,8 @@ function cmd_parse() {
 // Аутбаунд Xray из разобранного ключа: транспорт, защита (tls, reality), flow,
 // mux, протокол -- перенос build_stream, build_outbound, proxy_block и
 // build_proxies из shell. JSON собирается объектами, не склейкой строк.
-// Сообщения копятся записями по порядку: gen (uc/gen.uc) печатает их сам,
-// проба ключа (bw_uc outbound) получает командами sh вместе с N_* и блоком.
+// Сообщения копятся записями по порядку и печатаются вызывающим (ob_emit):
+// gen, check, probe.
 // Функции -- верхнего уровня, состояние -- OB_* (см. uc/keys.uc о ucode 22.03).
 
 const OB_STOP = '__byway_outbound_stop__';
@@ -6837,7 +6710,6 @@ function ob_warn(m)          { ob_cmd('warn', m, []); }
 function ob_warnf(m, ...a)   { ob_cmd('warnf', m, a); }
 function ob_die(m)           { OB_FATAL = _t(m); ob_cmd('die', m, []); raise(OB_STOP); }
 function ob_dief(m, ...a)    { OB_FATAL = _pf(_t(m), a); ob_cmd('dief', m, a); raise(OB_STOP); }
-function ob_put(n, v)        { push(OB_OUT, { p: n, v: v }); }
 
 // val_or: значение настройки по образцу, иначе умолчание с жалобой в stderr.
 function ob_val_or(name, val, re, def, where) {
@@ -7120,43 +6992,16 @@ function ob_key(url, tag, prev_sni, prev_wshost) {
 	return { N: N, block: b, raw: false };
 }
 
-// N_* для shell -- как после parse_node.
-function ob_put_n(N) {
-	for (let k in N) ob_put('N_' + k, N[k]);
-	for (let k in [ 'PASS', 'USER', 'OBFSPW' ]) ob_put('J_' + k, pk_jstr(N[k] ?? ''));
-}
-
-// Записи -- командами sh (как у bw_uc parse).
-function ob_flush() {
-	let r = [];
-	for (let m in OB_OUT)
-		push(r, m.p != null ? m.p + '=' + pk_q(m.v) :
-			m.c + ' ' + join(' ', map([ m.f, ...m.a ], pk_q)) + (m.e ? ' >&2' : ''));
-	print(join('\n', r), '\n');
-}
-
-// Записи -- печатью здесь же (gen): отказ -- [x] и выход, как die в shell.
-function ob_emit(list) {
+// Записи -- печатью здесь же (gen, check, probe): отказ -- [x] и выход, как
+// die в shell; soft -- [x] без выхода, итог false (probe --all идёт дальше).
+function ob_emit(list, soft) {
 	for (let m in list) {
-		if (m.p != null) continue;
-		if (m.c == 'warn' || m.c == 'warnf') _warn(_pf(_t(m.f), m.a));
-		else die_raw(_pf(_t(m.f), m.a));
+		if (m.c == 'warn' || m.c == 'warnf') { _warn(_pf(_t(m.f), m.a)); continue; }
+		if (!soft) die_raw(_pf(_t(m.f), m.a));
+		print('\x1b[1;31m[x]\x1b[0m ', _pf(_t(m.f), m.a), '\n');
+		return false;
 	}
-}
-
-// bw_uc outbound ТЕГ: ключ из BW_URL (пусто -- из настроек), N_* и блок (PB).
-function cmd_outbound(tag, quiet) {
-	OB_OUT = [];
-	OB_QUIET_PARSE = quiet == 'quiet';
-	try {
-		let k = ob_key(getenv('BW_URL') ?? '', tag ?? 'proxy', getenv('BW_SNI') ?? '', getenv('BW_WSHOST') ?? '');
-		ob_put_n(k.N);
-		ob_put('PB', sprintf('%J', k.block));
-		ob_put('OB_HOSTS', k.raw ? join(' ', ob_raw_hosts(k.block)) : k.N.HOST);
-	} catch (e) {
-		if (e.message !== OB_STOP) raise(e.message);
-	}
-	ob_flush();
+	return true;
 }
 
 // Аутбаунды целиком (бывший build_proxies). Обычные режимы -- один с тегом
@@ -7898,6 +7743,184 @@ function cmd_gen() {
 	sayf('  пул fakeip %s, DNS-вход %s:53, tproxy %s, прокси роутера 127.0.0.1:%s', G.pool, G.dns_listen, G.tp, G.lp);
 }
 
+// Проверки ключа без боевого конфига (бывший config/probe.sh): check -- разбор
+// и `run -test`, probe -- одно соединение через ноду. Боевой конфиг, nft и
+// dnsmasq не трогаются -- можно на работающем роутере.
+
+const PR_CHECK = '/tmp/byway-check.json';
+const PR_CFG = '/tmp/byway-probe.json';
+const PR_LOG = '/tmp/byway-probe.log';
+const PR_OUT = '/tmp/byway-probe.out';
+// pid движка пробы: по нему shell-обёртка гасит движок, если probe прервали
+// (Ctrl+C) -- сам ucode сигналы не ловит. Каталог root, не общий /tmp: иначе
+// чужой процесс подложил бы номер, и root убил бы его.
+const PR_PID = '/var/run/byway/probe.pid';
+
+function pr_xray() {
+	let x = getenv('BW_XRAY') ?? '';
+	if (run([ 'test', '-x', x ]).code != 0)
+		dief('движка нет (%s) — ключ проверить нечем; сам ключ тут ни при чём', x);
+	return x;
+}
+
+// Черновик с uuid: права 600 до записи; после проверки -- пустой файл.
+function pr_write(file, o) {
+	fs.unlink(file);
+	let f = fs.open(file, 'w', 0600);
+	if (!f) dief('черновик конфига %s не записан: %s', file, fs.error());
+	f.write(sprintf('%.2J\n', o));
+	f.close();
+}
+
+function pr_clear(files) { for (let f in files) if (fs.stat(f)) fs.writefile(f, ''); }
+
+// Ключ -> { N, block }; сообщения разбора печатаются по порядку. Отказ: soft --
+// null (probe --all идёт дальше), иначе выход, как die в shell.
+function pr_key(url, soft) {
+	OB_OUT = [];
+	OB_FATAL = null;
+	let k = null;
+	try {
+		k = ob_key(url, 'proxy', '', '');
+	} catch (e) {
+		if (e.message !== OB_STOP) raise(e.message);
+	}
+	if (!ob_emit(OB_OUT, soft)) return null;
+	return k;
+}
+
+// Последние n строк текста.
+function pr_tail(s, n) {
+	let ls = split(rtrim(s, '\n'), '\n');
+	return slice(ls, length(ls) > n ? length(ls) - n : 0);
+}
+
+// bw_uc check [ССЫЛКА]: принимает ли Xray этот ключ, без процесса и сокета.
+// Без ссылки разбор сам берёт ключ из настроек или свой конфиг.
+function cmd_check(url) {
+	let x = pr_xray();
+	let k = pr_key(url ?? '', false);
+	let N = k.N;
+	pr_write(PR_CHECK, { log: { loglevel: 'warning' }, outbounds: [ k.block ] });
+	print(sprintf('  %-12s %-10s %s:%s  ', N.TYPE, N.SEC, N.HOST, N.PORT));
+	let r = run([ x, 'run', '-test', '-c', PR_CHECK ], true);
+	pr_clear([ PR_CHECK ]);
+	if (r.code == 0) {
+		print(_t('ПРИНЯТ\n'));
+		return;
+	}
+	print(_t('ОТВЕРГНУТ\n'));
+	let l = pr_tail(r.out, 1)[0] ?? '';
+	let i = rindex(l, '> ');
+	print(i < 0 ? l : '    ' + substr(l, i + 2), '\n');
+	g_xray_hint(r.out);
+	exit(1);
+}
+
+// Одна проба: true -- связь через ноду состоялась.
+function pr_one(x, url, soft) {
+	let k = pr_key(url, soft);
+	if (!k) return false;
+	let N = k.N;
+	let port = int(getenv('PROBE_PORT') || '15080');
+	pr_write(PR_CFG, {
+		log: { loglevel: 'warning' },
+		inbounds: [ { tag: 's', listen: '127.0.0.1', port: port, protocol: 'socks', settings: { udp: true } } ],
+		outbounds: [ k.block ],
+	});
+	print(sprintf('  %-12s %-22s ', N.TYPE + '/' + N.SEC, N.HOST + ':' + N.PORT));
+	let t = run([ x, 'run', '-test', '-c', PR_CFG ], true);
+	if (t.code != 0) {
+		print(_t('конфиг отвергнут ядром\n'));
+		for (let l in pr_tail(t.out, 2)) print('      ', l, '\n');
+		g_xray_hint(t.out);
+		pr_clear([ PR_CFG ]);
+		return false;
+	}
+	// Движок -- в фоне через sh: system() ждал бы его выхода.
+	let pid = trim(run([ 'sh', '-c', '"$1" run -c "$2" > "$3" 2>&1 & echo $!', 'sh', x, PR_CFG, PR_LOG ]).out);
+	if (!fs.stat('/var/run/byway')) fs.mkdir('/var/run/byway', 0755);
+	fs.writefile(PR_PID, pid + '\n');
+	system([ 'sleep', '3' ]);
+	let c = run([ 'curl', '-s', '--max-time', '15', '--socks5-hostname', '127.0.0.1:' + port,
+	              '-w', '%{http_code} %{time_total}', '-o', PR_OUT,
+	              getenv('PROBE_URL') || 'https://api.ipify.org' ]);
+	// Неудачный curl печатает «000 15.0» -- это не ответ.
+	let R = c.code == 0 ? c.out : '';
+	let ip = substr(fs.readfile(PR_OUT) ?? '', 0, 40);
+	system([ 'kill', pid ]);
+	// Ждать выхода: probe --all следом займёт тот же порт.
+	for (let i = 0; i < 5 && fs.stat('/proc/' + pid); i++) system([ 'sleep', '1' ]);
+	fs.unlink(PR_PID);
+	let sp = index(R, ' ');
+	let code = sp < 0 ? R : substr(R, 0, sp), time = substr(R, rindex(R, ' ') + 1);
+	// Любой трёхзначный код -- связь состоялась (302, 403 Cloudflare).
+	let ok = match(code, /^[1-5][0-9][0-9]$/) != null;
+	if (ok) {
+		print(_f('РАБОТАЕТ  выход %-16s %s с\n', ip, time));
+	} else {
+		print(_f('НЕ РАБОТАЕТ (код %s)\n', code !== '' ? code : _t('нет ответа')));
+		let bad = [];
+		for (let l in split(fs.readfile(PR_LOG) ?? '', '\n'))
+			if (match(l, /fail|error|reject/i)) push(bad, l);
+		for (let l in slice(bad, length(bad) > 2 ? length(bad) - 2 : 0)) print('      ', l, '\n');
+	}
+	pr_clear([ PR_CFG, PR_LOG, PR_OUT ]);
+	return ok;
+}
+
+// bw_uc probe [ССЫЛКА|--all]: соединение через ноду со своим socks-входом.
+// PROBE_URL -- сайт вместо выхода; PROBE_PORT -- порт входа.
+function cmd_probe(arg) {
+	let x = pr_xray();
+	if (arg == '--all') {
+		// Каждый ключ автовыбора отдельно; негодный не обрывает остальных.
+		let keys = split(trim(u('node_urls')), /[ \t\n]+/);
+		if (keys[0] == '') die('ключей автовыбора нет (byway.main.node_urls) — проверять нечего');
+		let i = 0, okn = 0;
+		for (let k in keys) {
+			i++;
+			let h = rindex(k, '#');
+			print('\n');
+			sayf('ключ %s %s', i, h < 0 ? '' : pk_pctd(substr(k, h + 1)));
+			if (pr_one(x, k, true)) okn++;
+		}
+		print('\n');
+		sayf('работают %s из %s', okn, i);
+		return;
+	}
+	let url = arg ?? '';
+	// Без аргумента в режиме «свой конфиг» проверяется он, как у check.
+	if (url === '' && u('conn_mode') != 'outbound') {
+		url = u('node_url');
+		if (url === '') die('ссылка не задана: передать аргументом либо записать в byway.main.node_url');
+	}
+	if (!pr_one(x, url, false)) exit(1);
+}
+
+// bw_uc show: собранный конфиг без секретов. Счётчики -- по источнику
+// (BW_MERGED, BW_SUBNETS от shell): в конфиге список дважды.
+function cmd_show() {
+	let out = getenv('BW_OUT');
+	let st = fs.stat(out);
+	if (!st) die('конфиг не собран, собрать: byway gen');
+	sayf('%s — %s байт', out, st.size);
+	print(_f('    доменов в правиле: %s\n', lj_count(getenv('BW_MERGED'))));
+	print(_f('    подсетей:          %s\n', lj_count(getenv('BW_SUBNETS'))));
+	let f = fs.open(out, 'r'), l, n = 0;
+	while (n < 20 && (l = f.read('line')) != null && l !== '') {
+		// Строки списков (без «": ») -- мимо регулярки: она дорогая.
+		if (index(l, '": ') < 0) continue;
+		for (let m in match(l, /"(tag|protocol|network|security|address|ipPool)": *"[^"]*"/g) ?? []) {
+			let lm = lc(m[0]);
+			if (index(lm, 'uuid') >= 0 || index(lm, 'id"') >= 0) continue;
+			print('    ', m[0], '\n');
+			if (++n >= 20) break;
+		}
+	}
+	f.close();
+}
+
 // Разбор команды. Сюда попадают только перенесённые на ucode команды: прочие
 // разбирает shell (ui/main.sh) и зовёт bw_uc лишь для этих.
 
@@ -7913,7 +7936,9 @@ const CMDS = {
 	version: function () { print('byway ', getenv('BW_VERSION'), '\n'); },
 	xlat: cmd_xlat,
 	parse: cmd_parse,
-	outbound: cmd_outbound,
+	check: cmd_check,
+	probe: cmd_probe,
+	show: cmd_show,
 	gen: cmd_gen,
 };
 

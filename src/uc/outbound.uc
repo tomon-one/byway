@@ -1,8 +1,8 @@
 // Аутбаунд Xray из разобранного ключа: транспорт, защита (tls, reality), flow,
 // mux, протокол -- перенос build_stream, build_outbound, proxy_block и
 // build_proxies из shell. JSON собирается объектами, не склейкой строк.
-// Сообщения копятся записями по порядку: gen (uc/gen.uc) печатает их сам,
-// проба ключа (bw_uc outbound) получает командами sh вместе с N_* и блоком.
+// Сообщения копятся записями по порядку и печатаются вызывающим (ob_emit):
+// gen, check, probe.
 // Функции -- верхнего уровня, состояние -- OB_* (см. uc/keys.uc о ucode 22.03).
 
 const OB_STOP = '__byway_outbound_stop__';
@@ -20,7 +20,6 @@ function ob_warn(m)          { ob_cmd('warn', m, []); }
 function ob_warnf(m, ...a)   { ob_cmd('warnf', m, a); }
 function ob_die(m)           { OB_FATAL = _t(m); ob_cmd('die', m, []); raise(OB_STOP); }
 function ob_dief(m, ...a)    { OB_FATAL = _pf(_t(m), a); ob_cmd('dief', m, a); raise(OB_STOP); }
-function ob_put(n, v)        { push(OB_OUT, { p: n, v: v }); }
 
 // val_or: значение настройки по образцу, иначе умолчание с жалобой в stderr.
 function ob_val_or(name, val, re, def, where) {
@@ -303,43 +302,16 @@ function ob_key(url, tag, prev_sni, prev_wshost) {
 	return { N: N, block: b, raw: false };
 }
 
-// N_* для shell -- как после parse_node.
-function ob_put_n(N) {
-	for (let k in N) ob_put('N_' + k, N[k]);
-	for (let k in [ 'PASS', 'USER', 'OBFSPW' ]) ob_put('J_' + k, pk_jstr(N[k] ?? ''));
-}
-
-// Записи -- командами sh (как у bw_uc parse).
-function ob_flush() {
-	let r = [];
-	for (let m in OB_OUT)
-		push(r, m.p != null ? m.p + '=' + pk_q(m.v) :
-			m.c + ' ' + join(' ', map([ m.f, ...m.a ], pk_q)) + (m.e ? ' >&2' : ''));
-	print(join('\n', r), '\n');
-}
-
-// Записи -- печатью здесь же (gen): отказ -- [x] и выход, как die в shell.
-function ob_emit(list) {
+// Записи -- печатью здесь же (gen, check, probe): отказ -- [x] и выход, как
+// die в shell; soft -- [x] без выхода, итог false (probe --all идёт дальше).
+function ob_emit(list, soft) {
 	for (let m in list) {
-		if (m.p != null) continue;
-		if (m.c == 'warn' || m.c == 'warnf') _warn(_pf(_t(m.f), m.a));
-		else die_raw(_pf(_t(m.f), m.a));
+		if (m.c == 'warn' || m.c == 'warnf') { _warn(_pf(_t(m.f), m.a)); continue; }
+		if (!soft) die_raw(_pf(_t(m.f), m.a));
+		print('\x1b[1;31m[x]\x1b[0m ', _pf(_t(m.f), m.a), '\n');
+		return false;
 	}
-}
-
-// bw_uc outbound ТЕГ: ключ из BW_URL (пусто -- из настроек), N_* и блок (PB).
-function cmd_outbound(tag, quiet) {
-	OB_OUT = [];
-	OB_QUIET_PARSE = quiet == 'quiet';
-	try {
-		let k = ob_key(getenv('BW_URL') ?? '', tag ?? 'proxy', getenv('BW_SNI') ?? '', getenv('BW_WSHOST') ?? '');
-		ob_put_n(k.N);
-		ob_put('PB', sprintf('%J', k.block));
-		ob_put('OB_HOSTS', k.raw ? join(' ', ob_raw_hosts(k.block)) : k.N.HOST);
-	} catch (e) {
-		if (e.message !== OB_STOP) raise(e.message);
-	}
-	ob_flush();
+	return true;
 }
 
 // Аутбаунды целиком (бывший build_proxies). Обычные режимы -- один с тегом
