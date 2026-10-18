@@ -308,7 +308,7 @@ function ob_emit(list, soft) {
 	for (let m in list) {
 		if (m.c == 'warn' || m.c == 'warnf') { _warn(_pf(_t(m.f), m.a)); continue; }
 		if (!soft) die_raw(_pf(_t(m.f), m.a));
-		print('\x1b[1;31m[x]\x1b[0m ', _pf(_t(m.f), m.a), '\n');
+		print(_mark(31, '[x]'), _pf(_t(m.f), m.a), '\n');
 		return false;
 	}
 	return true;

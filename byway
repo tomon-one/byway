@@ -3026,548 +3026,24 @@ cmd_health() {
     BW_OUT=$OUT BW_XRAY=$XRAY BW_PROBE=$PROBE_DOMAIN bw_uc health
 }
 
-# byway doctor: проверка окружения по разделам doctor_*.
+# byway doctor и report -- в ucode (uc/doctor.uc). Здесь пути и номера,
+# которые пока живут в shell (обновление, списки, сторож), одним набором.
 
-_d_ok()   { printf '  [ ok ] %s\n' "$(_t "$1")"; }
-
-_d_bad()  { printf '  [ !! ] %s\n' "$(_t "$1")"; [ -n "${2:-}" ] && printf '         %s\n' "$(_t "$2")"; DOCTOR_BAD=$((DOCTOR_BAD + 1)); }
-
-_d_warn() { printf '  [ ?? ] %s\n' "$(_t "$1")"; [ -n "${2:-}" ] && printf '         %s\n' "$(_t "$2")"; }
+diag_uc() {
+    BW_NUM=$BYWAY_NUM BW_XRAY=$XRAY BW_OUT=$OUT BW_CONF=$CONF BW_LISTS=$LISTS \
+    BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR BW_MERGED=$(merged_domains) \
+    BW_SUBNETS=$(merged_subnets) BW_NEWVER=$NEWVER BW_RELNOTE=$RELNOTE \
+    BW_UPFAIL=$UPFAIL BW_UPOK=$UPOK BW_BINSUM=$BINSUM BW_AUFAIL=$AUFAIL \
+    BW_PKG_FIX=$PKG_FIX BW_ACCESS=$ACCESS BW_AULOG=$AULOG BW_PROBE=$PROBE_DOMAIN \
+    BW_BADLIST=$BADLIST BW_WATCH_LOG=$WATCH_LOG bw_uc "$@"
+}
 
 cmd_doctor() {
-    DOCTOR_BAD=0
-    printf "$(_t 'byway %s — проверка окружения\n\n')" "$BYWAY_VERSION"
-    doctor_system
-    doctor_needs
-    doctor_updates
-    doctor_config
-    doctor_dns
-    doctor_marks
-    doctor_files
-    doctor_rivals
-    doctor_ports
-
-    printf '\n'
-    if [ "$DOCTOR_BAD" -eq 0 ]; then
-        say "окружение в порядке"
-    else
-        warnf "неисправностей: %s — способ лечения указан у каждой" "$DOCTOR_BAD"
-        return 1
-    fi
-}
-
-# ОС, архитектура, свободное место на флеше.
-doctor_system() {
-    printf "$(_t 'Система\n')"
-    if [ -f /etc/openwrt_release ]; then
-        _ver=$(sed -n "s/^DISTRIB_RELEASE='\(.*\)'/\1/p" /etc/openwrt_release)
-        _d_ok "$(_f 'OpenWrt: %s' "$_ver")"
-    else
-        _d_warn "не OpenWrt" "byway рассчитан на OpenWrt, на другом может не работать"
-    fi
-    _d_ok "$(_f 'архитектура: %s' "$(uname -m)")"
-    # Отдельного /overlay может не быть (ram-профили, чистый ext4): df молчит,
-    # берётся корень, иначе ложная нехватка места.
-    _mnt=/overlay; [ -d /overlay ] || _mnt=/
-    _free=$(df -k "$_mnt" 2>/dev/null | awk 'NR==2{print int($4/1024)}')
-    [ -n "$_free" ] || _free=$(df -k / 2>/dev/null | awk 'NR==2{print int($4/1024)}')
-    if [ "${_free:-0}" -lt 2 ]; then
-        _d_bad "$(_f 'свободно на флеше: %s МБ' "${_free}")" "меньше двух мегабайт: списки и конфиг могут не записаться"
-    else
-        _d_ok "$(_f 'свободно на флеше: %s МБ' "${_free}")"
-    fi
-    return 0
-}
-
-# Включён ли byway, автозапуск, cron, модули ядра, firewall4, Xray, утилиты.
-doctor_needs() {
-    printf "$(_t '\nЧего требует byway\n')"
-    # Включён ли byway и работает ли движок: без этого отчёт на выключенном
-    # byway выходил зелёным.
-    if [ "$(u enabled)" = "1" ]; then
-        if [ -n "$(xray_pid)" ]; then
-            _d_ok "$(_t 'byway включён, движок работает')"
-        else
-            _d_bad "$(_t 'byway включён, но движок не работает')" \
-                   "движок не запущен или упал: /etc/init.d/byway restart, затем byway status и logread -e xray"
-        fi
-    else
-        _d_warn "$(_t 'byway выключен настройкой')" \
-                "включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart"
-    fi
-
-    # Автозапуск отдельно от enabled: настройка решает, поднимать ли туннель
-    # сейчас, rc.d-ссылка -- переживёт ли он перезагрузку. Файл службы
-    # проверяется отдельно: `init.d/X enabled` одинаково отвечает отказом на
-    # «выключено» и «нет файла».
-    if [ ! -x /etc/init.d/byway ]; then
-        _d_bad "$(_t 'файла службы нет')" \
-               "byway не поднимется ни сейчас, ни после перезагрузки: поставить заново"
-    elif /etc/init.d/byway enabled 2>/dev/null; then
-        _d_ok "$(_t 'служба в автозапуске')"
-    else
-        _d_bad "$(_t 'служба НЕ в автозапуске')" \
-               "сейчас работает, но после перезагрузки туннеля не будет: /etc/init.d/byway enable"
-    fi
-
-    # Задачи cron: сторож обвязки, учёт, обрезка журналов. Если они потеряны
-    # при переносе crontab или crond не стартует (при пустом /etc/crontabs),
-    # всё молча не работает.
-    _cw=$(crontab -l 2>/dev/null | grep -c "byway watch" || true); _cw=${_cw:-0}
-    _cs=$(crontab -l 2>/dev/null | grep -c "byway stat" || true); _cs=${_cs:-0}
-    if [ "$_cw" -gt 0 ] && [ "$_cs" -gt 0 ]; then
-        if pidof crond >/dev/null 2>&1; then
-            _d_ok "$(_t 'задачи cron на месте, crond работает')"
-        else
-            _d_bad "$(_t 'задачи cron есть, но crond не работает')" \
-                   "без него не работают ни проверка перехвата раз в 5 минут (byway watch), ни учёт трафика (byway stat), ни обрезка журналов: /etc/init.d/cron enable && /etc/init.d/cron start"
-        fi
-    else
-        _d_bad "$(_f 'в cron не хватает задач byway (watch: %s, stat: %s)' "$_cw" "$_cs")" \
-               "переустановить byway либо завести вручную: */5 * * * * /usr/local/bin/byway watch и 7 * * * * /usr/local/bin/byway stat"
-    fi
-    crontab -l 2>/dev/null | grep -q "byway pulse" ||
-        _d_warn "нет задачи cron byway pulse" \
-                "без неё при отказе движка дом остаётся без DNS до 10 минут вместо 1–2: byway update --force либо завести вручную: * * * * * /usr/local/bin/byway pulse"
-    for _m in nft_tproxy nft_socket; do
-        # lsmod не показывает модули, встроенные в ядро: смотреть ещё
-        # /sys/module/<имя>.
-        if lsmod 2>/dev/null | grep -q "^$_m " || [ -d "/sys/module/$_m" ]; then
-            _d_ok "$(_f 'модуль %s' "$_m")"
-        else
-            _d_bad "$(_f 'нет модуля %s' "$_m")" "$PKG_FIX kmod-nft-tproxy kmod-nft-socket"
-        fi
-    done
-    if command -v fw4 >/dev/null 2>&1; then
-        _d_ok "$(_t 'файрвол firewall4')"
-    else
-        _d_bad "$(_t 'firewall4 не найден — вероятно firewall3, 21.02 и старше')" \
-               "byway работает только на firewall4, это OpenWrt 22.03 и новее — на firewall3 правило по метке не встанет"
-    fi
-    if [ -x "$XRAY" ]; then
-        _xv=$("$XRAY" version 2>/dev/null | head -1 | cut -d' ' -f1-2)
-        _d_ok "$(_f 'движок: %s (%s)' "$_xv" "$XRAY")"
-        _xpd=$(xray_pid)
-        if [ -n "$_xpd" ]; then
-            if [ "$(awk '/^Uid:/ { print $2 }' "/proc/$_xpd/status" 2>/dev/null)" = 0 ]; then
-                _d_warn "движок работает от root" \
-                        "права не урезаны: нет /sbin/ujail (пакет procd-ujail) либо задано byway.main.xray_root=1"
-            else
-                _d_ok "движок работает не от root (пользователь byway)"
-            fi
-        fi
-        if [ -f "$OUT" ] && grep -q '"network": "xhttp"' "$OUT" && eng_dial_bug "$XRAY"; then
-            _d_warn "$(_t 'xmux не ограничивает соединения: ядро собрано на Go 1.27')" \
-                    "при сбое сервера xhttp открывает сотни соединений: память роутера, риск блокировки адреса. Ядро с -tags http2legacy либо на x/net v0.60.0+: docs/engine.md, «Ядро на Go 1.27»"
-        fi
-    else
-        _d_bad "$(_f 'не найден Xray-core (%s)' "$XRAY")" "$(_f '%s xray-core либо задать byway.main.xray_bin' "$PKG_FIX")"
-    fi
-    for _c in curl nft ip uci; do
-        command -v "$_c" >/dev/null 2>&1 && _d_ok "$(_f 'есть %s' "$_c")" ||
-            _d_bad "$(_f 'нет %s' "$_c")" "$PKG_FIX $_c"
-    done
-    # ucode разбирает ключи; он есть в любой OpenWrt с firewall4.
-    if command -v ucode >/dev/null 2>&1; then
-        _d_ok "есть ucode (разбор ключей)"
-    else
-        _d_bad "нет ucode — ключи не разбираются" "$PKG_FIX ucode"
-    fi
-    return 0
-}
-
-# Есть ли новая версия, сработает ли автообновление, часовой пояс окна.
-doctor_updates() {
-    printf "$(_t '\nОбновления\n')"
-    # Раздел не выходит пустым заголовком: пустота читается как «проверка не
-    # прошла».
-    if [ ! -s "$NEWVER" ]; then
-        if [ "$(u update_check)" = "0" ]; then
-            _d_ok "$(_t 'проверка новых версий выключена')"
-        elif [ -f "$UPFAIL" ] && { [ ! -f "$UPOK" ] || [ -n "$(find "$UPFAIL" -newer "$UPOK" 2>/dev/null)" ]; }; then
-            # Последняя проверка не дошла до GitHub: «новее не найдено» тут
-            # было бы ложью.
-            _d_warn "$(_f 'проверка новых версий не удалась (ответ GitHub: %s)' "$(cat "$UPFAIL" 2>/dev/null)")" \
-                    "новые выпуски не видны: нет связи с GitHub либо он отвечает отказом. Проверить вручную: byway update --check"
-        else
-            _d_ok "$(_f 'новее %s не найдено' "$BYWAY_NUM")"
-        fi
-    fi
-    if [ -s "$NEWVER" ] && ver_gt "$(cat "$NEWVER")" "$BYWAY_NUM"; then
-        # Важность выпуска -- первым словом описания: красная строка вместо
-        # жёлтой.
-        case "$(cat "$RELNOTE" 2>/dev/null)" in
-          ВАЖНО*|CRITICAL*|!*)
-            _d_bad "$(_f 'важное обновление: %s' "$(cat "$NEWVER")")" \
-                   "$(cat "$RELNOTE" 2>/dev/null) -- $(_t 'поставить: byway update')" ;;
-          *)
-            _d_warn "$(_f 'есть новая версия: %s' "$(cat "$NEWVER")")" \
-                    "$(cat "$RELNOTE" 2>/dev/null) -- $(_t 'поставить: byway update')" ;;
-        esac
-    fi
-    # Автообновление работает только при сумме от установщика: у ручной копии
-    # или своей сборки оно пропускается намеренно (архив перетёр бы чужую
-    # правку). Сумму byway себе не пишет: проверка потеряла бы смысл.
-    if [ "$(u auto_update)" = "1" ]; then
-        if [ ! -f "$BINSUM" ]; then
-            _d_warn "$(_t 'автообновление включено, но происхождение файла неизвестно')" \
-                    "byway положен не установщиком -- обновление пропускается. Лечится запуском install.sh из файлов byway"
-        elif [ "$(md5sum /usr/local/bin/byway 2>/dev/null | cut -d" " -f1)" != "$(cat "$BINSUM")" ]; then
-            _d_warn "$(_t 'автообновление включено, но byway правлен руками')" \
-                    "своя правка не будет перетёрта: обновление пропускается намеренно"
-        else
-            _d_ok "$(_t 'автообновление включено')"
-        fi
-        # update_check -- независимый тумблер: без суточной проверки NEWVER не
-        # пишется, и ставить нечего.
-        if [ "$(u update_check)" = "0" ]; then
-            _d_warn "автообновление включено, но суточная проверка версий выключена" \
-                    "без проверки версий автообновлению нечего ставить — включить: uci set byway.main.update_check=1 && uci commit byway"
-        fi
-        # Окно берётся по местному времени (date +%H), а OpenWrt по умолчанию в
-        # UTC: «04:00» выходит днём (Москва 07:00, Владивосток 14:00). Окно на
-        # UTC не переводится -- хуже тем, у кого пояс верный; только
-        # предупреждение.
-        _tzn=$(uci -q get system.@system[0].zonename 2>/dev/null || true)
-        _tzo=$(uci -q get system.@system[0].timezone 2>/dev/null || true)
-        _auhd=$(au_hour)
-        # Судим по timezone, не по zonename: часы двигает только POSIX-TZ в
-        # timezone, а zonename без zoneinfo в образе ничего не меняет.
-        # Печатается фактическое смещение.
-        case "${_tzo:-UTC}" in
-          UTC|""|GMT0|GMT)
-            _d_warn "$(_f 'часы роутера идут по UTC (timezone=%s) — окно обновления придётся на %s:00 UTC' "${_tzo:-$(_t 'не задан')}" "$_auhd")" \
-                    "у вас это не ночь: в Москве это на три часа позже, во Владивостоке на десять — перезапуск службы среди дня. Лечится в LuCI (Система → Общие настройки → Часовой пояс) либо uci set system.@system[0].timezone=... && uci commit system && /etc/init.d/system reload (именно timezone: zonename часы не двигает)" ;;
-          *)
-            _d_ok "$(_f 'часы %s (%s, смещение %s), обновление в %s:00 по часам роутера — сейчас %s' \
-                       "${_tzn:-$(_t 'без ярлыка')}" "$_tzo" "$(date '+%z' 2>/dev/null || echo '?')" \
-                       "$_auhd" "$(date '+%H:%M')")" ;;
-        esac
-        # Отметка о провалившемся выпуске: причину могли устранить, а этот
-        # номер больше не ставится никогда -- человек должен знать.
-        _aufv=$(cat "$AUFAIL" 2>/dev/null || true)
-        if [ -n "$_aufv" ]; then
-            _d_warn "$(_f 'выпуск %s не поднялся и больше не ставится сам' "$_aufv")" \
-                    "если причина устранена — поставить вручную: byway update --force"
-        fi
-    fi
-    return 0
-}
-
-# Конфигурация, ключ(и), списки, ширина подсетей, пины, IPv6, метки.
-doctor_config() {
-    printf "$(_t '\nНастройка\n')"
-    if [ -f "$CONF" ]; then _d_ok "$(_f 'конфигурация %s' "$CONF")"; else
-        _d_bad "$(_f 'нет %s' "$CONF")" "переустановить byway"; fi
-    # По режиму, не по node_url: автовыбор читает node_urls, и на рабочем
-    # автовыборе doctor советовал вписать ключ в поле, которое режим не читает.
-    case "$(u conn_mode)" in
-      urltest)
-        _kn=$(uci -q get byway.main.node_urls 2>/dev/null | wc -w)
-        if [ "${_kn:-0}" -gt 0 ]; then
-            _d_ok "$(_f 'ключей для автовыбора: %s' "$_kn")"
-        else
-            _d_bad "ключи для автовыбора не заданы" "добавить на вкладке «Основное» либо: uci add_list byway.main.node_urls=vless://…"
-        fi ;;
-      outbound)
-        if [ -n "$(u outbound_json)" ]; then
-            _d_ok "свой конфиг аутбаунда задан"
-        else
-            _d_bad "выбран свой конфиг, но он пуст" "вписать кусок JSON на вкладке «Основное»"
-        fi ;;
-      *)
-        case "$(u node_url)" in
-          "")            _d_bad "ключ не задан" "вписать на вкладке «Основное» или: uci set byway.main.node_url=vless://…" ;;
-          ЗАПОЛНИТЬ*)    _d_bad "ключ не заполнен" "вписать настоящий ключ вместо заглушки" ;;
-          *)             _d_ok "$(_f 'ключ задан, режим: %s' "$(u conn_mode)")" ;;
-        esac ;;
-    esac
-    # По объединённому списку (свой, направления, пресеты): по своему файлу
-    # пустой список объявлялся и тем, у кого работает пресет.
-    _dmerged=$(merged_domains)
-    if [ -s "$_dmerged" ]; then
-        _dn=$(count_list "$_dmerged")
-        _dnown=$(count_list "$LISTS/domains.lst")
-        _d_ok "$(_f 'список доменов: %s записей (своих %s)' "$_dn" "${_dnown:-0}")"
-    elif [ "$(u list_mode)" = "all" ]; then
-        _d_ok "списки не нужны: режим «всё через VPN»"
-    else
-        _d_warn "список доменов пуст" "через VPN не пойдёт ничего: наполнить или включить пресет"
-    fi
-    # Ширина подсетей: одна 0.0.0.0/0 молча делает режим «по спискам» полным
-    # туннелем, а status и health считают записи, не адреса.
-    _sw=$(net_width "$(merged_subnets)")
-    _swt=${_sw%% *}; _swb=${_sw##* }
-    if [ "${_swt:-0}" -gt 1000000 ] || [ "${_swb:-32}" -le 12 ]; then
-        _d_warn "$(_f 'подсети списка: %s адресов, крупнейший блок /%s' "$_swt" "$_swb")" \
-                "в туннель уйдёт и чужой трафик, и скорость упадёт: проверить subnets.lst"
-    fi
-    # Пины /etc/hosts против списка: их ставят и Zapret-Manager, и руками.
-    _pin=$(hosts_vs_domains "$_dmerged")
-    if [ "${_pin:-0}" -gt 0 ]; then
-        _d_warn "$(_f 'пинов в /etc/hosts перебивают записи списка: %s' "$_pin")" \
-                "dnsmasq отвечает по пину сам, подставного адреса не будет — эти домены в туннель не пойдут, и запрет «не пускать мимо VPN» их тоже не закроет"
-    fi
-    # byway держит «всё через VPN» только по IPv4 (`tproxy ip to`): пакет IPv6
-    # проходит нетронутым, а клиент по RFC 6724 предпочитает AAAA.
-    # Предупреждение нужно и в режиме по спискам: подсети и домены там тоже
-    # только IPv4.
-    if ip -6 route show default 2>/dev/null | grep -q .; then
-        if v6on; then
-            # Настройка и правила расходятся молча: правила перекладываются
-            # только при подъёме.
-            if ip -6 rule show 2>/dev/null | grep -qE "$(rule_re)"; then
-                _d_ok "$(_t 'IPv6 поднят и заворачивается наравне с IPv4')"
-            else
-                _d_bad "$(_t 'IPv6 включён в настройках, но правила для него в ядре нет')" \
-                       "переложить правила: byway plumb on"
-            fi
-        elif [ "$(u list_mode)" = "all" ]; then
-            _d_warn "IPv6 поднят, а перехват только по IPv4" "в режиме «всё через VPN» соединения по IPv6 идут мимо туннеля: выключить IPv6 на WAN либо вернуться к режиму по спискам"
-        else
-            _d_warn "IPv6 поднят, а перехват только по IPv4" "и домены, и подсети закрывают только IPv4: клиент, получивший AAAA, предпочтёт его и уйдёт напрямую. Выключить IPv6 на WAN -- либо помнить, что подсети сервиса его не покрывают"
-        fi
-    fi
-
-    # Биты self_mark и mark не должны пересекаться: ip rule ставится с маской,
-    # и пакеты движка уйдут в таблицу 100 на петлю при зелёных проверках.
-    # self_mark сам берёт другое значение; здесь повтор.
-    if [ "$(u router_via_vpn)" = "1" ]; then
-        _dsm=$(u self_mark); _dsm=${_dsm:-0x400000}
-        _dmk=$(u mark); _dmk=${_dmk:-0x100000}
-        case "$_dsm$_dmk" in
-          *[!0-9a-fA-FxX]*) ;;
-          *) [ "$(( _dsm & _dmk ))" -ne 0 ] &&
-               _d_warn "$(_f 'self_mark %s пересекается битами с mark %s' "$_dsm" "$_dmk")" \
-                       "byway возьмёт другое значение сам (его видно в byway nft, строка «meta mark … return»); закрепить: uci set byway.main.self_mark=ЗНАЧЕНИЕ && uci commit byway && /etc/init.d/byway reload" ;;
-        esac
-    fi
-    return 0
-}
-
-# dnsmasq на byway, сети вне перехвата, клиенты со своим DNS.
-doctor_dns() {
-    printf "$(_t '\nПерехват и соседние службы\n')"
-    # Вхождением, не равенством: `uci get` списка отдаёт все значения через
-    # пробел (так же в стороже).
-    case " $(uci -q get "$DNSSEC.server" 2>/dev/null) " in
-      *" $(dns_addr) "*) _d_ok "dnsmasq направлен на byway" ;;
-      *)
-        # На свежей установке движка нет, dnsmasq трогать не надо, а `plumb on`
-        # упадёт.
-        if [ "$(u enabled)" != "1" ] || [ -z "$(xray_pid)" ]; then
-            _d_ok "$(_t 'dnsmasq не тронут — byway ещё не запущен, так и должно быть')"
-        else
-            _d_warn "dnsmasq не направлен на byway" "правила перехвата сняты: byway plumb on"
-        fi ;;
-    esac
-    # dnsmasq один на все мосты, перехват -- только на перечисленных: сеть вне
-    # списка получает fakeip из 198.18/15 и умирает на WAN. Снятая галочка не
-    # отправляет сеть напрямую, а отнимает у неё весь список; с роутера всё
-    # выглядит исправным.
-    _bwif=" $(u interface) "
-    _lost=""
-    _outside=""
-    for _dsec in $(uci show dhcp 2>/dev/null | sed -n 's/^dhcp\.\([^.]*\)=dhcp$/\1/p'); do
-        _dif=$(uci -q get "dhcp.$_dsec.interface" 2>/dev/null || true)
-        [ -n "$_dif" ] || continue
-        [ "$(uci -q get "dhcp.$_dsec.ignore" 2>/dev/null || true)" = "1" ] && continue
-        _dbr=$(uci -q get "network.$_dif.device" 2>/dev/null || true)
-        [ -n "$_dbr" ] || _dbr="br-$_dif"
-        case "$_bwif" in *" $_dbr "*) continue ;; esac
-        # Сеть вне перехвата копится отдельно: в режиме «всё через VPN» это
-        # дыра, чем бы она ни резолвила -- гейт `iifname != {…} return` стоит
-        # первым и в перехвате, и в запрете.
-        _outside="$_outside $_dbr"
-        # Свой резолвер сети задан через DHCP -- значит наш ей и не достаётся.
-        uci -q get "dhcp.$_dsec.dhcp_option" 2>/dev/null | grep -q '6,' && continue
-        _lost="$_lost $_dbr"
-    done
-    if [ "$(u list_mode)" = "all" ] && [ -n "$_outside" ]; then
-        _d_bad "$(_f 'режим «всё через VPN», а эти сети идут мимо него целиком:%s' "$_outside")" \
-               "в этом режиме byway.main.interface -- граница ВСЕЙ защиты, а не только списков: что вне его, то мимо туннеля и мимо запрета «не пускать мимо VPN». Добавить устройства в byway.main.interface"
-    elif [ -n "$_lost" ]; then
-        _d_warn "$(_f 'сети с резолвером byway, но без перехвата:%s' "$_lost")" \
-                "их клиенты получат подставной адрес, до туннеля не дойдут и потеряют ВЕСЬ список. Лечится одним из двух: добавить сеть в byway.main.interface либо выдать ей свой DNS через dhcp_option '6,…'"
-    else
-        _d_ok "$(_t 'перехват и резолвер согласованы по сетям')"
-    fi
-
-    # Клиент, резолвящий мимо роутера (Приватный DNS, DoH, чужой резолвер),
-    # туннеля не получает: маршрут решает DNS. Перехват 53-го порта byway не
-    # ставит -- решение владельца сети.
-    if [ "$(u list_mode)" != "all" ]; then
-        _d_warn "$(_t 'клиент со своим DNS проходит мимо туннеля')" \
-                "маршрут решает DNS: устройство с «Приватным DNS», DoH в браузере или чужим резолвером в настройках уйдёт напрямую, и byway этого не увидит. Лечится либо выключением шифрованного DNS на устройствах, либо перехватом 53-го порта в firewall, либо добавлением к доменам ПОДСЕТЕЙ сервиса: подсеть работает по адресу, а значит и для того, кто спросил адрес не у роутера. Третий способ проще двух первых, но покрывает ТОЛЬКО IPv4: клиент, получивший AAAA, уйдёт мимо подсетей"
-    fi
-    return 0
-}
-
-# Чужие правила firewall по метке byway.
-doctor_marks() {
-    # Чужое правило по той же метке -- дыра: удаление нашего её не закроет
-    # (остаток podkop).
-    _mk=$(u mark); _mk=${_mk:-0x100000}
-    _other=$(uci show firewall 2>/dev/null | grep -c "mark='$_mk" || true)
-    if [ "${_other:-0}" -gt 1 ]; then
-        _d_warn "$(_f 'правил firewall с меткой %s: %s' "$_mk" "$_other")" "лишнее оставит дыру после удаления byway — проверить: uci show firewall | grep mark"
-    elif [ "${_other:-0}" -eq 0 ]; then
-        _d_warn "$(_t 'правила firewall для помеченного трафика нет')" "гостевые и другие зоны с input REJECT остаются без туннеля; byway заводит правило заново при подъёме перехвата: /etc/init.d/byway restart"
-    else
-        _d_ok "$(_f 'правил firewall с меткой byway: %s' "${_other:-0}")"
-    fi
-    return 0
-}
-
-# Направления, лишние файлы направлений и пресетов, возраст пресетов.
-doctor_files() {
-    # Направления: ключ по метке мог исчезнуть, список -- опустеть.
-    for _r4 in $(route_names); do
-        [ "$(uci -q get "byway.$_r4.enabled")" = "0" ] && continue
-        _l4=$(uci -q get "byway.$_r4.label" || true)
-        if ! route_key "$_l4" >/dev/null 2>&1; then
-            _d_bad "$(_f 'направление «%s»: ключа с меткой «%s» нет' "$_r4" "$_l4")" "выбрать существующий ключ либо убрать направление"
-        elif [ ! -s "$ROUTES_DIR/$_r4.lst" ]; then
-            _d_warn "$(_f 'направление «%s»: список пуст' "$_r4")" "наполнить список либо убрать направление"
-        else
-            _d_ok "$(_f 'направление «%s» ведёт в «%s»' "$_r4" "$_l4")"
-        fi
-    done
-
-    # Файл удалённого направления byway не читает, но и не убирает: удаление
-    # отдано человеку (файл могли положить заранее).
-    for _of in "$ROUTES_DIR"/*.lst; do
-        [ -f "$_of" ] || continue
-        _on=$(basename "$_of" .lst)
-        uci -q get "byway.$_on" >/dev/null 2>&1 && continue
-        _d_warn "$(_f 'список «%s» лежит без направления и не читается' "$_on")" "убрать файл, если направление удалено"
-    done
-
-    # Снятая галочка пресета оставляет копию во флеше (до 200 тыс. строк на
-    # 43.7 МБ; её не убирают ни `byway clear`, ни удаление без --purge).
-    # Обратное опаснее: включение не запускает скачивание, а с ним пропадает
-    # сверка с хостлистом zapret -- поэтому предупреждение про возраст.
-    for _pf2 in "$PRESETS_DIR"/*.lst "$PRESETS_DIR"/*.sub; do
-        [ -f "$_pf2" ] || continue
-        _pn2=$(basename "$_pf2" .lst); _pn2=${_pn2%.sub}
-        case " $(u preset) " in
-          *" $_pn2 "*)
-            if [ -z "$(find "$_pf2" -mtime -30 2>/dev/null)" ]; then
-                _d_warn "$(_f 'готовый список «%s» не обновлялся больше месяца' "$_pn2")" "обновить и заодно свериться с zapret: byway presets"
-            fi ;;
-          *) _d_warn "$(_f 'готовый список «%s» отключён, а копия лежит во флеше' "$_pn2")" "включить обратно или убрать файл из /etc/byway/presets" ;;
-        esac
-    done
-    return 0
-}
-
-# Соседи по ремеслу (podkop, passwall и др.): работают ли рядом.
-doctor_rivals() {
-    for _nb in podkop:podkop passwall:passwall passwall2:passwall2 \
-               openclash:openclash nikki:nikki homeproxy:homeproxy \
-               shadowsocks-libev:shadowsocks; do
-        _ni=${_nb%%:*}; _nn=${_nb##*:}
-        if [ -x "/etc/init.d/$_ni" ]; then
-            # `enabled` -- про автозапуск, не про работу: живой процесс важнее.
-            # Ещё смотрится след в ядре (таблица nft, правило на таблицу 100):
-            # `running` есть не у всякой службы, podkop отвечает «not running»
-            # при живом движке.
-            _trace=0
-            nft list tables 2>/dev/null | grep -qi "[ ]$_ni\$" && _trace=1
-            # Свои правила byway не считаются: при лежащем движке они остаются.
-            ip rule show 2>/dev/null | grep "lookup $RT_TABLE" | grep -vE "$(rule_re)" | grep -q . &&
-                [ -z "$(xray_pid)" ] && _trace=1
-            if [ "$_trace" = 1 ]; then
-                _d_bad "$(_f 'рядом РАБОТАЕТ %s' "$_nn")" "$(_f 'след виден в ядре: своя таблица nft либо правило на таблицу маршрутизации %s. Оставить что-то одно: /etc/init.d/%s stop && /etc/init.d/%s disable' "$RT_TABLE" "$_ni" "$_ni")"
-            elif "/etc/init.d/$_ni" running >/dev/null 2>&1; then
-                _d_bad "$(_f 'рядом РАБОТАЕТ %s' "$_nn")" "$(_f 'он метит трафик и перехватывает те же порты — оставить что-то одно: /etc/init.d/%s stop && /etc/init.d/%s disable' "$_ni" "$_ni")"
-            elif "/etc/init.d/$_ni" enabled 2>/dev/null; then
-                _d_warn "$(_f 'рядом включён %s' "$_nn")" "он метит трафик и перехватывает те же порты — оставить что-то одно"
-            else
-                _d_ok "$(_f '%s установлен, но выключен' "$_nn")"
-            fi
-        fi
-    done
-    # pbr (маршрутизация по правилам) уживается рядом, если метки и таблицы не
-    # пересекаются: выключать его не советуем, называем, что сверить.
-    if [ -x /etc/init.d/pbr ] && /etc/init.d/pbr enabled 2>/dev/null; then
-        _pm=$(u mark); _pm=${_pm:-0x100000}
-        _d_warn "рядом включён pbr" "$(_f 'он тоже метит трафик и правит ip rule: его метки и таблицы не должны совпадать с меткой byway %s и таблицей %s' "$_pm" "$RT_TABLE")"
-    fi
-    return 0
-}
-
-# Порты tproxy и прокси, заворот трафика роутера, маршрут, дубли ip rule.
-doctor_ports() {
-    # Порт, метку и таблицу мог занять кто угодно: спрашиваем систему.
-    _tp=$(u tproxy_port); _tp=${_tp:-1602}
-    _lp2=$(u local_proxy_port); _lp2=${_lp2:-1603}
-    # redir_port ругается на столкновение портов: звать раз, не трижды.
-    _rdport=$(redir_port "$(_t 'проверки окружения')")
-    if [ -n "$_rdport" ]; then _rdpair="$_rdport:$(_t 'вход для трафика роутера')"
-    else _rdpair=""; fi
-    for _pp in "$_tp:$(_t 'вход tproxy')" "$_lp2:$(_t 'прокси роутера')" ${_rdpair:+"$_rdpair"}; do
-        _pn=${_pp%%:*}; _pd=${_pp##*:}
-        _who=$(netstat -lnp 2>/dev/null | grep -E "[:.]$_pn[[:space:]]" |
-               awk '{print $NF}' | grep -v "^-$" | sort -u | tr '\n' ' ')
-        case "$_who" in
-          ""|*xray*) _d_ok "$(_f '%s (порт %s) свободен или занят byway' "$_pd" "$_pn")" ;;
-          *)         _d_warn "$(_f '%s (порт %s) занят: %s' "$_pd" "$_pn" "$_who")" "сменить порт в настройках byway либо убрать чужую службу" ;;
-        esac
-    done
-    # Заворот включён настройкой, работает цепочкой в ядре: расходятся молча
-    # (правила не переложили). Спрашивать только при стоящей обвязке: на свежей
-    # установке цепочки нет, и совет «переложить» вреден.
-    if [ -n "$_rdport" ] && nft list table inet "$TABLE" >/dev/null 2>&1; then
-        if nft list chain inet "$TABLE" output >/dev/null 2>&1; then
-            # Цепочка ловит только fakeip, то есть домены объединённого списка:
-            # на пустом списке она есть, а заворот не действует (заметнее всего
-            # в режиме «всё через VPN»).
-            if [ -n "$(plain_domains "$(merged_domains)" | head -1)" ]; then
-                _d_ok "$(_t 'роутер ходит к сайтам из списка сам')"
-            else
-                _d_warn "$(_t 'VPN для программ на роутере (router_via_vpn) включён, но список пуст — ловить нечего')" \
-                        "VPN для программ на роутере работает по доменам списка: наполнить список либо подключить готовый"
-            fi
-        else
-            _d_warn "$(_t 'VPN для программ на роутере (router_via_vpn) включён, но цепочки в ядре нет')" \
-                    "переложить правила: byway plumb on"
-        fi
-    elif [ "$(u router_via_vpn)" != "1" ]; then
-        # Без заворота свой трафик роутера перехват не ловит: резолвер отдаёт
-        # fakeip, маршрута нет, curl висит до таймаута, busybox wget --
-        # «Operation not permitted». byway не задет (ходит через прокси-вход),
-        # задеты соседи: обновлялка zapret, Zapret-Manager, чужие скрипты.
-        _d_warn "$(_t 'роутер сам до сайтов из списка не достаёт')" \
-                "VPN для программ на роутере (router_via_vpn) выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload"
-    fi
-
-    # Правило и маршрут снимаются разными руками: сосед, чистящий таблицу 100,
-    # уносит маршрут, а правило и nft остаются -- обвязка выглядит исправной.
-    if nft list table inet "$TABLE" >/dev/null 2>&1 &&
-       ! ip route show table "$RT_TABLE" 2>/dev/null | grep -q '^local default'; then
-        _d_bad "$(_f 'в таблице маршрутизации %s нет маршрута local default' "$RT_TABLE")" \
-               "переложить правила: byway plumb on"
-    fi
-
-    _rules=$(ip rule show 2>/dev/null | grep -cE "$(rule_re)" || true)
-    if [ "${_rules:-0}" -gt 1 ]; then
-        _d_warn "$(_f 'правил ip rule на таблицу %s: %s' "$RT_TABLE" "$_rules")" "лишние копятся при перезапусках — снять: byway plumb on"
-    fi
-    return 0
+    diag_uc doctor
 }
 
 # byway report: отчёт для обращения, адреса и имена вымараны, ключа нет.
-
-# ── отчёт для обращения ────────────────────────────────────────────────────
-# Ключи настроек в отчёте -- по белому списку: новая настройка с секретом по
-# умолчанию закрыта. Про ключ узла печатается форма (схема, транспорт, защита),
-# не значение.
-REPORT_KEYS="enabled conn_mode list_mode ru_direct preset interface
-             fakeip_pool dns_upstream dns_upstream2 dns_bootstrap dns_listen tproxy_port local_proxy_port
-             redirect_port router_via_vpn mark self_mark log_level ipv6 fakeip6_pool
-             show_usage mux_concurrency probe_interval guard block_quic allow_insecure
-             lang xray_bin conn_label"
+# Отчёт собирает ucode (uc/doctor.uc, cmd_report); здесь -- запись в файл.
 
 cmd_report() {
     _out=${1:-}
@@ -3575,114 +3051,13 @@ cmd_report() {
         path_ok "$_out" || dief "сюда писать нельзя: %s" "$_out"
         # Сразу под 600, не chmod после: существующий файл сохраняет прежние
         # права.
-        ( umask 077; report_body > "$_out.new.$$" 2>&1 )
+        ( umask 077; diag_uc report > "$_out.new.$$" 2>&1 )
         mv "$_out.new.$$" "$_out"
         sayf "отчёт записан: %s" "$_out"
         say "  секреты убраны, но перед отправкой файл стоит просмотреть"
     else
-        report_body
+        diag_uc report
     fi
-}
-
-report_body() {
-    _esc=$(printf '\033')   # для снятия цветов из вывода
-    MERGED_R=$(merged_domains)
-
-    # Обёртки: переводятся и заголовок, и подпись, а printf в busybox считает
-    # байты -- колонку выравнивает _len.
-    _r()  { printf '%s\n' "$(_t "$1")"; }
-    _rv() { _rl=$(_t "$1"); _rp=$((16 - $(_len "$_rl"))); [ "$_rp" -lt 1 ] && _rp=1
-            printf '%s%*s%s\n' "$_rl" "$_rp" "" "$2"; }
-
-    _r "# byway report 1"
-    printf '# %s: %s\n' "$(_t 'снято')" "$(date '+%Y-%m-%d %H:%M')"
-    _r "# ключ от VPN, адрес сервера и адрес подписки сюда НЕ попадают"
-    echo
-    _r "== устройство =="
-    _rv "byway" "$BYWAY_VERSION"
-    _fw=$(sed -n 's/^DISTRIB_DESCRIPTION=//p' /etc/openwrt_release 2>/dev/null | tr -d "'")
-    _rv "прошивка" "${_fw:-?}"
-    _model=$(cat /tmp/sysinfo/model 2>/dev/null || tr -d '\000' < /proc/device-tree/model 2>/dev/null || true)
-    _rv "железо" "${_model:-?} ($(uname -m))"
-    _rv "ядро" "$(uname -r)"
-    _rv "флеш" "$(df -h /overlay 2>/dev/null | awk 'NR==2{print $4" / "$2}')"
-    _rv "память" "$(free 2>/dev/null | awk '/^Mem/{print int($4/1024)" / "int($2/1024)" MB"}')"
-    echo
-    _r "== окружение =="
-    cmd_doctor 2>&1 | sed "s/$_esc\[[0-9;]*m//g" || true
-    echo
-    _r "== состояние =="
-    cmd_status 2>&1 | sed "s/$_esc\[[0-9;]*m//g" || true
-    echo
-    _r "== проверка =="
-    cmd_health 2>&1 || true
-    echo
-    _r "== подключение (без значений) =="
-    # В автовыборе разбирается первый ключ списка, а не node_url (его там нет).
-    _rk=""
-    case "$(u conn_mode)" in
-      urltest|selector) _rk=$(u node_urls | awk '{ print $1; exit }') ;;
-    esac
-    if ( parse_node $_rk >/dev/null 2>&1 ); then
-        parse_node $_rk >/dev/null 2>&1 || true
-        _rv "протокол" "$N_PROTO"
-        _rv "транспорт" "$N_TYPE"
-        _rv "защита" "$N_SEC"
-        [ -n "${N_FLOW:-}" ] && _rv "flow" "$N_FLOW"
-        _rv "порт" "$N_PORT"
-    else
-        _r "ключ не разбирается -- это и есть повод для обращения"
-    fi
-    echo
-    _r "== настройки =="
-    uci -q show byway 2>/dev/null | while IFS= read -r _ln; do
-        _k=${_ln%%=*}; _k=${_k##*.}
-        # Объявление секции -- тип, не значение.
-        case "$_ln" in byway.main=byway) printf '%s\n' "$_ln"; continue ;; esac
-        if in_set "$_k" "$REPORT_KEYS"; then
-            printf '%s\n' "$_ln"
-        else
-            _f '%s=<скрыто>\n' "${_ln%%=*}"
-        fi
-    done
-    echo
-    _r "== списки =="
-    _rv "своих доменов" "$(count_list "$LISTS/domains.lst")"
-    _rv "всего доменов" "$(count_list "$MERGED_R")"
-    _rv "своих подсетей" "$(count_list "$LISTS/subnets.lst")"
-    _rv "всего подсетей" "$(count_list "$(merged_subnets)")"
-    _rv "пресеты" "$(u preset)"
-    _rv "отброшено строк" "$(sort -u "$BADLIST" 2>/dev/null | grep -c . || true)"
-    echo
-    _r "== перехват =="
-    # Элементы наборов не печатаем: сотни строк подсетей, для разбора лишнее.
-    nft list table inet "$TABLE" 2>/dev/null |
-      grep -vE '^[[:space:]]*(elements|[0-9]+\.[0-9]+)' || _r "таблицы нет"
-    echo
-    ip rule show 2>/dev/null | grep -E "$(rule_re)" || _r "правила ip rule нет"
-    ip route show table "$RT_TABLE" 2>/dev/null || true
-    echo
-    _r "== журнал состояния (последние 20) =="
-    tail -20 "$WATCH_LOG" 2>/dev/null || _r "пусто"
-    echo
-    _r "== системный журнал byway (последние 30) =="
-    # Те же вымарки, что у журнала движка: watch пишет сюда имя и адрес сервера.
-    # Строки crond о задачах byway (pulse раз в минуту) вытесняли бы сообщения
-    # самой программы.
-    logread -e byway 2>/dev/null | grep -v ' cron\.[a-z]* crond\[' | tail -30 |
-      sed -E 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/x.x.x.x/g
-              s/([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/'"$(_t ИМЯ | sed 's/[\/&]/\\&/g')"'/g' || true
-    echo
-    _r "== системный журнал движка (последние 20) =="
-    # Только жалобы движка: в строках обращений адрес каждого сайта, а отчёт
-    # уходит постороннему. Адреса и имена вымарываются (в «dial tcp …» -- адрес
-    # сервера).
-    logread -e xray 2>/dev/null | grep -iE "error|warn|fail|reject" |
-      grep -v "tproxy-in" | tail -20 |
-      sed -E 's/^([A-Z][a-z]{2} [A-Z][a-z]{2} +[0-9]+ [0-9:]+ [0-9]{4}) [^:]*: /\1 /
-              s/[0-9]{1,3}(\.[0-9]{1,3}){3}/x.x.x.x/g
-              s/\[[0-9a-fA-F]*:[0-9a-fA-F:]*\]|[0-9a-fA-F]*::[0-9a-fA-F:]+/x::x/g
-              s/([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/'"$(_t ИМЯ | sed 's/[\/&]/\\&/g')"'/g' || true
 }
 
 # Обновление самого byway: номер свежей версии, загрузка, откат; метки
@@ -5586,9 +4961,12 @@ function _f(fmt, ...args) { return _pf(_t(fmt), args); }
 // ── вывод и журнал ─────────────────────────────────────────────────────────
 // Те же знаки и цвета, что у shell (core/output.sh): вывод разбирают панель
 // и человек, по [*] [!] [x].
-function _say(s)   { print('\x1b[1;32m[*]\x1b[0m ', s, '\n'); }
-function _warn(s)  { print('\x1b[1;33m[!]\x1b[0m ', s, '\n'); }
-function die_raw(s) { print('\x1b[1;31m[x]\x1b[0m ', s, '\n'); exit(1); }
+// PLAIN -- без цветов (отчёт: уходит файлом постороннему).
+let PLAIN = false;
+function _mark(c, m) { return PLAIN ? m + ' ' : '\x1b[1;' + c + 'm' + m + '\x1b[0m '; }
+function _say(s)   { print(_mark(32, '[*]'), s, '\n'); }
+function _warn(s)  { print(_mark(33, '[!]'), s, '\n'); }
+function die_raw(s) { print(_mark(31, '[x]'), s, '\n'); exit(1); }
 
 function say(s)  { _say(_t(s)); }
 function warn(s) { _warn(_t(s)); }
@@ -6520,7 +5898,7 @@ function ob_emit(list, soft) {
 	for (let m in list) {
 		if (m.c == 'warn' || m.c == 'warnf') { _warn(_pf(_t(m.f), m.a)); continue; }
 		if (!soft) die_raw(_pf(_t(m.f), m.a));
-		print('\x1b[1;31m[x]\x1b[0m ', _pf(_t(m.f), m.a), '\n');
+		print(_mark(31, '[x]'), _pf(_t(m.f), m.a), '\n');
 		return false;
 	}
 	return true;
@@ -6605,14 +5983,15 @@ let G = null;
 // val_or: значение настройки по образцу, иначе умолчание и слово вслух. Эти
 // настройки прежде уходили в конфиг движка сырыми, и значением с `", ...`
 // можно было задать всю конфигурацию Xray, исполняемую от root.
-function g_val_or(name, val, re, def) {
+function g_val_or(name, val, re, def, where) {
+	where ??= _t(G_WHERE);
 	if (val === '') return def;
 	if (match(val, /[\x01-\x1f\x7f]/)) {
-		warnf('настройка %s содержит управляющие знаки и не годится для %s, взято %s', name, _t(G_WHERE), def);
+		warnf('настройка %s содержит управляющие знаки и не годится для %s, взято %s', name, where, def);
 		return def;
 	}
 	if (match(val, re)) return val;
-	warnf('настройка %s = «%s» не годится для %s, взято %s', name, val, _t(G_WHERE), def);
+	warnf('настройка %s = «%s» не годится для %s, взято %s', name, val, where, def);
 	return def;
 }
 
@@ -6680,9 +6059,9 @@ function g_dns_host(s) {
 // Порт входа для собственного трафика роутера; пусто -- не заворачивать
 // (выключено или порт занят другим входом byway). Та же логика у nft
 // (config/addr.sh, redir_port): при расхождении правила вели бы в никуда.
-function g_redir_port() {
+function g_redir_port(where) {
 	if (u('router_via_vpn') != '1') return '';
-	let p = g_val_or('redirect_port', u('redirect_port'), /^[0-9]{1,5}$/, '1604');
+	let p = g_val_or('redirect_port', u('redirect_port'), /^[0-9]{1,5}$/, '1604', where);
 	if (!g_port_ok(p)) p = '1604';
 	let t = u('tproxy_port') || '1602', l = u('local_proxy_port') || '1603';
 	if (p == t || p == l) {
@@ -6735,7 +6114,7 @@ function g_xray_hint(t) {
 
 // Ширина списка подсетей (net_warn в lists/presets.sh): миллион адресов
 // суммарно или блок шире /12 -- сказать.
-function g_net_warn(file) {
+function g_net_width(file) {
 	let tot = 0, big = 33, f = fs.open(file, 'r'), l;
 	if (f) {
 		while ((l = f.read('line')) != null && l !== '') {
@@ -6750,9 +6129,13 @@ function g_net_warn(file) {
 		}
 		f.close();
 	}
-	if (big == 33) big = 32;
-	if (tot > 1000000 || big <= 12)
-		warnf('  ВНИМАНИЕ: %s адресов, крупнейший блок /%s — в туннель уйдёт и чужой трафик, и скорость упадёт', tot, big);
+	return [ tot, big == 33 ? 32 : big ];
+}
+
+function g_net_warn(file) {
+	let w = g_net_width(file);
+	if (w[0] > 1000000 || w[1] <= 12)
+		warnf('  ВНИМАНИЕ: %s адресов, крупнейший блок /%s — в туннель уйдёт и чужой трафик, и скорость упадёт', w[0], w[1]);
 }
 
 // ── части конфига ─────────────────────────────────────────────────────────
@@ -7700,7 +7083,7 @@ function hl_fail(k, m) {
 function hl_key(url) {
 	if (url === '' && u('conn_mode') == 'outbound') {
 		if (u('outbound_json') === '' || ob_raw('proxy') == null) return null;
-		return { PROTO: 'raw' };
+		return { PROTO: 'raw', TYPE: '-', SEC: '-', PORT: '0', FLOW: '' };
 	}
 	if (url === '') url = u('node_url');
 	if (url === '') return null;
@@ -8033,6 +7416,655 @@ function cmd_top(n) {
 	print(_f('\n  всего в учёте %s доменов из %s в списке\n', length(rows), lj_count(getenv('BW_MERGED'))));
 }
 
+// byway doctor -- проверка окружения по разделам, и byway report -- отчёт для
+// обращения (бывшие diag/doctor.sh и diag/report.sh). Пути и номера от shell
+// -- в BW_*.
+
+let DR_BAD = 0;
+
+function dr_line(tag, m, hint) {
+	print('  [ ', tag, ' ] ', m, '\n');
+	if (hint) print('         ', hint, '\n');
+}
+function dok(m)        { dr_line('ok', m); }
+function dbad(m, hint) { dr_line('!!', m, hint); DR_BAD++; }
+function dwarn(m, hint) { dr_line('??', m, hint); }
+
+// Есть ли программа в PATH.
+function dr_have(c) { return run([ 'sh', '-c', 'command -v "$1"', 'sh', c ]).code == 0; }
+
+function dr_head(s) { print(s); }
+
+// Первая строка вывода, без перевода строки.
+function dr_first(argv) { return split(run(argv).out, '\n')[0] ?? ''; }
+
+function dr_uci(path) { return rtrim(run([ 'uci', '-q', 'get', path ]).out, '\n'); }
+
+// Число в арифметике shell: 0x… -- шестнадцатеричное, 0… -- восьмеричное.
+function dr_num(s) {
+	if (match(s, /^0[xX][0-9a-fA-F]+$/)) return hex(substr(s, 2));
+	if (match(s, /^0[0-7]+$/)) {
+		let n = 0;
+		for (let i = 1; i < length(s); i++) n = n * 8 + int(substr(s, i, 1));
+		return n;
+	}
+	return match(s, /^[0-9]+$/) ? int(s) : 0;
+}
+
+// Время правки файла; нет файла -- null.
+function dr_mtime(f) { let s = fs.stat(f); return s ? s.mtime : null; }
+
+// Пины /etc/hosts против списка доменов (hosts_vs_domains): пин накрывает
+// запись, если запись -- он сам или его хвост по меткам.
+function dr_pins(file) {
+	let st = fs.stat(file);
+	if (!st || !st.size || !fs.stat('/etc/hosts')) return 0;
+	let d = {}, f = fs.open(file, 'r'), l;
+	while ((l = f.read('line')) != null && l !== '') {
+		l = replace(l, /[ \t\n\r\x0b\x0c]/g, '');
+		if (l === '' || substr(l, 0, 1) == '#' || substr(l, 0, 2) == '//') continue;
+		d[lc(l)] = true;
+	}
+	f.close();
+	let hosts = {};
+	for (let h in split(fs.readfile('/etc/hosts') ?? '', '\n')) {
+		let x = split(trim(replace(h, '\r', '')), /[ \t]+/);
+		if (length(x) < 2 || substr(x[0], 0, 1) == '#') continue;
+		for (let i = 1; i < length(x); i++) if (substr(x[i], 0, 1) != '#') hosts[x[i]] = true;
+	}
+	let c = 0;
+	for (let h in hosts) {
+		let s = lc(h);
+		if (d[s]) { c++; continue; }
+		let p;
+		while ((p = index(s, '.')) >= 0) {
+			s = substr(s, p + 1);
+			if (d[s]) { c++; break; }
+		}
+	}
+	return c;
+}
+
+// Час автообновления (au_hour).
+function dr_au_hour() {
+	let h = u('auto_update_hour') || '04';
+	if (!match(h, /^([0-9]|[01][0-9]|2[0-3])$/)) {
+		warnf('час автообновления «%s» не годится, взято 04', h);
+		h = '04';
+	}
+	return length(h) == 2 ? h : '0' + h;
+}
+
+function dr_rule_count() {
+	let mk = st_mark(), n = 0;
+	let re = regexp('fwmark ' + mk + '(/' + mk + ')?[ \t]+lookup ' + ST_RT + '([ \t]|$)');
+	for (let l in split(run([ 'ip', 'rule', 'show' ]).out, '\n')) if (match(l, re)) n++;
+	return n;
+}
+
+// ── разделы ───────────────────────────────────────────────────────────────
+function dr_system() {
+	dr_head(_t('Система\n'));
+	let rel = fs.readfile('/etc/openwrt_release');
+	if (rel != null) {
+		let m = match(rel, /(^|\n)DISTRIB_RELEASE='([^\n]*)'/);
+		dok(_f('OpenWrt: %s', m ? m[2] : ''));
+	} else {
+		dwarn(_t('не OpenWrt'), _t('byway рассчитан на OpenWrt, на другом может не работать'));
+	}
+	dok(_f('архитектура: %s', trim(run([ 'uname', '-m' ]).out)));
+	// Отдельного /overlay может не быть (ram-профили, чистый ext4).
+	let mnt = fs.stat('/overlay') ? '/overlay' : '/';
+	let df = split(split(run([ 'df', '-k', mnt ]).out, '\n')[1] ?? '', /[ \t]+/);
+	if (df[3] == null) df = split(split(run([ 'df', '-k', '/' ]).out, '\n')[1] ?? '', /[ \t]+/);
+	let free = df[3] != null ? int(int(df[3]) / 1024) : '';
+	if ((free === '' ? 0 : free) < 2)
+		dbad(_f('свободно на флеше: %s МБ', free), _t('меньше двух мегабайт: списки и конфиг могут не записаться'));
+	else
+		dok(_f('свободно на флеше: %s МБ', free));
+}
+
+function dr_needs() {
+	dr_head(_t('\nЧего требует byway\n'));
+	let pid = st_xray_pid();
+	// Включён ли byway и работает ли движок: без этого отчёт на выключенном
+	// byway выходил зелёным.
+	if (u('enabled') == '1') {
+		if (pid !== '') dok(_t('byway включён, движок работает'));
+		else dbad(_t('byway включён, но движок не работает'),
+		          _t('движок не запущен или упал: /etc/init.d/byway restart, затем byway status и logread -e xray'));
+	} else {
+		dwarn(_t('byway выключен настройкой'),
+		      _t('включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart'));
+	}
+	// Автозапуск отдельно от enabled; `enabled` не отличает «выключено» от
+	// «нет файла» -- файл проверяется сам.
+	if (run([ 'test', '-x', '/etc/init.d/byway' ]).code != 0)
+		dbad(_t('файла службы нет'), _t('byway не поднимется ни сейчас, ни после перезагрузки: поставить заново'));
+	else if (run([ '/etc/init.d/byway', 'enabled' ]).code == 0)
+		dok(_t('служба в автозапуске'));
+	else
+		dbad(_t('служба НЕ в автозапуске'), _t('сейчас работает, но после перезагрузки туннеля не будет: /etc/init.d/byway enable'));
+	// Задачи cron: сторож, учёт, обрезка журналов.
+	let cw = 0, cs = 0, cp = false;
+	for (let l in split(run([ 'crontab', '-l' ]).out, '\n')) {
+		if (index(l, 'byway watch') >= 0) cw++;
+		if (index(l, 'byway stat') >= 0) cs++;
+		if (index(l, 'byway pulse') >= 0) cp = true;
+	}
+	if (cw > 0 && cs > 0) {
+		if (run([ 'pidof', 'crond' ]).code == 0)
+			dok(_t('задачи cron на месте, crond работает'));
+		else
+			dbad(_t('задачи cron есть, но crond не работает'),
+			     _t('без него не работают ни проверка перехвата раз в 5 минут (byway watch), ни учёт трафика (byway stat), ни обрезка журналов: /etc/init.d/cron enable && /etc/init.d/cron start'));
+	} else {
+		dbad(_f('в cron не хватает задач byway (watch: %s, stat: %s)', cw, cs),
+		     _t('переустановить byway либо завести вручную: */5 * * * * /usr/local/bin/byway watch и 7 * * * * /usr/local/bin/byway stat'));
+	}
+	if (!cp)
+		dwarn(_t('нет задачи cron byway pulse'),
+		      _t('без неё при отказе движка дом остаётся без DNS до 10 минут вместо 1–2: byway update --force либо завести вручную: * * * * * /usr/local/bin/byway pulse'));
+	// lsmod не показывает встроенные в ядро модули: ещё /sys/module.
+	let lsm = run([ 'lsmod' ]).out;
+	for (let m in [ 'nft_tproxy', 'nft_socket' ]) {
+		if (match(lsm, regexp('(^|\n)' + m + ' ')) || fs.stat('/sys/module/' + m))
+			dok(_f('модуль %s', m));
+		else
+			dbad(_f('нет модуля %s', m), getenv('BW_PKG_FIX') + ' kmod-nft-tproxy kmod-nft-socket');
+	}
+	if (dr_have('fw4'))
+		dok(_t('файрвол firewall4'));
+	else
+		dbad(_t('firewall4 не найден — вероятно firewall3, 21.02 и старше'),
+		     _t('byway работает только на firewall4, это OpenWrt 22.03 и новее — на firewall3 правило по метке не встанет'));
+	let x = getenv('BW_XRAY');
+	if (run([ 'test', '-x', x ]).code == 0) {
+		dok(_f('движок: %s (%s)', join(' ', slice(split(dr_first([ x, 'version' ]), ' '), 0, 2)), x));
+		if (pid !== '') {
+			let uid = match(fs.readfile('/proc/' + pid + '/status') ?? '', /\nUid:[ \t]*([0-9]+)/);
+			if (uid && uid[1] == '0')
+				dwarn(_t('движок работает от root'), _t('права не урезаны: нет /sbin/ujail (пакет procd-ujail) либо задано byway.main.xray_root=1'));
+			else
+				dok(_t('движок работает не от root (пользователь byway)'));
+		}
+		let out = getenv('BW_OUT');
+		if (fs.stat(out) && run([ 'grep', '-q', '"network": "xhttp"', out ]).code == 0 && st_dial_bug(x))
+			dwarn(_t('xmux не ограничивает соединения: ядро собрано на Go 1.27'),
+			      _t('при сбое сервера xhttp открывает сотни соединений: память роутера, риск блокировки адреса. Ядро с -tags http2legacy либо на x/net v0.60.0+: docs/engine.md, «Ядро на Go 1.27»'));
+	} else {
+		dbad(_f('не найден Xray-core (%s)', x), _f('%s xray-core либо задать byway.main.xray_bin', getenv('BW_PKG_FIX')));
+	}
+	for (let c in [ 'curl', 'nft', 'ip', 'uci' ]) {
+		if (dr_have(c)) dok(_f('есть %s', c));
+		else dbad(_f('нет %s', c), getenv('BW_PKG_FIX') + ' ' + c);
+	}
+	// Сама проверка идёт на ucode -- он есть.
+	dok(_t('есть ucode (разбор ключей)'));
+}
+
+function dr_updates() {
+	dr_head(_t('\nОбновления\n'));
+	let nvf = getenv('BW_NEWVER'), rnf = getenv('BW_RELNOTE'), num = getenv('BW_NUM');
+	let nv = trim(fs.readfile(nvf) ?? '');
+	// Раздел не выходит пустым заголовком: пустота читается как «не прошла».
+	if (nv === '') {
+		let fl = dr_mtime(getenv('BW_UPFAIL')), okm = dr_mtime(getenv('BW_UPOK'));
+		if (u('update_check') == '0')
+			dok(_t('проверка новых версий выключена'));
+		else if (fl != null && (okm == null || fl > okm))
+			// Последняя проверка не дошла до GitHub: «новее не найдено» было бы ложью.
+			dwarn(_f('проверка новых версий не удалась (ответ GitHub: %s)', rtrim(fs.readfile(getenv('BW_UPFAIL')) ?? '', '\n')),
+			      _t('новые выпуски не видны: нет связи с GitHub либо он отвечает отказом. Проверить вручную: byway update --check'));
+		else
+			dok(_f('новее %s не найдено', num));
+	}
+	if (nv !== '' && st_ver_gt(nv, num)) {
+		// Важность выпуска -- первым словом описания.
+		let rn = rtrim(fs.readfile(rnf) ?? '', '\n');
+		let hint = rn + ' -- ' + _t('поставить: byway update');
+		if (substr(rn, 0, length('ВАЖНО')) == 'ВАЖНО' || substr(rn, 0, 8) == 'CRITICAL' || substr(rn, 0, 1) == '!')
+			dbad(_f('важное обновление: %s', nv), hint);
+		else
+			dwarn(_f('есть новая версия: %s', nv), hint);
+	}
+	// Автообновление -- только при сумме от установщика: ручную правку
+	// архив не перетирает.
+	if (u('auto_update') == '1') {
+		let bs = getenv('BW_BINSUM');
+		if (!fs.stat(bs))
+			dwarn(_t('автообновление включено, но происхождение файла неизвестно'),
+			      _t('byway положен не установщиком -- обновление пропускается. Лечится запуском install.sh из файлов byway'));
+		else if (split(run([ 'md5sum', '/usr/local/bin/byway' ]).out, ' ')[0] != trim(fs.readfile(bs) ?? ''))
+			dwarn(_t('автообновление включено, но byway правлен руками'),
+			      _t('своя правка не будет перетёрта: обновление пропускается намеренно'));
+		else
+			dok(_t('автообновление включено'));
+		if (u('update_check') == '0')
+			dwarn(_t('автообновление включено, но суточная проверка версий выключена'),
+			      _t('без проверки версий автообновлению нечего ставить — включить: uci set byway.main.update_check=1 && uci commit byway'));
+		// Окно -- по местному времени, а OpenWrt по умолчанию в UTC. Судим по
+		// timezone: часы двигает только он, zonename без zoneinfo -- нет.
+		let tzn = dr_uci('system.@system[0].zonename'), tzo = dr_uci('system.@system[0].timezone');
+		let h = dr_au_hour();
+		if (tzo === '' || tzo == 'UTC' || tzo == 'GMT0' || tzo == 'GMT')
+			dwarn(_f('часы роутера идут по UTC (timezone=%s) — окно обновления придётся на %s:00 UTC', tzo || _t('не задан'), h),
+			      _t('у вас это не ночь: в Москве это на три часа позже, во Владивостоке на десять — перезапуск службы среди дня. Лечится в LuCI (Система → Общие настройки → Часовой пояс) либо uci set system.@system[0].timezone=... && uci commit system && /etc/init.d/system reload (именно timezone: zonename часы не двигает)'));
+		else
+			dok(_f('часы %s (%s, смещение %s), обновление в %s:00 по часам роутера — сейчас %s',
+			       tzn || _t('без ярлыка'), tzo, trim(run([ 'date', '+%z' ]).out) || '?', h, trim(run([ 'date', '+%H:%M' ]).out)));
+		// Провалившийся выпуск больше не ставится сам -- человек должен знать.
+		let af = trim(fs.readfile(getenv('BW_AUFAIL')) ?? '');
+		if (af !== '')
+			dwarn(_f('выпуск %s не поднялся и больше не ставится сам', af),
+			      _t('если причина устранена — поставить вручную: byway update --force'));
+	}
+}
+
+function dr_config() {
+	dr_head(_t('\nНастройка\n'));
+	let conf = getenv('BW_CONF');
+	if (fs.stat(conf)) dok(_f('конфигурация %s', conf));
+	else dbad(_f('нет %s', conf), _t('переустановить byway'));
+	// По режиму, не по node_url: автовыбор читает node_urls.
+	let mode = u('conn_mode');
+	if (mode == 'urltest') {
+		let k = trim(u('node_urls'));
+		let n = k === '' ? 0 : length(split(k, /[ \t\n]+/));
+		if (n > 0) dok(_f('ключей для автовыбора: %s', n));
+		else dbad(_t('ключи для автовыбора не заданы'), _t('добавить на вкладке «Основное» либо: uci add_list byway.main.node_urls=vless://…'));
+	} else if (mode == 'outbound') {
+		if (u('outbound_json') !== '') dok(_t('свой конфиг аутбаунда задан'));
+		else dbad(_t('выбран свой конфиг, но он пуст'), _t('вписать кусок JSON на вкладке «Основное»'));
+	} else {
+		let url = u('node_url');
+		if (url === '') dbad(_t('ключ не задан'), _t('вписать на вкладке «Основное» или: uci set byway.main.node_url=vless://…'));
+		else if (substr(url, 0, length('ЗАПОЛНИТЬ')) == 'ЗАПОЛНИТЬ') dbad(_t('ключ не заполнен'), _t('вписать настоящий ключ вместо заглушки'));
+		else dok(_f('ключ задан, режим: %s', mode));
+	}
+	// По объединённому списку: по своему файлу пустым объявлялся и список
+	// того, у кого работает пресет.
+	let mf = getenv('BW_MERGED'), ms = fs.stat(mf);
+	if (ms && ms.size)
+		dok(_f('список доменов: %s записей (своих %s)', lj_count(mf), lj_count(getenv('BW_LISTS') + '/domains.lst')));
+	else if (u('list_mode') == 'all')
+		dok(_t('списки не нужны: режим «всё через VPN»'));
+	else
+		dwarn(_t('список доменов пуст'), _t('через VPN не пойдёт ничего: наполнить или включить пресет'));
+	// Ширина подсетей: одна 0.0.0.0/0 делает «по спискам» полным туннелем.
+	let w = g_net_width(getenv('BW_SUBNETS'));
+	if (w[0] > 1000000 || w[1] <= 12)
+		dwarn(_f('подсети списка: %s адресов, крупнейший блок /%s', w[0], w[1]),
+		      _t('в туннель уйдёт и чужой трафик, и скорость упадёт: проверить subnets.lst'));
+	let pin = dr_pins(mf);
+	if (pin > 0)
+		dwarn(_f('пинов в /etc/hosts перебивают записи списка: %s', pin),
+		      _t('dnsmasq отвечает по пину сам, подставного адреса не будет — эти домены в туннель не пойдут, и запрет «не пускать мимо VPN» их тоже не закроет'));
+	// Перехват держит IPv4; клиент по RFC 6724 предпочитает AAAA.
+	if (trim(run([ 'ip', '-6', 'route', 'show', 'default' ]).out) !== '') {
+		if (u('ipv6') == '1') {
+			let mk = st_mark(), ok = false;
+			let re = regexp('fwmark ' + mk + '(/' + mk + ')?[ \t]+lookup ' + ST_RT + '([ \t]|$)');
+			for (let l in split(run([ 'ip', '-6', 'rule', 'show' ]).out, '\n')) if (match(l, re)) ok = true;
+			if (ok) dok(_t('IPv6 поднят и заворачивается наравне с IPv4'));
+			else dbad(_t('IPv6 включён в настройках, но правила для него в ядре нет'), _t('переложить правила: byway plumb on'));
+		} else if (u('list_mode') == 'all') {
+			dwarn(_t('IPv6 поднят, а перехват только по IPv4'), _t('в режиме «всё через VPN» соединения по IPv6 идут мимо туннеля: выключить IPv6 на WAN либо вернуться к режиму по спискам'));
+		} else {
+			dwarn(_t('IPv6 поднят, а перехват только по IPv4'), _t('и домены, и подсети закрывают только IPv4: клиент, получивший AAAA, предпочтёт его и уйдёт напрямую. Выключить IPv6 на WAN -- либо помнить, что подсети сервиса его не покрывают'));
+		}
+	}
+	// Биты self_mark и mark не должны пересекаться: пакеты движка ушли бы на
+	// петлю при зелёных проверках.
+	if (u('router_via_vpn') == '1') {
+		let sm = u('self_mark') || '0x400000', mk = u('mark') || '0x100000';
+		if (ltrim(sm + mk, '0123456789abcdefABCDEFxX') === '' && (dr_num(sm) & dr_num(mk)) != 0)
+			dwarn(_f('self_mark %s пересекается битами с mark %s', sm, mk),
+			      _t('byway возьмёт другое значение сам (его видно в byway nft, строка «meta mark … return»); закрепить: uci set byway.main.self_mark=ЗНАЧЕНИЕ && uci commit byway && /etc/init.d/byway reload'));
+	}
+}
+
+function dr_dns() {
+	dr_head(_t('\nПерехват и соседние службы\n'));
+	let pid = st_xray_pid();
+	// Вхождением: `uci get` списка отдаёт значения через пробел.
+	if (index(' ' + dr_uci('dhcp.@dnsmasq[0].server') + ' ', ' ' + (u('dns_listen') || '127.0.0.42') + ' ') >= 0)
+		dok(_t('dnsmasq направлен на byway'));
+	else if (u('enabled') != '1' || pid === '')
+		dok(_t('dnsmasq не тронут — byway ещё не запущен, так и должно быть'));
+	else
+		dwarn(_t('dnsmasq не направлен на byway'), _t('правила перехвата сняты: byway plumb on'));
+	// dnsmasq один на все мосты, перехват -- только на перечисленных: сеть
+	// вне списка получает fakeip и умирает на WAN.
+	let bwif = ' ' + u('interface') + ' ', lost = '', outside = '';
+	let dh = uci.cursor().get_all('dhcp') ?? {}, net = uci.cursor().get_all('network') ?? {}, secs = [];
+	for (let n in dh) if (dh[n]['.type'] == 'dhcp') push(secs, dh[n]);
+	secs = sort(secs, (a, b) => a['.index'] - b['.index']);
+	for (let s in secs) {
+		let ifn = s.interface ?? '';
+		if (ifn === '' || s.ignore == '1') continue;
+		let br = (net[ifn] ?? {}).device ?? ('br-' + ifn);
+		if (index(bwif, ' ' + br + ' ') >= 0) continue;
+		outside += ' ' + br;
+		// Свой резолвер сети задан через DHCP -- наш ей и не достаётся.
+		let opt = s.dhcp_option;
+		if (index(type(opt) == 'array' ? join(' ', opt) : (opt ?? ''), '6,') >= 0) continue;
+		lost += ' ' + br;
+	}
+	if (u('list_mode') == 'all' && outside !== '')
+		dbad(_f('режим «всё через VPN», а эти сети идут мимо него целиком:%s', outside),
+		     _t('в этом режиме byway.main.interface -- граница ВСЕЙ защиты, а не только списков: что вне его, то мимо туннеля и мимо запрета «не пускать мимо VPN». Добавить устройства в byway.main.interface'));
+	else if (lost !== '')
+		dwarn(_f('сети с резолвером byway, но без перехвата:%s', lost),
+		      _t("их клиенты получат подставной адрес, до туннеля не дойдут и потеряют ВЕСЬ список. Лечится одним из двух: добавить сеть в byway.main.interface либо выдать ей свой DNS через dhcp_option '6,…'"));
+	else
+		dok(_t('перехват и резолвер согласованы по сетям'));
+	// Маршрут решает DNS: клиент со своим резолвером идёт мимо туннеля.
+	if (u('list_mode') != 'all')
+		dwarn(_t('клиент со своим DNS проходит мимо туннеля'),
+		      _t('маршрут решает DNS: устройство с «Приватным DNS», DoH в браузере или чужим резолвером в настройках уйдёт напрямую, и byway этого не увидит. Лечится либо выключением шифрованного DNS на устройствах, либо перехватом 53-го порта в firewall, либо добавлением к доменам ПОДСЕТЕЙ сервиса: подсеть работает по адресу, а значит и для того, кто спросил адрес не у роутера. Третий способ проще двух первых, но покрывает ТОЛЬКО IPv4: клиент, получивший AAAA, уйдёт мимо подсетей'));
+}
+
+function dr_marks() {
+	// Чужое правило по той же метке -- дыра: удаление нашего её не закроет.
+	let mk = u('mark') || '0x100000', n = 0;
+	for (let l in split(run([ 'uci', 'show', 'firewall' ]).out, '\n'))
+		if (index(l, "mark='" + mk) >= 0) n++;
+	if (n > 1)
+		dwarn(_f('правил firewall с меткой %s: %s', mk, n), _t('лишнее оставит дыру после удаления byway — проверить: uci show firewall | grep mark'));
+	else if (n == 0)
+		dwarn(_t('правила firewall для помеченного трафика нет'), _t('гостевые и другие зоны с input REJECT остаются без туннеля; byway заводит правило заново при подъёме перехвата: /etc/init.d/byway restart'));
+	else
+		dok(_f('правил firewall с меткой byway: %s', n));
+}
+
+// Файлы каталога по окончанию, по алфавиту (как glob).
+function dr_ls(dir, ext) {
+	let r = [];
+	for (let f in fs.lsdir(dir) ?? [])
+		if (substr(f, -length(ext)) == ext && fs.stat(dir + '/' + f)?.type == 'file') push(r, f);
+	return sort(r);
+}
+
+function dr_files() {
+	let routes = getenv('BW_ROUTES'), all = cursor().get_all('byway') ?? {}, secs = [];
+	let urls = split(trim(u('node_urls')), /[ \t\n]+/);
+	for (let n in all) if (all[n]['.type'] == 'route') push(secs, all[n]);
+	secs = sort(secs, (a, b) => a['.index'] - b['.index']);
+	for (let s in secs) {
+		if (s.enabled == '0') continue;
+		let rn = s['.name'], lb = s.label ?? '', has = false;
+		for (let k in urls) {
+			if (k === '') continue;
+			let h = index(k, '#');
+			if ((h < 0 ? '' : pk_pctd(substr(k, h + 1))) == lb) { has = true; break; }
+		}
+		let st = fs.stat(routes + '/' + rn + '.lst');
+		if (!has)
+			dbad(_f('направление «%s»: ключа с меткой «%s» нет', rn, lb), _t('выбрать существующий ключ либо убрать направление'));
+		else if (!st || !st.size)
+			dwarn(_f('направление «%s»: список пуст', rn), _t('наполнить список либо убрать направление'));
+		else
+			dok(_f('направление «%s» ведёт в «%s»', rn, lb));
+	}
+	// Файл удалённого направления byway не читает, но и не убирает.
+	for (let f in dr_ls(routes, '.lst')) {
+		let n = substr(f, 0, length(f) - 4);
+		if (all[n] != null) continue;
+		dwarn(_f('список «%s» лежит без направления и не читается', n), _t('убрать файл, если направление удалено'));
+	}
+	// Снятая галочка пресета оставляет копию во флеше; включённый -- не
+	// обновлялся больше месяца.
+	let pd = getenv('BW_PRESETS'), pre = ' ' + u('preset') + ' ';
+	for (let f in [ ...dr_ls(pd, '.lst'), ...dr_ls(pd, '.sub') ]) {
+		let n = substr(f, 0, length(f) - 4);
+		if (index(pre, ' ' + n + ' ') >= 0) {
+			if (dr_mtime(pd + '/' + f) < time() - 30 * 86400)
+				dwarn(_f('готовый список «%s» не обновлялся больше месяца', n), _t('обновить и заодно свериться с zapret: byway presets'));
+		} else {
+			dwarn(_f('готовый список «%s» отключён, а копия лежит во флеше', n), _t('включить обратно или убрать файл из /etc/byway/presets'));
+		}
+	}
+}
+
+function dr_rivals() {
+	let pid = st_xray_pid();
+	let mk = st_mark(), re = regexp('fwmark ' + mk + '(/' + mk + ')?[ \t]+lookup ' + ST_RT + '([ \t]|$)');
+	for (let nb in [ [ 'podkop', 'podkop' ], [ 'passwall', 'passwall' ], [ 'passwall2', 'passwall2' ],
+	                 [ 'openclash', 'openclash' ], [ 'nikki', 'nikki' ], [ 'homeproxy', 'homeproxy' ],
+	                 [ 'shadowsocks-libev', 'shadowsocks' ] ]) {
+		let ni = nb[0], nn = nb[1], init = '/etc/init.d/' + ni;
+		if (run([ 'test', '-x', init ]).code != 0) continue;
+		// Живой процесс важнее автозапуска; след в ядре -- своя таблица nft
+		// либо правило на таблицу 100 (свои правила byway не считаются).
+		let trace = false;
+		for (let l in split(run([ 'nft', 'list', 'tables' ]).out, '\n'))
+			if (lc(substr(l, -length(ni) - 1)) == ' ' + lc(ni)) trace = true;
+		if (pid === '')
+			for (let l in split(run([ 'ip', 'rule', 'show' ]).out, '\n'))
+				if (index(l, 'lookup ' + ST_RT) >= 0 && !match(l, re)) trace = true;
+		if (trace)
+			dbad(_f('рядом РАБОТАЕТ %s', nn), _f('след виден в ядре: своя таблица nft либо правило на таблицу маршрутизации %s. Оставить что-то одно: /etc/init.d/%s stop && /etc/init.d/%s disable', ST_RT, ni, ni));
+		else if (run([ init, 'running' ]).code == 0)
+			dbad(_f('рядом РАБОТАЕТ %s', nn), _f('он метит трафик и перехватывает те же порты — оставить что-то одно: /etc/init.d/%s stop && /etc/init.d/%s disable', ni, ni));
+		else if (run([ init, 'enabled' ]).code == 0)
+			dwarn(_f('рядом включён %s', nn), _t('он метит трафик и перехватывает те же порты — оставить что-то одно'));
+		else
+			dok(_f('%s установлен, но выключен', nn));
+	}
+	// pbr уживается, если метки и таблицы не пересекаются.
+	if (run([ 'test', '-x', '/etc/init.d/pbr' ]).code == 0 && run([ '/etc/init.d/pbr', 'enabled' ]).code == 0)
+		dwarn(_t('рядом включён pbr'), _f('он тоже метит трафик и правит ip rule: его метки и таблицы не должны совпадать с меткой byway %s и таблицей %s', u('mark') || '0x100000', ST_RT));
+}
+
+function dr_ports() {
+	let tp = u('tproxy_port') || '1602', lp = u('local_proxy_port') || '1603';
+	// redir_port ругается на столкновение портов: звать раз.
+	let rd = g_redir_port(_t('проверки окружения'));
+	let pairs = [ [ tp, _t('вход tproxy') ], [ lp, _t('прокси роутера') ] ];
+	if (rd !== '') push(pairs, [ rd, _t('вход для трафика роутера') ]);
+	let ns = split(run([ 'netstat', '-lnp' ]).out, '\n');
+	for (let pp in pairs) {
+		let who = {}, wl = [];
+		let re = regexp('[:.]' + pp[0] + '[ \t]');
+		for (let l in ns) {
+			if (!match(l, re)) continue;
+			let f = split(trim(l), /[ \t]+/), w = f[length(f) - 1];
+			if (w != '-' && !who[w]) { who[w] = true; push(wl, w); }
+		}
+		let ws = length(wl) ? join(' ', sort(wl)) + ' ' : '';
+		if (ws === '' || index(ws, 'xray') >= 0)
+			dok(_f('%s (порт %s) свободен или занят byway', pp[1], pp[0]));
+		else
+			dwarn(_f('%s (порт %s) занят: %s', pp[1], pp[0], ws), _t('сменить порт в настройках byway либо убрать чужую службу'));
+	}
+	let tbl = run([ 'nft', 'list', 'table', 'inet', ST_TABLE ]).code == 0;
+	// Заворот включён настройкой, работает цепочкой в ядре: спрашивать только
+	// при стоящем перехвате.
+	if (rd !== '' && tbl) {
+		if (run([ 'nft', 'list', 'chain', 'inet', ST_TABLE, 'output' ]).code == 0) {
+			if (st_plain_first(getenv('BW_MERGED')) !== '')
+				dok(_t('роутер ходит к сайтам из списка сам'));
+			else
+				dwarn(_t('VPN для программ на роутере (router_via_vpn) включён, но список пуст — ловить нечего'),
+				      _t('VPN для программ на роутере работает по доменам списка: наполнить список либо подключить готовый'));
+		} else {
+			dwarn(_t('VPN для программ на роутере (router_via_vpn) включён, но цепочки в ядре нет'), _t('переложить правила: byway plumb on'));
+		}
+	} else if (u('router_via_vpn') != '1') {
+		dwarn(_t('роутер сам до сайтов из списка не достаёт'),
+		      _t('VPN для программ на роутере (router_via_vpn) выключен: программы на роутере — обновления zapret, свои скрипты — виснут на подставном адресе до таймаута. Включить: uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload'));
+	}
+	// Правило и маршрут снимают разные руки: сосед уносит маршрут, а
+	// перехват выглядит исправным.
+	if (tbl) {
+		let route = false;
+		for (let l in split(run([ 'ip', 'route', 'show', 'table', ST_RT ]).out, '\n'))
+			if (substr(l, 0, 13) == 'local default') route = true;
+		if (!route)
+			dbad(_f('в таблице маршрутизации %s нет маршрута local default', ST_RT), _t('переложить правила: byway plumb on'));
+	}
+	let rc = dr_rule_count();
+	if (rc > 1)
+		dwarn(_f('правил ip rule на таблицу %s: %s', ST_RT, rc), _t('лишние копятся при перезапусках — снять: byway plumb on'));
+}
+
+// Все разделы; итог -- число неисправностей.
+function dr_run() {
+	DR_BAD = 0;
+	print(_f('byway %s — проверка окружения\n\n', getenv('BW_VERSION')));
+	dr_system();
+	dr_needs();
+	dr_updates();
+	dr_config();
+	dr_dns();
+	dr_marks();
+	dr_files();
+	dr_rivals();
+	dr_ports();
+	print('\n');
+	if (DR_BAD == 0) say('окружение в порядке');
+	else warnf('неисправностей: %s — способ лечения указан у каждой', DR_BAD);
+	return DR_BAD;
+}
+
+function cmd_doctor() { if (dr_run() > 0) exit(1); }
+
+// ── отчёт ─────────────────────────────────────────────────────────────────
+// Ключи настроек -- по белому списку: новая настройка с секретом закрыта.
+const RP_KEYS = [ 'enabled', 'conn_mode', 'list_mode', 'ru_direct', 'preset', 'interface',
+	'fakeip_pool', 'dns_upstream', 'dns_upstream2', 'dns_bootstrap', 'dns_listen', 'tproxy_port',
+	'local_proxy_port', 'redirect_port', 'router_via_vpn', 'mark', 'self_mark', 'log_level', 'ipv6',
+	'fakeip6_pool', 'show_usage', 'mux_concurrency', 'probe_interval', 'guard', 'block_quic',
+	'allow_insecure', 'lang', 'xray_bin', 'conn_label' ];
+
+function rp_r(s) { print(s, '\n'); }
+
+// Подпись и значение; колонка -- в символах, не байтах.
+function rp_v(label, v) {
+	let p = 16 - sa_width(label);
+	if (p < 1) p = 1;
+	let pad = '';
+	for (let i = 0; i < p; i++) pad += ' ';
+	print(label, pad, v, '\n');
+}
+
+// Вымарка адресов и имён: отчёт уходит постороннему.
+function rp_mask(s) {
+	s = replace(s, /[0-9]{1,3}(\.[0-9]{1,3}){3}/g, 'x.x.x.x');
+	s = replace(s, /\[[0-9a-fA-F]*:[0-9a-fA-F:]*\]|[0-9a-fA-F]*::[0-9a-fA-F:]+/g, 'x::x');
+	return replace(s, /([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/g, _t('ИМЯ'));
+}
+
+function rp_tail(lines, n) { return slice(lines, length(lines) > n ? length(lines) - n : 0); }
+
+// bw_uc report: отчёт целиком в stdout; файл и права -- у shell.
+function cmd_report() {
+	PLAIN = true;
+	rp_r(_t('# byway report 1'));
+	print('# ', _t('снято'), ': ', trim(run([ 'date', '+%Y-%m-%d %H:%M' ]).out), '\n');
+	rp_r(_t('# ключ от VPN, адрес сервера и адрес подписки сюда НЕ попадают'));
+	print('\n');
+	rp_r(_t('== устройство =='));
+	rp_v(_t('byway'), getenv('BW_VERSION'));
+	let fw = match(fs.readfile('/etc/openwrt_release') ?? '', /(^|\n)DISTRIB_DESCRIPTION=([^\n]*)/);
+	rp_v(_t('прошивка'), fw ? replace(fw[2], "'", '') : '?');
+	let model = trim(fs.readfile('/tmp/sysinfo/model') ?? '');
+	if (model === '') model = replace(fs.readfile('/proc/device-tree/model') ?? '', '\0', '');
+	rp_v(_t('железо'), (model || '?') + ' (' + trim(run([ 'uname', '-m' ]).out) + ')');
+	rp_v(_t('ядро'), trim(run([ 'uname', '-r' ]).out));
+	let df = split(split(run([ 'df', '-h', '/overlay' ]).out, '\n')[1] ?? '', /[ \t]+/);
+	rp_v(_t('флеш'), df[3] != null ? df[3] + ' / ' + df[1] : '');
+	let fr = '';
+	for (let l in split(run([ 'free' ]).out, '\n'))
+		if (substr(l, 0, 4) == 'Mem:') {
+			let f = split(trim(l), /[ \t]+/);
+			fr = int(int(f[3]) / 1024) + ' / ' + int(int(f[1]) / 1024) + ' MB';
+		}
+	rp_v(_t('память'), fr);
+	print('\n');
+	rp_r(_t('== окружение =='));
+	dr_run();
+	print('\n');
+	rp_r(_t('== состояние =='));
+	cmd_status();
+	print('\n');
+	rp_r(_t('== проверка =='));
+	cmd_health();
+	print('\n');
+	rp_r(_t('== подключение (без значений) =='));
+	// В автовыборе разбирается первый ключ списка (node_url там нет).
+	let rk = '', mode = u('conn_mode');
+	if (mode == 'urltest' || mode == 'selector') rk = split(trim(u('node_urls')), /[ \t\n]+/)[0] ?? '';
+	let N = hl_key(rk);
+	if (N) {
+		rp_v(_t('протокол'), N.PROTO);
+		rp_v(_t('транспорт'), N.TYPE);
+		rp_v(_t('защита'), N.SEC);
+		if ((N.FLOW ?? '') !== '') rp_v(_t('flow'), N.FLOW);
+		rp_v(_t('порт'), N.PORT);
+	} else {
+		rp_r(_t('ключ не разбирается -- это и есть повод для обращения'));
+	}
+	print('\n');
+	rp_r(_t('== настройки =='));
+	for (let l in split(rtrim(run([ 'uci', '-q', 'show', 'byway' ]).out, '\n'), '\n')) {
+		if (l === '') continue;
+		if (l == 'byway.main=byway') { rp_r(l); continue; }
+		let e = index(l, '='), k = substr(l, 0, e < 0 ? length(l) : e);
+		let kk = substr(k, rindex(k, '.') + 1);
+		if (index(RP_KEYS, kk) >= 0) rp_r(l);
+		else print(_f('%s=<скрыто>\n', k));
+	}
+	print('\n');
+	rp_r(_t('== списки =='));
+	let lists = getenv('BW_LISTS');
+	rp_v(_t('своих доменов'), lj_count(lists + '/domains.lst'));
+	rp_v(_t('всего доменов'), lj_count(getenv('BW_MERGED')));
+	rp_v(_t('своих подсетей'), lj_count(lists + '/subnets.lst'));
+	rp_v(_t('всего подсетей'), lj_count(getenv('BW_SUBNETS')));
+	rp_v(_t('пресеты'), u('preset'));
+	let bad = {}, nb = 0;
+	for (let l in split(fs.readfile(getenv('BW_BADLIST')) ?? '', '\n')) if (l !== '' && !bad[l]) { bad[l] = true; nb++; }
+	rp_v(_t('отброшено строк'), nb);
+	print('\n');
+	rp_r(_t('== перехват =='));
+	// Элементы наборов не печатаем: сотни строк подсетей.
+	let nt = run([ 'nft', 'list', 'table', 'inet', ST_TABLE ]);
+	if (nt.code != 0) rp_r(_t('таблицы нет'));
+	else
+		for (let l in split(rtrim(nt.out, '\n'), '\n'))
+			if (!match(l, /^[ \t]*(elements|[0-9]+\.[0-9]+)/)) rp_r(l);
+	print('\n');
+	let mk = st_mark(), re = regexp('fwmark ' + mk + '(/' + mk + ')?[ \t]+lookup ' + ST_RT + '([ \t]|$)'), any = false;
+	for (let l in split(run([ 'ip', 'rule', 'show' ]).out, '\n')) if (match(l, re)) { rp_r(l); any = true; }
+	if (!any) rp_r(_t('правила ip rule нет'));
+	print(run([ 'ip', 'route', 'show', 'table', ST_RT ]).out);
+	print('\n');
+	rp_r(_t('== журнал состояния (последние 20) =='));
+	let wl = run([ 'tail', '-20', getenv('BW_WATCH_LOG') ]);
+	if (wl.code != 0) rp_r(_t('пусто')); else print(wl.out);
+	print('\n');
+	rp_r(_t('== системный журнал byway (последние 30) =='));
+	// watch пишет сюда имя и адрес сервера; строки crond о задачах byway
+	// вытесняли бы сообщения самой программы.
+	let bl = [];
+	for (let l in split(run([ 'logread', '-e', 'byway' ]).out, '\n'))
+		if (l !== '' && !match(l, / cron\.[a-z]* crond\[/)) push(bl, l);
+	for (let l in rp_tail(bl, 30))
+		print(replace(replace(l, /[0-9]{1,3}(\.[0-9]{1,3}){3}/g, 'x.x.x.x'), /([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/g, _t('ИМЯ')), '\n');
+	print('\n');
+	rp_r(_t('== системный журнал движка (последние 20) =='));
+	// Только жалобы движка: в строках обращений адрес каждого сайта.
+	let xl = [];
+	for (let l in split(run([ 'logread', '-e', 'xray' ]).out, '\n'))
+		if (match(l, /error|warn|fail|reject/i) && index(l, 'tproxy-in') < 0) push(xl, l);
+	for (let l in rp_tail(xl, 20)) {
+		l = replace(l, /^([A-Z][a-z]{2} [A-Z][a-z]{2} +[0-9]+ [0-9:]+ [0-9]{4}) [^:]*: /, (m, a) => a + ' ');
+		print(rp_mask(l), '\n');
+	}
+}
+
 // Разбор команды. Сюда попадают только перенесённые на ucode команды: прочие
 // разбирает shell (ui/main.sh) и зовёт bw_uc лишь для этих.
 
@@ -8056,6 +8088,8 @@ const CMDS = {
 	rawok: cmd_rawok,
 	stat: cmd_stat,
 	top: cmd_top,
+	doctor: cmd_doctor,
+	report: cmd_report,
 	gen: cmd_gen,
 };
 

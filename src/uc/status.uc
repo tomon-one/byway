@@ -252,7 +252,7 @@ function hl_fail(k, m) {
 function hl_key(url) {
 	if (url === '' && u('conn_mode') == 'outbound') {
 		if (u('outbound_json') === '' || ob_raw('proxy') == null) return null;
-		return { PROTO: 'raw' };
+		return { PROTO: 'raw', TYPE: '-', SEC: '-', PORT: '0', FLOW: '' };
 	}
 	if (url === '') url = u('node_url');
 	if (url === '') return null;

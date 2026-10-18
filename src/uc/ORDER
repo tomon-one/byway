@@ -7,4 +7,5 @@ gen.uc
 probe.uc
 status.uc
 stat.uc
+doctor.uc
 main.uc

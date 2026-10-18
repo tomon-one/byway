@@ -13,14 +13,15 @@ let G = null;
 // val_or: значение настройки по образцу, иначе умолчание и слово вслух. Эти
 // настройки прежде уходили в конфиг движка сырыми, и значением с `", ...`
 // можно было задать всю конфигурацию Xray, исполняемую от root.
-function g_val_or(name, val, re, def) {
+function g_val_or(name, val, re, def, where) {
+	where ??= _t(G_WHERE);
 	if (val === '') return def;
 	if (match(val, /[\x01-\x1f\x7f]/)) {
-		warnf('настройка %s содержит управляющие знаки и не годится для %s, взято %s', name, _t(G_WHERE), def);
+		warnf('настройка %s содержит управляющие знаки и не годится для %s, взято %s', name, where, def);
 		return def;
 	}
 	if (match(val, re)) return val;
-	warnf('настройка %s = «%s» не годится для %s, взято %s', name, val, _t(G_WHERE), def);
+	warnf('настройка %s = «%s» не годится для %s, взято %s', name, val, where, def);
 	return def;
 }
 
@@ -88,9 +89,9 @@ function g_dns_host(s) {
 // Порт входа для собственного трафика роутера; пусто -- не заворачивать
 // (выключено или порт занят другим входом byway). Та же логика у nft
 // (config/addr.sh, redir_port): при расхождении правила вели бы в никуда.
-function g_redir_port() {
+function g_redir_port(where) {
 	if (u('router_via_vpn') != '1') return '';
-	let p = g_val_or('redirect_port', u('redirect_port'), /^[0-9]{1,5}$/, '1604');
+	let p = g_val_or('redirect_port', u('redirect_port'), /^[0-9]{1,5}$/, '1604', where);
 	if (!g_port_ok(p)) p = '1604';
 	let t = u('tproxy_port') || '1602', l = u('local_proxy_port') || '1603';
 	if (p == t || p == l) {
@@ -143,7 +144,7 @@ function g_xray_hint(t) {
 
 // Ширина списка подсетей (net_warn в lists/presets.sh): миллион адресов
 // суммарно или блок шире /12 -- сказать.
-function g_net_warn(file) {
+function g_net_width(file) {
 	let tot = 0, big = 33, f = fs.open(file, 'r'), l;
 	if (f) {
 		while ((l = f.read('line')) != null && l !== '') {
@@ -158,9 +159,13 @@ function g_net_warn(file) {
 		}
 		f.close();
 	}
-	if (big == 33) big = 32;
-	if (tot > 1000000 || big <= 12)
-		warnf('  ВНИМАНИЕ: %s адресов, крупнейший блок /%s — в туннель уйдёт и чужой трафик, и скорость упадёт', tot, big);
+	return [ tot, big == 33 ? 32 : big ];
+}
+
+function g_net_warn(file) {
+	let w = g_net_width(file);
+	if (w[0] > 1000000 || w[1] <= 12)
+		warnf('  ВНИМАНИЕ: %s адресов, крупнейший блок /%s — в туннель уйдёт и чужой трафик, и скорость упадёт', w[0], w[1]);
 }
 
 // ── части конфига ─────────────────────────────────────────────────────────

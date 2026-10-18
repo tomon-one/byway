@@ -70,9 +70,12 @@ function _f(fmt, ...args) { return _pf(_t(fmt), args); }
 // ── вывод и журнал ─────────────────────────────────────────────────────────
 // Те же знаки и цвета, что у shell (core/output.sh): вывод разбирают панель
 // и человек, по [*] [!] [x].
-function _say(s)   { print('\x1b[1;32m[*]\x1b[0m ', s, '\n'); }
-function _warn(s)  { print('\x1b[1;33m[!]\x1b[0m ', s, '\n'); }
-function die_raw(s) { print('\x1b[1;31m[x]\x1b[0m ', s, '\n'); exit(1); }
+// PLAIN -- без цветов (отчёт: уходит файлом постороннему).
+let PLAIN = false;
+function _mark(c, m) { return PLAIN ? m + ' ' : '\x1b[1;' + c + 'm' + m + '\x1b[0m '; }
+function _say(s)   { print(_mark(32, '[*]'), s, '\n'); }
+function _warn(s)  { print(_mark(33, '[!]'), s, '\n'); }
+function die_raw(s) { print(_mark(31, '[x]'), s, '\n'); exit(1); }
 
 function say(s)  { _say(_t(s)); }
 function warn(s) { _warn(_t(s)); }

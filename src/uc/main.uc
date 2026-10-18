@@ -21,6 +21,8 @@ const CMDS = {
 	rawok: cmd_rawok,
 	stat: cmd_stat,
 	top: cmd_top,
+	doctor: cmd_doctor,
+	report: cmd_report,
 	gen: cmd_gen,
 };
 
