@@ -370,7 +370,6 @@ firewall4 не найден — вероятно firewall3, 21.02 и старш�
 автообновление включено, но происхождение файла неизвестно	auto-update is on, but the origin of the file is unknown
 автообновление включено, но byway правлен руками	auto-update is on, but byway has been edited by hand
 автообновление включено	auto-update is on
-пул $1 без длины маски -- взято умолчание	pool $1 has no mask length -- falling back to the default
 пул %s: маска /%s не годится -- взято умолчание	pool %s: mask /%s is not usable -- falling back to the default
 пул %s лежит в приватном или зарезервированном -- он мёртв: цепочка nft отсекает такие адреса первым же правилом	pool %s is inside private or reserved space -- it is dead: the nft chain drops such addresses in its very first rule
 пул %s лежит в 172.16/12 -- он мёртв	pool %s is inside 172.16/12 -- it is dead

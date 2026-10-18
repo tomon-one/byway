@@ -249,16 +249,6 @@ port_ok() {
     [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
 }
 
-# grep -c на нуле печатает 0 и возвращает 1: `|| echo 0` давал два нуля.
-count_list() {
-    [ -f "$1" ] || { echo 0; return 0; }
-    awk '{ gsub(/^[[:space:]]+|[[:space:]\r]+$/, "")
-           if ($0 == "") next
-           if (substr($0, 1, 1) == "#") next
-           if (substr($0, 1, 2) == "//") next
-           n++ } END { print n + 0 }' "$1"
-}
-
 # Живость движка -- по pid-файлу procd, не по разбору `ps`: на procps-ng формат
 # другой, и сторож считал живой движок мёртвым и снимал обвязку. /proc
 # подтверждает, что это наш Xray, а не повторно выданный номер.
@@ -281,19 +271,6 @@ xray_pid() {
 # заметный провайдеру след «здесь byway». Ходим через свой прокси-вход:
 # github.com часто в списке, а правила в prerouting трафик самого роутера не
 # ловят -- резолвер отдаёт адрес пула без маршрута, ответ -- пустота.
-
-# Сравнение версий вида 1.2.3; sort -V в busybox нет.
-ver_gt() {
-    _va=$(printf '%s' "$1" | tr -c '0-9' ' ')
-    _vb=$(printf '%s' "$2" | tr -c '0-9' ' ')
-    # shellcheck disable=SC2086
-    set -- $_va; _a1=${1:-0}; _a2=${2:-0}; _a3=${3:-0}
-    # shellcheck disable=SC2086
-    set -- $_vb; _b1=${1:-0}; _b2=${2:-0}; _b3=${3:-0}
-    [ "$_a1" -ne "$_b1" ] && { [ "$_a1" -gt "$_b1" ]; return $?; }
-    [ "$_a2" -ne "$_b2" ] && { [ "$_a2" -gt "$_b2" ]; return $?; }
-    [ "$_a3" -gt "$_b3" ]
-}
 
 # Домен для проверки «трафик проходит»: заворачивается всегда, мимо списков.
 PROBE_DOMAIN=example.com
@@ -341,91 +318,6 @@ take_lock() {   # путь замка, о чём говорить человек
     return 0
 }
 
-# Значение, уходящее в текст правил nft: не подошло образцу -- умолчание и
-# слово вслух. Настройки приходят чужой выгрузкой (EXPORT_KEYS), и значение
-# вида `0x1 ; chain … accept` поставило бы свои правила firewall от root при
-# каждом plumb on; `nft -c` не защита, он проверяет только синтаксис.
-# Предупреждение в stderr: stdout уходит прямо в `nft -f -`.
-val_or() {   # имя, значение, образец, умолчание, куда идёт
-    [ -n "$2" ] || { printf '%s' "$4"; return 0; }
-    # grep судит построчно: значение с годной первой строкой и переводом
-    # строки проходило, и вторая строка попадала в правила nft и конфиги.
-    case "$2" in
-      *[[:cntrl:]]*)
-        warnf "настройка %s содержит управляющие знаки и не годится для %s, взято %s" "$1" "$5" "$4" >&2
-        printf '%s' "$4"; return 0 ;;
-    esac
-    if printf '%s' "$2" | grep -qE "$3"; then
-        printf '%s' "$2"
-    else
-        warnf "настройка %s = «%s» не годится для %s, взято %s" "$1" "$2" "$5" "$4" >&2
-        printf '%s' "$4"
-    fi
-}
-
-nft_val() { val_or "$1" "$2" "$3" "$4" "$(_t 'правил nft')"; }
-
-_len() {
-    _lb=$(printf '%s' "$1" | wc -c)
-    _lc=$(printf '%s' "$1" | tr -dc '\200-\277' | wc -c)
-    echo $((_lb - _lc))
-}
-
-# Загрузки, которые обязаны пройти и при сломанном туннеле: net_get пробует
-# прокси-вход, потом напрямую, потом адреса GitHub из DoH. a_of -- адрес имени.
-
-# Имя -> адрес IPv4; $2 -- резолвер вместо системного. sed отрезает шапку с
-# адресом самого резолвера (там тоже «Address», и он первый).
-a_of() {   # $1 -- имя, $2 -- резолвер или пусто
-    nslookup "$1" ${2:+"$2"} 2>/dev/null | sed -n '/^Name:/,$p' |
-      awk '/^Address/ {print $NF}' |
-      grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1
-}
-
-# Все адреса имени: у имени с несколькими A-записями (round-robin) порядок
-# ответов меняется от запроса к запросу.
-a_all() {   # $1 -- имя, $2 -- резолвер или пусто
-    nslookup "$1" ${2:+"$2"} 2>/dev/null | sed -n '/^Name:/,$p' |
-      awk '/^Address/ {print $NF}' |
-      grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true
-}
-
-# Адрес имени по DoH, запросом К АДРЕСУ, не к имени: при сломанном туннеле
-# локальный DNS отдаёт подставной адрес на всё из списка, и GitHub не достать.
-# Тот же приём в install.sh (doh_a).
-doh_a() {   # 1 -- имя
-    for _dq in "https://8.8.8.8/resolve?name=$1&type=A" \
-               "https://1.1.1.1/dns-query?name=$1&type=A"; do
-        _da=$(curl -fsSL --max-time 8 -H "accept: application/dns-json" "$_dq" 2>/dev/null |
-              tr ',' '\n' | sed -n 's/.*"data":"\([0-9][0-9.]*\)".*/\1/p' | head -1)
-        case "$_da" in
-          [0-9]*.[0-9]*.[0-9]*.[0-9]*) printf '%s' "$_da"; return 0 ;;
-        esac
-    done
-    return 1
-}
-
-# --resolve для имён GitHub (и переадресаций выпусков), один раз за запуск.
-gh_resolve() {
-    [ "${GH_RES_DONE:-0}" = 1 ] && return 0
-    GH_RES_DONE=1; GH_RES=""
-    for _gh in github.com api.github.com raw.githubusercontent.com codeload.github.com \
-               objects.githubusercontent.com release-assets.githubusercontent.com; do
-        _gi=$(doh_a "$_gh") || continue
-        GH_RES="$GH_RES --resolve $_gh:443:$_gi"
-    done
-}
-
-# Порядок: прокси-вход, напрямую, напрямую с адресами GitHub из DoH.
-net_get() {   # аргументы curl как есть
-    _npx=$(u local_proxy_port); _npx=${_npx:-1603}
-    curl -fsSL -A "Mozilla/5.0" --proxy "http://127.0.0.1:$_npx" "$@" 2>/dev/null && return 0
-    curl -fsSL -A "Mozilla/5.0" "$@" 2>/dev/null && return 0
-    gh_resolve
-    [ -n "$GH_RES" ] || return 1
-    # shellcheck disable=SC2086
-    curl -fsSL -A "Mozilla/5.0" $GH_RES "$@" 2>/dev/null
-}
 
 # Разбор ключа (vless, vmess, trojan, ss, socks, hysteria2, wireguard) в
 # переменные N_*. Сам разборщик -- uc/keys.uc (parse_key), вызов -- bw_uc parse.
@@ -484,91 +376,6 @@ parse_uc() {
     bw_uc parse
 }
 
-# Адреса и метка для сторожа и проверок: DNS-вход, пул fakeip, метка обвязки.
-
-# Адрес DNS-входа с умолчанием: поле в панели можно очистить, а голое `u
-# dns_listen` тогда пусто -- сторож каждые 5 минут пересобирает обвязку, а
-# dns_down не возвращает резолвер провайдеру.
-dns_addr() {
-    _da=$(u dns_listen)
-    printf '%s' "${_da:-127.0.0.42}"
-}
-
-# Годится ли пул по смыслу, а не только по форме. Пул в приватном диапазоне
-# мёртв молча: цепочка nft отсекает приватное первым правилом, блокировка Xray
-# его перечисляет, rebind_protection dnsmasq вырезает его из ответов, а проба
-# plumb on спрашивает движок напрямую и проходит. Пул уже списка -- выдача идёт
-# по кругу, и соединение уходит на чужой домен.
-pool_sane() {   # 1 -- пул вида a.b.c.d/len
-    _pn=${1%/*}; _pl=${1#*/}
-    case "$_pl" in ''|*[!0-9]*) warn "пул $1 без длины маски -- взято умолчание" >&2; return 1 ;; esac
-    if [ "$_pl" -lt 8 ] || [ "$_pl" -gt 30 ]; then
-        warnf "пул %s: маска /%s не годится -- взято умолчание" "$1" "$_pl" >&2
-        return 1
-    fi
-    # Сравнение по первому октету (172, 169, 192, 100 -- по второму): опасные
-    # диапазоны выровнены по октету.
-    _o1=${_pn%%.*}; _r=${_pn#*.}; _o2=${_r%%.*}
-    # 240.0.0.0/4 -- весь диапазон 240-255, а не края. Список тот же, что в
-    # RESERVED и в правиле блокировки движка: править все три вместе.
-    case "$_o1" in
-      0|10|127|22[4-9]|23[0-9]|24[0-9]|25[0-5])
-        warnf "пул %s лежит в приватном или зарезервированном -- он мёртв: цепочка nft отсекает такие адреса первым же правилом" "$1" >&2
-        return 1 ;;
-      172) [ "$_o2" -ge 16 ] && [ "$_o2" -le 31 ] && {
-             warnf "пул %s лежит в 172.16/12 -- он мёртв" "$1" >&2; return 1; } ;;
-      192) [ "$_o2" = 168 ] && {
-             warnf "пул %s лежит в 192.168/16 -- он мёртв" "$1" >&2; return 1; } ;;
-      169) [ "$_o2" = 254 ] && {
-             warnf "пул %s лежит в 169.254/16 -- он мёртв" "$1" >&2; return 1; } ;;
-      100) [ "$_o2" -ge 64 ] && [ "$_o2" -le 127 ] && {
-             warnf "пул %s лежит в 100.64/10 -- он мёртв" "$1" >&2; return 1; } ;;
-    esac
-    return 0
-}
-
-# Действующие пул, метка и мосты -- одно значение для конфига движка, правил
-# nft, ip rule, запрета и проверок. Каждый читал своё: при негодной настройке
-# движок раздавал один пул, nft ловил другой, проверки искали третий, а ip
-# rule искал метку не в том виде, в каком её печатает ядро. Аргумент
-# «loud» -- предупреждать о негодной настройке (сборка конфига и правил).
-eff_pool() {
-    if [ "${1:-}" = loud ]; then
-        _ep=$(val_or fakeip_pool "$(u fakeip_pool)" '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' 198.18.0.0/15 "$(_t 'конфига движка')")
-        pool_sane "$_ep" || _ep=198.18.0.0/15
-    else
-        _ep=$(val_or fakeip_pool "$(u fakeip_pool)" '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' 198.18.0.0/15 "" 2>/dev/null)
-        pool_sane "$_ep" 2>/dev/null || _ep=198.18.0.0/15
-    fi
-    printf '%s' "$_ep"
-}
-eff_mark() {
-    if [ "${1:-}" = loud ]; then
-        _em=$(nft_val mark "$(u mark)" '^0x[0-9a-fA-F]{1,8}$' 0x100000)
-    else
-        _em=$(nft_val mark "$(u mark)" '^0x[0-9a-fA-F]{1,8}$' 0x100000 2>/dev/null)
-    fi
-    # Как печатает ip rule show: строчными, без ведущих нулей.
-    printf '0x%x' "$((_em))"
-}
-
-# Образец адреса из пула -- по всему пулу, а не по двум первым октетам: пул
-# шире /16 давал ложное «движок не отвечает» на трёх адресах из четырёх.
-# Без якоря слева: потребитель сам ставит ^ перед адресом.
-fakeip_re() {
-    eff_pool | awk -F'[./]' '{
-        l = $5 + 0; o[1] = $1; o[2] = $2; o[3] = $3; o[4] = $4
-        full = int(l / 8); rem = l % 8; re = ""
-        for (i = 1; i <= full; i++) re = re o[i] "\\."
-        if (rem > 0) {
-            sz = 2 ^ (8 - rem); b = int(o[full + 1] / sz) * sz; alt = ""
-            for (v = b; v < b + sz; v++) alt = alt (alt == "" ? "" : "|") v
-            re = re "(" alt ")" (full == 3 ? "([^0-9]|$)" : "\\.")
-        }
-        printf "%s", re
-    }'
-}
-
 # Аутбаунды собирает ucode (uc/outbound.uc) для gen, check и probe; здесь --
 # метка сокетов.
 
@@ -591,6 +398,9 @@ cmd_gen() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
 
+    # Замена ядра проверяет конфиг под новым движком до переключения на него
+    # (uc/engine.uc): путь -- окружением.
+    if [ -n "${BW_GEN_XRAY:-}" ]; then XRAY=$BW_GEN_XRAY; XRAYVER=""; fi
     [ -f "$CONF" ] || dief "нет %s" "$CONF"
     [ -x "$XRAY" ] || die "xray не найден"
     mkdir -p "$LISTS"
@@ -616,17 +426,6 @@ cmd_gen() {
     [ "$_grc" = 0 ] || exit "$_grc"
 }
 
-# Настоящий адрес сервера для DNS через туннель. Местный резолвер в этом
-# режиме отдаёт адрес из прежнего конфига (hosts), смена адреса не увиделась
-# бы: сперва пин /etc/hosts, потом внешние резолверы, потом местный.
-server_addr() {   # $1 -- имя
-    _sa=$(awk -v n="$1" '$1 !~ /^#/ { for (i = 2; i <= NF; i++) if ($i == n) { print $1; exit } }' \
-          /etc/hosts 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1)
-    [ -n "$_sa" ] || _sa=$(a_of "$1" 8.8.8.8)
-    [ -n "$_sa" ] || _sa=$(a_of "$1" 1.1.1.1)
-    [ -n "$_sa" ] || _sa=$(a_of "$1")
-    printf '%s' "$_sa"
-}
 
 # Проверки ключа без боевого конфига: check (разбор и run -test) и probe
 # (соединение через ноду) -- в ucode (uc/probe.uc). Здесь окружение и уборка:
@@ -669,18 +468,6 @@ cmd_show() {
 # почему домен не работает.
 BADLIST=/tmp/byway-bad-entries
 
-# Записи списка, которые можно спросить у резолвера: без regexp:/keyword:
-# (по ним nslookup не отвечает, и проба на одной такой строке объявила бы отказ
-# исправному туннелю) и без префиксов domain:/full:. return 0 нужен: grep без
-# совпадений даёт 1, а `_d=$(plain_domains …)` под set -e на нём молча умирает.
-plain_domains() {
-    grep -vE '^[[:space:]]*(//|#|$)' "$1" 2>/dev/null | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |
-      sed -e 's/^domain://' -e 's/^full://' |
-      grep -E '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' |
-      grep -E '\.([A-Za-z][A-Za-z]+|xn--[A-Za-z0-9-]+)$' || true
-    return 0
-}
-
 # Склейка свой + направления + пресеты, одним файлом без повторов (отдаётся
 # путь) -- в ucode (uc/merge.uc, кэш с подписью). Читают сборка конфига, nft,
 # запрет и проверки -- все видят одно и то же.
@@ -712,21 +499,10 @@ cmd_sub() {
 }
 
 # Перехват (nft, маршрут, dnsmasq, запрет «не пускать мимо VPN») -- в ucode
-# (uc/plumb.uc). Здесь замок и снятие по сигналу, имена, которые читают
-# сторож и проверки (service/*), и обёртки команд.
+# (uc/plumb.uc). Здесь замок и снятие по сигналу и обёртки команд.
 
-TABLE=byway
-RT_TABLE=100
-BLOCK_MARK=/tmp/byway-blocked
 # Умолчание пула IPv6 для конфига движка -- константа Xray (fakedns.go).
 POOL6_DEF="fc00::/18"
-
-# Образец ip rule по fwmark и таблице (сторож считает правила). Конец
-# закреплён: «lookup 100» совпадает и с «lookup 1000».
-rule_re() {
-    _rm=$(eff_mark)
-    printf 'fwmark %s(/%s)?[[:space:]]+lookup %s([[:space:]]|$)' "$_rm" "$_rm" "$RT_TABLE"
-}
 
 plumb_env() {
     BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR \
@@ -763,13 +539,6 @@ cmd_plumb() {
     rm -rf "$_plock" 2>/dev/null || true
     return "$_prc"
 }
-
-# Резолверы dnsmasq от byway (файл в каталоге добавок) через пробел; нет --
-# none. Сторож судит по ним, на нас ли DNS дома.
-dns_servers() { plumb_env bw_uc plumb servers 2>/dev/null || echo none; }
-
-# Снять запрет (сторож: служба выключена).
-block_off() { plumb_env bw_uc plumb unblock; }
 
 cmd_nft() { plumb_env bw_uc nft; }
 
@@ -851,36 +620,9 @@ cmd_status() {
     BW_AULOG=$AULOG BW_NEWVER=$NEWVER BW_RELNOTE=$RELNOTE bw_uc status "$@"
 }
 
-# byway health и проверки связи для сторожа и замены ядра (tunnel_ok, alive_ok
-# -- пока на shell: их зовут watch и engine).
+# byway health: служба, VPN, трафик, DNS строками «ключ<таб>состояние<таб>
+# подробность» -- в ucode (uc/status.uc, cmd_health).
 
-# Связь через сервер: запрос через прокси-вход к PROBE_DOMAIN. alive_ok сервера
-# не видит, и ядро, которое встало, но не договаривается с сервером, её
-# проходило.
-tunnel_ok() {
-    _tl=$(u local_proxy_port); _tl=${_tl:-1603}
-    _tc=$(curl -s -o /dev/null --max-time 8 -w '%{http_code}' \
-          --proxy "http://127.0.0.1:$_tl" "https://$PROBE_DOMAIN/" 2>/dev/null || true)
-    [ "${_tc:-000}" != "000" ]
-}
-
-# Движок жив, обвязка на месте, резолвер отдаёт fakeip. По ней автооткат
-# обновления судит об удаче: канала извещений нет.
-alive_ok() {
-    [ -n "$(xray_pid)" ] || return 1
-    nft list table inet "$TABLE" >/dev/null 2>&1 || return 1
-    # Проба по объединённому списку: у роутера с одними пресетами свой файл
-    # пуст, и проба по нему не проверяла ничего.
-    _ad=$(plain_domains "$(merged_domains)" | head -1)
-    # Пустой список -- не поломка, проверять нечем.
-    [ -n "$_ad" ] || return 0
-    nslookup "$_ad" 127.0.0.1 2>/dev/null | awk '/^Address/{print $NF}' |
-        grep -qE "^$(fakeip_re)"
-}
-
-# ── короткая проверка для панели ───────────────────────────────────────────
-# Служба, VPN, трафик, DNS строками «ключ<таб>состояние<таб>подробность» --
-# в ucode (uc/status.uc, cmd_health).
 cmd_health() {
     BW_OUT=$OUT BW_XRAY=$XRAY BW_PROBE=$PROBE_DOMAIN bw_uc health
 }
@@ -919,8 +661,8 @@ cmd_report() {
     fi
 }
 
-# Обновление самого byway: номер свежей версии, загрузка, откат; метки
-# проверки обновлений и ночного автообновления.
+# Обновление самого byway -- в ucode (uc/update.uc). Здесь пути меток проверки
+# обновлений и автообновления: их читают status и doctor (UP_* в ucode -- те же).
 
 # Автопроверка новой версии. Метки в /tmp: ежедневная запись во флеш не
 # нужна, а после перезагрузки проверка лишний раз безвредна.
@@ -945,996 +687,65 @@ BINSUM=/etc/byway/.binmd5     # сумма выложенной версии (п
 
 AUFAIL=/etc/byway/.au-failed  # выпуск, который уже не поднялся: второй раз не ставим
 
-# Час автообновления по местному времени роутера, сверяется с `date +%H`.
-# Одна функция и для сторожа, и для doctor: иначе doctor назовёт один час,
-# а сработает другой. Форма двузначная (04): `date +%H` даёт 04, и сравнение
-# строк с «4» не совпало бы никогда.
-au_hour() {
-    _auhv=$(u auto_update_hour)
-    [ -n "$_auhv" ] || _auhv=04
-    case "$_auhv" in
-      [0-9]|[01][0-9]|2[0-3]) ;;
-      *) warnf "час автообновления «%s» не годится, взято 04" "$_auhv" >&2
-         _auhv=04 ;;
-    esac
-    [ "${#_auhv}" = 2 ] || _auhv="0$_auhv"
-    printf '%s' "$_auhv"
+update_env() {
+    BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR \
+    BW_BADLIST=$BADLIST BW_NUM=$BYWAY_NUM BW_REPO=$BYWAY_REPO BW_PUBKEY=$BYWAY_PUBKEY \
+    BW_PROBE=$PROBE_DOMAIN "$@"
 }
 
-# Спрашивает у GitHub про последний выпуск, печатает «код версия». Код
-# отдаётся строкой: из подстановки $( ) переменная не выйдет.
-latest_version() {
-    _px=$(u local_proxy_port); _px=${_px:-1603}
-    _api="https://api.github.com/repos/$BYWAY_REPO/releases/latest"
-    _code=000; _body=""
-    for _via in "--proxy http://127.0.0.1:$_px" "" doh; do
-        if [ "$_via" = doh ]; then gh_resolve; [ -n "$GH_RES" ] || break; _via=$GH_RES; fi
-        # shellcheck disable=SC2086
-        _r=$(curl -sSL --max-time 25 -A "Mozilla/5.0" $_via -w '
-%{http_code}' "$_api" 2>/dev/null || true)
-        _code=$(printf '%s' "$_r" | tail -1)
-        _body=$(printf '%s' "$_r" | sed '$d')
-        # Любой ответ, кроме «не дозвонились», окончателен (404 -- нет
-        # репозитория): повтор другим путём затёр бы код нулями.
-        case "$_code" in 000) ;; *) break ;; esac
-    done
-    # Первая строка описания -- в файл, не в вывод: в ней пробелы, они
-    # сломали бы разбор поля у вызывающего. В JSON перевод строки -- «\n»
-    # из двух знаков, обратная косая и есть граница первой строки.
-    printf '%s' "$_body" |
-        sed -n 's/.*"body"[^"]*"\([^"\\]*\).*/\1/p' | head -1 > "$RELNOTE" 2>/dev/null || true
-    printf '%s %s' "$_code" \
-        "$(printf '%s' "$_body" | sed -n 's/.*"tag_name"[^"]*"v*\([0-9][^"]*\)".*/\1/p' | head -1)"
-}
-
-# Код выхода для ночного обновления: 0 -- поставлено и туннель работает,
-# 3 -- не поднялось и откачено, 4 -- откат не удался, 5 -- копия для отката
-# не сделалась, 6 -- подпись не сошлась (оба -- ничего не тронуто), прочее --
-# не скачалось.
+# ucode сигналов не ловит: рабочий каталог после Ctrl+C убирает обёртка (путь
+# -- в /var/run/byway-update.dir). Код выхода -- как у ucode (ночное
+# обновление судит по нему).
 cmd_update() {
-    _uf=""; _nov=0; _uto=""
-    while [ $# -gt 0 ]; do
-        case "$1" in
-          --rollback)
-            [ -s "$PREVSET" ] || die "откатывать не на что: копия делается при byway update"
-            upd_restore || die "откат не завершён — освободить место на флеше и повторить: byway update --rollback"
-            # Снятый вручную выпуск автообновление не вернёт: иначе первая же
-            # ночь ставила бы его заново, и откат отменялся без слова.
-            printf '%s\n' "$BYWAY_NUM" > "$AUFAIL" 2>/dev/null || true
-            sayf "автообновление выпуск %s больше не поставит" "$BYWAY_NUM"
-            return 0 ;;
-          --check|--force) _uf=$1 ;;
-          --no-verify) _nov=1 ;;
-          # Ночное: ставится выдержавший три дня номер, а не свежий на 04:00.
-          --to) shift; _uto=${1:-}
-                case "$_uto" in ''|*[!0-9.]*) dief "непонятная версия «%s»" "$_uto" ;; esac ;;
-          *) dief "непонятный ключ: %s — byway update [--check|--force|--rollback|--no-verify]" "$1" ;;
-        esac
-        shift
-    done
-    if [ -n "$_uto" ]; then _lv="200 $_uto"; else _lv=$(latest_version); fi
-    _code=${_lv%% *}; _new=${_lv#* }
-    if [ -z "$_new" ] || [ "$_new" = "$_code" ]; then
-        case "$_code" in
-          000) die "GitHub не ответил -- похоже, нет связи" ;;
-          404) dief "на GitHub нет ни репозитория %s, ни его выпусков" "$BYWAY_REPO" ;;
-          403) die "GitHub ответил «слишком часто спрашиваете» -- подождать час" ;;
-          *)   dief "GitHub ответил %s, но версии в ответе нет" "$_code" ;;
-        esac
-    fi
-
-    # Метка «найдена новая» устаревает с самим обновлением: после ручной
-    # установки статус и панель до суток писали «доступно X (у вас X)».
-    ver_gt "$_new" "$BYWAY_NUM" || rm -f "$NEWVER" 2>/dev/null || true
-    if ! ver_gt "$_new" "$BYWAY_NUM"; then
-        # Тег могут пересобрать на новом коммите под тем же номером:
-        # «новее нет» верно про номер, но не про файлы. Отсюда --force.
-        case "$_uf" in
-          --force)
-            sayf "версия та же (%s), но ставится заново -- так велит --force" "$BYWAY_NUM" ;;
-          *)
-            sayf "версия %s -- новее нет" "$BYWAY_NUM"
-            say "  переставить ту же: byway update --force"
-            return 0 ;;
-        esac
-    else
-        sayf "есть новая версия: %s (у вас %s)" "$_new" "$BYWAY_NUM"
-    fi
-    [ "$_uf" = --check ] && return 0
-
-    # Распаковка в память. Каталог свой у каждого запуска и создаётся
-    # атомарно (mktemp, права 700): на имени с $$ каталог, заведённый заранее
-    # другим пользователем, mkdir -p принимал как свой, и в него подкладывали
-    # исходник, который установщик от root разложит в /usr/local/bin.
-    _d=$(mktemp -d /tmp/byway-update.XXXXXX) || die "не создать рабочий каталог в /tmp"
-    # INT/TERM -- выйти (EXIT снимет): ловушка без exit оставляла процесс
-    # идти дальше после Ctrl+C уже без рабочего каталога.
-    trap 'rm -rf "$_d" 2>/dev/null' EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    _px=$(u local_proxy_port); _px=${_px:-1603}
-    _url="https://github.com/$BYWAY_REPO/archive/refs/tags/v$_new.tar.gz"
-    say "загрузка"
-    net_get --max-time 120 -o "$_d/p.tar.gz" "$_url" ||
-        die "не скачалось -- ничего не тронуто"
-    tar xzf "$_d/p.tar.gz" -C "$_d" 2>/dev/null || die "не распаковалось -- ничего не тронуто"
-    _src=$(find "$_d" -maxdepth 2 -name install.sh 2>/dev/null | head -1)
-    [ -n "$_src" ] || die "в пакете нет install.sh -- ничего не тронуто"
-    if [ "$_nov" = 1 ]; then
-        warn "--no-verify: подпись выпуска не проверяется"
-    else
-        # 1 -- проверить нечем (нет usign, нет подписи): обход назвать можно.
-        # 2 -- подлинность опровергнута: обход не советовать.
-        _uvr=0; upd_verify "$_new" "$(dirname "$_src")" "$_d" || _uvr=$?
-        case "$_uvr" in
-          0) say "подпись выпуска сошлась с ключом byway" ;;
-          1) warn "выпуск не поставлен -- ничего не тронуто; поставить без проверки подписи: byway update --no-verify"
-             exit 6 ;;
-          *) warn "архив не совпал с подписанным выпуском -- подменён или повреждён; ничего не тронуто, повторить позже"
-             exit 6 ;;
-        esac
-    fi
-
-    # Связь до установки: откатывать за мёртвый сервер нельзя (eng_wait).
-    _etun0=0
-    eng_idle || { tunnel_ok && _etun0=1; } || true
-    if ! upd_snapshot; then
-        warn "копия прежней версии для отката не сделалась (место на флеше?) -- ничего не тронуто"
-        exit 5
-    fi
-
-    # Ставит install.sh: он один знает, что куда класть и что оставить
-    # (конфигурация, списки); копия этой логики здесь разошлась бы с ним.
-    say "установка"
-    if ! ( cd "$(dirname "$_src")" && sh install.sh ); then
-        # Под set -e установщик мог успеть разложить часть файлов.
-        warn "установка оборвалась -- возврат прежней версии"
-        upd_restore || exit 4
-        exit 3
-    fi
-    rm -f "$NEWVER" "$RELNOTE" 2>/dev/null || true
-    # Поставленный вручную выпуск, который раньше не поднимался, больше не
-    # «отвергнут»: doctor писал бы об этом вечно.
-    [ "$(cat "$AUFAIL" 2>/dev/null || true)" != "$_new" ] || rm -f "$AUFAIL" 2>/dev/null || true
-    eng_idle && return 0
-    say "проверка туннеля на новой версии (до 2,5 минуты)"
-    if eng_wait; then
-        say "готово: туннель на новой версии работает"
-        return 0
-    fi
-    warn "на новой версии туннель не поднялся -- возврат прежней"
-    upd_restore || exit 4
-    exit 3
+    trap '_ud=$(cat /var/run/byway-update.dir 2>/dev/null); [ -n "$_ud" ] && rm -rf "$_ud"; rm -f /var/run/byway-update.dir; exit 130' INT
+    trap '_ud=$(cat /var/run/byway-update.dir 2>/dev/null); [ -n "$_ud" ] && rm -rf "$_ud"; rm -f /var/run/byway-update.dir; exit 143' TERM
+    _urc=0
+    update_env bw_uc update "$@" || _urc=$?
+    trap - INT TERM
+    return "$_urc"
 }
 
-# Прежняя версия целиком -- в архив на флеш: откат одного скрипта оставлял
-# новые init, панель и словарь при старом byway. Только существующие пути.
-upd_snapshot() {
-    _us=""
-    for _uf in /usr/local/bin/byway /etc/init.d/byway /usr/local/bin/byway-uninstall \
-               /www/luci-static/resources/view/byway /www/luci-static/resources/byway \
-               /usr/share/luci/menu.d/luci-app-byway.json \
-               /usr/share/rpcd/acl.d/luci-app-byway.json /etc/byway/lang; do
-        [ -e "$_uf" ] && _us="$_us ${_uf#/}"
-    done
-    rm -f "$PREVBIN" 2>/dev/null || true
-    # shellcheck disable=SC2086
-    tar czf "$PREVSET.new" -C / $_us 2>/dev/null && [ -s "$PREVSET.new" ] &&
-        mv "$PREVSET.new" "$PREVSET" && chmod 600 "$PREVSET" && return 0
-    rm -f "$PREVSET.new" 2>/dev/null || true
-    return 1
+# Ядро Xray (byway engine) -- в ucode (uc/engine.uc). Здесь замок и уборка
+# рабочего каталога после Ctrl+C: ucode сигналов не ловит. На фазе «через
+# память» (метка /var/run/byway-engine.ram) каталог и замок не трогаются: там
+# архив прежнего ядра, а замену доводит до конца её процесс, не прерываемый
+# INT и HUP.
+
+engine_env() {
+    BW_SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0") \
+    BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR \
+    BW_BADLIST=$BADLIST BW_PROBE=$PROBE_DOMAIN BW_XRAY=${XRAY:-} BW_PKGFIX=$PKG_FIX \
+    BW_XTESTED=$XRAY_TESTED BW_XSUMS=$XRAY_TESTED_SUMS BW_UCRUN=$BW_UCRUN "$@"
 }
 
-# Вернуть архив прежней версии и перезапустить службу. Автозапуск -- заново
-# по init прежней версии (номер START у версий разный).
-upd_restore() {
-    [ -s "$PREVSET" ] || { warn "копии прежней версии нет"; return 1; }
-    # Через каталог в памяти и mv на место: запись поверх файла, который
-    # сейчас исполняется (byway update --rollback), портила бы его чтение.
-    _ur=$(mktemp -d /tmp/byway-rollback.XXXXXX) ||
-        { warnf "откат не удался -- копия в %s" "$PREVSET"; return 1; }
-    tar xzf "$PREVSET" -C "$_ur" 2>/dev/null || { rm -rf "$_ur"; warnf "откат не удался -- копия в %s" "$PREVSET"; return 1; }
-    _urf=0
-    for _uf in $(cd "$_ur" && find . -type f); do
-        _ud=${_uf#.}
-        mkdir -p "$(dirname "$_ud")" 2>/dev/null || true
-        cp -p "$_ur$_ud" "$_ud.new" 2>/dev/null && mv "$_ud.new" "$_ud" 2>/dev/null || _urf=1
-    done
-    rm -rf "$_ur" 2>/dev/null || true
-    [ "$_urf" = 0 ] || { warnf "откат лёг не целиком -- копия в %s" "$PREVSET"; return 1; }
-    md5sum /usr/local/bin/byway 2>/dev/null | cut -d' ' -f1 > "$BINSUM" 2>/dev/null || true
-    /etc/init.d/byway disable >/dev/null 2>&1 || true
-    /etc/init.d/byway enable >/dev/null 2>&1 || true
-    /etc/init.d/rpcd reload >/dev/null 2>&1 || true
-    /etc/init.d/byway restart >/dev/null 2>&1 || true
-    say "прежняя версия возвращена"
+engine_clean() {
+    [ -f /var/run/byway-engine.ram ] && return 0
+    _ecd=$(cat /var/run/byway-engine.dir 2>/dev/null || true)
+    [ -n "$_ecd" ] && rm -rf "$_ecd" 2>/dev/null
+    rm -f /var/run/byway-engine.dir 2>/dev/null
+    rm -rf /var/run/byway-engine.lock 2>/dev/null
     return 0
-}
-
-# Подпись выпуска (с 0.3.0): SHA256SUMS -- суммы всех файлов архива тега --
-# и его подпись лежат вложениями выпуска на GitHub, ключ -- BYWAY_PUBKEY.
-# Архив с чужого зеркала или подменённый по дороге не пройдёт: каждый файл
-# обязан быть в списке и с той суммой, лишних нет.
-# Подписанный список сумм выпуска -- в каталог $2/SHA256SUMS. 0 -- подпись
-# сошлась; 1 -- проверить нечем (нет usign, подпись не скачалась); 2 -- не
-# сошлась. Общая для byway update и byway lang.
-rel_sums() {   # 1 -- номер, 2 -- рабочий каталог
-    command -v usign >/dev/null 2>&1 || { warn "нет usign — подпись выпуска проверить нечем"; return 1; }
-    _rel="https://github.com/$BYWAY_REPO/releases/download/v$1"
-    if ! net_get --max-time 30 -o "$2/SHA256SUMS" "$_rel/SHA256SUMS" ||
-       ! net_get --max-time 30 -o "$2/SHA256SUMS.sig" "$_rel/SHA256SUMS.sig"; then
-        warnf "у выпуска %s нет подписи (SHA256SUMS.sig) либо она не скачалась" "$1"
-        return 1
-    fi
-    printf 'untrusted comment: byway release key public key\n%s\n' "$BYWAY_PUBKEY" > "$2/key.pub"
-    usign -V -q -m "$2/SHA256SUMS" -x "$2/SHA256SUMS.sig" -p "$2/key.pub" ||
-        { warn "подпись выпуска не сошлась с ключом byway"; return 2; }
-    return 0
-}
-
-# Файл совпал со своей строкой подписанного списка.
-rel_sum_ok() {   # 1 -- файл, 2 -- путь в выпуске (lang/en.tsv), 3 -- SHA256SUMS
-    _rw=$(awk -v f="$2" '{ p = $2; sub(/^\*/, "", p) } p == f { print $1; exit }' "$3")
-    [ -n "$_rw" ] && [ "$(sha256sum "$1" 2>/dev/null | cut -d' ' -f1)" = "$_rw" ]
-}
-
-upd_verify() {   # 1 -- номер, 2 -- корень распакованного архива, 3 -- рабочий каталог
-    _rsr=0; rel_sums "$1" "$3" || _rsr=$?
-    [ "$_rsr" = 0 ] || return "$_rsr"
-    ( cd "$2" && sha256sum -c "$3/SHA256SUMS" >/dev/null 2>&1 ) ||
-        { warn "файлы архива не совпали с подписанным списком"; return 2; }
-    _ul=$(cd "$2" && find . -type f | sed 's|^\./||' | sort)
-    _us=$(awk '{ sub(/^\*/, "", $2); print $2 }' "$3/SHA256SUMS" | sort)
-    [ "$_ul" = "$_us" ] || { warn "в архиве есть файлы вне подписанного списка"; return 2; }
-    # Подпись не несёт номера выпуска: подписанный список старого выпуска
-    # сошёлся бы и под новым тегом. Номер -- из подписанных файлов.
-    grep -qx "VER=$1" "$2/install.sh" 2>/dev/null &&
-        grep -qx "BYWAY_NUM=\"$1\"" "$2/byway" 2>/dev/null ||
-        { warnf "архив не того выпуска: внутри не v%s" "$1"; return 2; }
-    return 0
-}
-
-# Ядро Xray: byway engine ВЕРСИЯ|tested|newest|stable|restore|ФАЙЛ --
-# загрузка со сверкой sha256, замена рядом или через память, откат.
-
-# ── замена движка ──────────────────────────────────────────────────────────
-# Два ядра по ~35 МБ на 43 МБ раздела не встают: при месте новое кладётся
-# рядом (eng_side), иначе служба стоит, а ядро проверяется в /tmp (eng_ram).
-# Архив прежней версии берётся ДО остановки -- после неё GitHub может быть
-# недоступен. SHA2-256 из .dgst -- от битой загрузки, не подпись. Туннель
-# при замене падает, поэтому команда только ручная: сторож её не зовёт.
-
-# Сборки XTLS на MIPS без сопроцессора не запускаются (только hardfloat) --
-# та же функция в install.sh, править парой.
-# Ядро с GitHub на этом процессоре не запустилось: метка во флеше, чтобы
-# восстановление не качало 14 МБ и не писало 35 МБ на флеш каждые четверть
-# часа (ARM без VFP, x86 без SSE2). Снимается удачной установкой.
-ENG_NOEXEC=/etc/byway/.github-noexec
-eng_noexec_mark() { uname -m > "$ENG_NOEXEC" 2>/dev/null || true; }
-
-eng_mips_nofpu() {
-    case "$(uname -m)" in mips*) ;; *) return 1 ;; esac
-    # Содержимое, а не [ -s ]: procfs отдаёт нулевой размер.
-    _ci=$(cat /proc/cpuinfo 2>/dev/null || true)
-    [ -n "$_ci" ] || return 1
-    case "$_ci" in *[Ff][Pp][Uu]*) return 1 ;; esac
-    return 0
-}
-
-# Имя файла выпуска под эту машину -- та же функция в install.sh, править
-# парой. DISTRIB_ARCH первым: uname -m на MIPS не различает порядок байтов.
-eng_asset() {
-    _da=""
-    [ -f /etc/openwrt_release ] &&
-        _da=$(sed -n "s/^DISTRIB_ARCH='\([^']*\)'.*/\1/p" /etc/openwrt_release | head -1)
-    case "$_da" in
-        aarch64*)          echo linux-arm64-v8a; return 0 ;;
-        mipsel_*)          echo linux-mips32le;  return 0 ;;
-        mips64el_*)        echo linux-mips64le;  return 0 ;;
-        mips64_*)          echo linux-mips64;    return 0 ;;
-        mips_*)            echo linux-mips32;    return 0 ;;
-        x86_64*)           echo linux-64;        return 0 ;;
-        i386*|i486*|i686*) echo linux-32;        return 0 ;;
-        riscv64*)          echo linux-riscv64;   return 0 ;;
-    esac
-    case "$(uname -m)" in
-        aarch64)          echo linux-arm64-v8a ;;
-        armv7l|armv7|arm) echo linux-arm32-v7a ;;
-        armv6l)           echo linux-arm32-v6 ;;
-        x86_64)           echo linux-64 ;;
-        i386|i486|i686)   echo linux-32 ;;
-        mips)             echo linux-mips32 ;;
-        mipsel)           echo linux-mips32le ;;
-        mips64)           echo linux-mips64 ;;
-        mips64el)         echo linux-mips64le ;;
-        riscv64)          echo linux-riscv64 ;;
-        *) return 1 ;;
-    esac
-}
-
-# net_get: сперва через прокси-вход byway (GitHub в списке), потом напрямую.
-eng_dl() { net_get "$@"; }
-
-# Номер выпуска XTLS: stable -- releases/latest, any -- самый свежий. У XTLS
-# предвыпуском помечено всё новее 26.3.27, и «latest» отдаёт мартовский.
-eng_top() {   # 1 -- stable | any
-    if [ "$1" = stable ]; then
-        _evu=https://api.github.com/repos/XTLS/Xray-core/releases/latest
-    else
-        _evu="https://api.github.com/repos/XTLS/Xray-core/releases?per_page=1"
-    fi
-    eng_dl --max-time 25 "$_evu" |
-        sed -n 's/.*"tag_name"[^"]*"v\([^"]*\)".*/\1/p' | head -1
-}
-
-# Архив версии $1 в файл $2, со сверкой суммы. 0 -- лежит и сверен, 1 -- не
-# скачался, 2 -- сумма не сошлась или её нет. Файла при отказе не остаётся.
-eng_fetch() {   # 1 версия, 2 файл
-    _efu="https://github.com/XTLS/Xray-core/releases/download/v$1/Xray-$ENG_ASSET.zip"
-    rm -f "$2" "$2.dgst" 2>/dev/null || true
-    eng_dl --max-time 300 -o "$2" "$_efu" || { rm -f "$2" 2>/dev/null; return 1; }
-    eng_dl --max-time 30 -o "$2.dgst" "$_efu.dgst" || { rm -f "$2" "$2.dgst" 2>/dev/null; return 2; }
-    _efw=$(sed -n 's/^SHA2-256= *\([0-9a-f]\{64\}\).*/\1/p' "$2.dgst" | head -1)
-    _efg=$(sha256sum "$2" 2>/dev/null | cut -d' ' -f1)
-    rm -f "$2.dgst" 2>/dev/null || true
-    if [ -z "$_efw" ] || [ "$_efw" != "$_efg" ]; then
-        rm -f "$2" 2>/dev/null || true
-        return 2
-    fi
-    # Проверенная версия -- ещё и с суммой, вшитой в подписанный byway:
-    # подменивший архив подменил бы и .dgst рядом с ним.
-    if [ "$1" = "$XRAY_TESTED" ]; then
-        _efb=$(printf '%s\n' "$XRAY_TESTED_SUMS" | sed -n "s/^$ENG_ASSET=//p")
-        if [ -n "$_efb" ] && [ "$_efb" != "$_efg" ]; then
-            rm -f "$2" 2>/dev/null || true
-            return 3
-        fi
-    fi
-    return 0
-}
-
-# Размер ядра внутри архива, байты. Пусто -- в архиве нет файла xray.
-eng_size() {
-    case "$1" in
-      *.gz) eng_cat "$1" | wc -c ;;
-      *)    unzip -l "$1" xray 2>/dev/null | awk '$NF=="xray"{print $1; exit}' ;;
-    esac
-}
-
-# Бинарник xray из пакета на stdout: .gz -- своя сборка (byway engine ФАЙЛ),
-# иначе архив выпуска XTLS.
-eng_cat() {
-    case "$1" in
-      *.gz) gunzip -c "$1" 2>/dev/null ;;
-      *)    unzip -p "$1" xray 2>/dev/null ;;
-    esac
-}
-
-# Ядро из архива $1 в путь $2: через временное имя, чтобы оборванная
-# распаковка не оставила под рабочим именем половину файла. Размер ($3, если
-# известен) и запуск -- ДО замены: под рабочим именем бывает прежний файл той
-# же версии (ядро без права запуска сторож считает пропавшим), и на стенде
-# 2026-10-04 недописанное на полный диск ядро заменило его, не запустилось и
-# было удалено -- не осталось ни одного. Код 2 -- распаковано, но не
-# запускается.
-eng_put() {   # 1 архив, 2 путь, 3 размер
-    rm -f "$2.new" 2>/dev/null || true
-    if ! { eng_cat "$1" > "$2.new" && [ -s "$2.new" ] && chmod 755 "$2.new"; } ||
-       { [ -n "${3:-}" ] && [ "$(wc -c < "$2.new")" != "$3" ]; }; then
-        rm -f "$2.new" 2>/dev/null || true
-        return 1
-    fi
-    if ! "$2.new" version >/dev/null 2>&1; then
-        rm -f "$2.new" 2>/dev/null || true
-        return 2
-    fi
-    mv "$2.new" "$2" && return 0
-    rm -f "$2.new" 2>/dev/null || true
-    return 1
-}
-
-# «Не скачалось» чаще из-за туннеля, а не сети: GitHub в списке byway, и при
-# мёртвом туннеле резолвер отдаёт подставной адрес. Снятая обвязка возвращает
-# настоящий DNS; рестарт службы в ходе замены поднимет её обратно.
-eng_nonet() {
-    warn "  GitHub не ответил ни через туннель, ни напрямую, ни по адресам из DoH — проверить связь роутера и повторить"
-}
-
-eng_free_kb() {   # свободно на разделе, где лежит /usr/local/bin, КБ
-    df -k /usr/local/bin 2>/dev/null | awk 'NR==2{print $4}'
-}
-
-eng_mem_kb() { awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null; }
-
-# Конфиг под движок $1 тем же cmd_gen: развилки по версии (xray_ver_num)
-# берутся от НОВОГО движка, он же проверяет итог.
-eng_gen() {   # 1 путь к движку
-    ( XRAY=$1; XRAYVER=""; cmd_gen ) > "$_ed/gen.log" 2>&1
-}
-
-# Без выхода по set -e: на пути «через память» отказ здесь случается при
-# остановленной службе, и выход оставил бы дом без туннеля.
-eng_bin_set() {   # 1 путь
-    if ! { uci set byway.main.xray_bin="$1" && uci commit byway; } 2>/dev/null; then
-        warnf "путь к движку не записался в настройки: uci set byway.main.xray_bin=%s && uci commit byway" "$1"
-    fi
-    return 0
-}
-
-# Дождаться туннеля. 150 с -- бюджет автоотката обновления: обвязку после
-# старта поднимает фоновый цикл службы, ему нужно до ~65 с сверх запуска.
-eng_wait() {
-    eng_idle && return 0
-    # Сервер проверяем, только если он отвечал ДО замены (_etun0): мёртвый
-    # сервер -- не вина нового ядра, откатывать за это нельзя.
-    for _ew in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-        sleep 10
-        alive_ok && { [ "${_etun0:-0}" = 0 ] || tunnel_ok; } && return 0
-    done
-    return 1
 }
 
 cmd_engine() {
-    case "${1:-}" in /*) eng_local "$1"; return 0 ;; esac
-    command -v unzip >/dev/null 2>&1 ||
-        dief "нет unzip — поставить: %s unzip" "$PKG_FIX"
-    command -v sha256sum >/dev/null 2>&1 ||
-        die "нет sha256sum — сверить архив нечем, замена не начата"
-    if eng_mips_nofpu; then
-        dief "на этом процессоре сборки Xray-core с GitHub не запускаются — движок ставится и обновляется пакетом OpenWrt: %s xray-core" "$PKG_FIX"
-    fi
-    ENG_ASSET=$(eng_asset) ||
-        dief "неизвестно, какой файл выпуска брать для %s" "$(uname -m)"
-    _eold=$XRAY
-    _eov=""
-    [ -n "$_eold" ] && [ -x "$_eold" ] &&
-        _eov=$("$_eold" version 2>/dev/null | head -1 | awk '{print $2}' | tr -cd '0-9.')
-
-    _earg=${1:-}
-    case "$_earg" in
-      ''|--check)
-        # Первым -- ответ «есть ли новее». Путь, место и память -- в
-        # подробностях; в --check (его зовёт панель) их нет.
-        _env=$(eng_top any || true)
-        _esv=$(eng_top stable || true)
-        if [ -z "$_eov" ]; then
-            warn "ядро Xray не указано или не запускается (byway.main.xray_bin)"
-            say "  поставить: byway engine restore"
-        elif [ -z "$_env" ]; then
-            sayf "стоит Xray %s; есть ли новее — неизвестно: GitHub не ответил" "$_eov"
-            eng_nonet
-        elif ver_gt "$_env" "$_eov"; then
-            sayf "есть обновление ядра: Xray %s (стоит %s)" "$_env" "$_eov"
-        else
-            sayf "обновлений ядра нет: стоит Xray %s" "$_eov"
-        fi
-        if [ -n "$_eov" ] && [ "$XRAY_TESTED" != "$_eov" ]; then
-            if ver_gt "$_eov" "$XRAY_TESTED"; then
-                sayf "  стоит новее проверенной с byway (%s)" "$XRAY_TESTED"
-            else
-                sayf "  проверенная с byway: %s" "$XRAY_TESTED"
-            fi
-        fi
-        if [ -n "$_env" ] && [ -n "$_eov" ] && ver_gt "$_env" "$_eov"; then
-            sayf "  поставить: byway engine %s" "$_env"
-            [ "$XRAY_TESTED" != "$_env" ] && ver_gt "$XRAY_TESTED" "$_eov" &&
-                say "  или проверенную: byway engine tested"
-        fi
-        [ "$_earg" = "--check" ] && return 0
-        say "подробно:"
-        [ -n "$_eov" ] && sayf "  файл: %s" "$_eold"
-        [ -n "$_env" ] && sayf "  самая свежая у XTLS: %s, стабильная: %s" "$_env" "${_esv:-?}"
-        _efk=$(eng_free_kb || echo 0); _emk=$(eng_mem_kb || echo 0)
-        sayf "  на флеше свободно %s МБ, памяти доступно %s МБ" \
-            "$(( ${_efk:-0} / 1024 ))" "$(( ${_emk:-0} / 1024 ))"
-        say "  варианты: byway engine ВЕРСИЯ | tested | newest | stable | restore | /tmp/ФАЙЛ.gz"
-        return 0 ;;
-      tested) _env=$XRAY_TESTED ;;
-      # Ядра нет (sysupgrade его не сохраняет): версия из имени файла в
-      # xray_bin (настройки sysupgrade переживают), иначе проверенная. Зовут
-      # служба при старте и сторож.
-      restore)
-        [ -z "$_eov" ] || { sayf "ядро на месте: Xray %s" "$_eov"; return 0; }
-        # Сборка с GitHub здесь уже не запускалась: качать её снова нечего.
-        [ "$(cat "$ENG_NOEXEC" 2>/dev/null || true)" != "$(uname -m)" ] ||
-            dief "сборка Xray-core с GitHub на этом процессоре не запускалась — ядро ставится пакетом: %s xray-core" "$PKG_FIX"
-        _erb=$(uci -q get byway.main.xray_bin 2>/dev/null || true)
-        _env=${_erb##*/xray-}
-        _env=${_env%%-*}
-        case "$_erb" in /usr/local/bin/xray-*) ;; *) _env="" ;; esac
-        case "$_env" in ''|*[!0-9.]*) _env=$XRAY_TESTED ;; esac ;;
-      newest) _env=$(eng_top any || true)
-              [ -n "$_env" ] || die "GitHub не ответил — номер свежей версии неизвестен, ничего не тронуто" ;;
-      stable) _env=$(eng_top stable || true)
-              [ -n "$_env" ] || die "GitHub не ответил — номер свежей версии неизвестен, ничего не тронуто" ;;
-      *)      _env=$_earg ;;
+    bw_uc_prep
+    case "${1:-}" in
+      ''|--check) engine_env bw_uc engine "$@"; return $? ;;
     esac
-    case "$_env" in
-      *[!0-9.]*|.*|*.) dief "непонятная версия «%s» — нужен номер вида 26.9.9 либо tested, newest, stable, restore" "$_earg" ;;
-    esac
-    # Своя сборка той же версии (xray-local-*, xray-26.9.30-h2l) -- не «стоит
-    # уже»: официальная возвращается той же командой.
-    case "$_eold" in
-      /usr/local/bin/xray-*-*) ;;
-      *) [ "$_env" != "$_eov" ] || { sayf "стоит уже %s — менять нечего" "$_env"; return 0; } ;;
-    esac
-
-    _enew=/usr/local/bin/xray-$_env
-    _elk=/var/run/byway-engine.lock
-    take_lock "$_elk" "$(_t 'замена движка')" || die "замена движка уже идёт"
-    # mktemp: атомарно и права 700 (см. cmd_update).
-    _ed=$(mktemp -d /tmp/byway-engine.XXXXXX) || { rm -rf "$_elk"; die "не создать рабочий каталог в /tmp"; }
-    # INT/TERM -- выйти (EXIT снимет): ловушка без exit оставляла процесс
-    # идти дальше после Ctrl+C уже без рабочего каталога.
-    trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-
-    # Нужная версия уже лежит рядом -- переключение без загрузки.
-    if [ -n "$_eov" ] && [ "$_enew" != "$_eold" ] && xray_ok "$_enew" &&
-       "$_enew" version >/dev/null 2>&1; then
-        eng_switch
-        return 0
-    fi
-
-    # Архив в память: ~14 МБ. Меньше 40 МБ доступно -- живой движок рядом с
-    # ним рискует OOM, а он и есть туннель.
-    _emk=$(eng_mem_kb || echo 0)
-    [ "${_emk:-0}" -ge 40960 ] ||
-        dief "памяти доступно %s МБ, для замены нужно не меньше 40 — ничего не тронуто" "$(( ${_emk:-0} / 1024 ))"
-
-    # Ядра нет -- место проверяем ДО загрузки: сторож повторяет раз в 15 мин,
-    # качать 14 МБ ради отказа каждый раз незачем.
-    if [ -z "$_eov" ]; then
-        _efree=$(eng_free_kb || echo 0)
-        [ "${_efree:-0}" -ge 25600 ] ||
-            dief "на флеше свободно %s МБ, ядру нужно %s — ничего не тронуто" \
-                 "$(( ${_efree:-0} / 1024 ))" 25
-    fi
-    sayf "загрузка Xray-core %s (%s)" "$_env" "$ENG_ASSET"
-    _erc=0; eng_fetch "$_env" "$_ed/new.zip" || _erc=$?
-    case "$_erc" in
-      0) ;;
-      1) eng_nonet
-         dief "архив %s не скачался — ничего не тронуто" "$_env" ;;
-      3) dief "архив %s не сошёлся с суммой, вшитой в byway для проверенной версии — отброшен, ничего не тронуто" "$_env" ;;
-      *) dief "архив %s не сошёлся с суммой SHA2-256 из .dgst выпуска — отброшен, ничего не тронуто" "$_env" ;;
-    esac
-    _epkg=$_ed/new.zip
-    _esz=$(eng_size "$_epkg")
-    [ -n "$_esz" ] || die "в архиве нет файла xray — ничего не тронуто"
-    say "архив сверен с суммой из выпуска"
-
-    # Рядом -- если на флеше есть весь размер ядра и 5 МБ сверху. Сжатие
-    # ubifs не угадать, поэтому меряется по несжатому.
-    _efree=$(eng_free_kb || echo 0)
-    # Ядра нет вовсе: откатываться не на что, откат не нужен -- просто ставим.
-    if [ -z "$_eov" ]; then
-        eng_fresh
-        return 0
-    fi
-    _etun0=0
-    eng_idle || { tunnel_ok && _etun0=1; } || true
-    if [ "$(( ${_efree:-0} * 1024 ))" -ge "$(( _esz + 5242880 ))" ]; then
-        eng_side
-    else
-        eng_ram
-    fi
+    take_lock /var/run/byway-engine.lock "$(_t 'замена движка')" || die "замена движка уже идёт"
+    trap 'engine_clean' EXIT
+    trap 'engine_clean; exit 130' INT
+    trap 'engine_clean; exit 143' TERM
+    _erc=0
+    engine_env bw_uc engine "$@" || _erc=$?
+    return "$_erc"
 }
 
-# Путь «ядра нет» (после sysupgrade или снятого пакета): ставится без отката.
-eng_fresh() {
-    # 25 МБ, как у установщика: ubifs дожимает ядро примерно вдвое, порог
-    # «несжатый размер + 5» отказывал роутеру с /overlay 43.7 МБ после
-    # sysupgrade -- тому, ради кого восстановление и заведено.
-    [ "${_efree:-0}" -ge 25600 ] ||
-        dief "на флеше свободно %s МБ, ядру нужно %s — ничего не тронуто" \
-             "$(( ${_efree:-0} / 1024 ))" 25
-    sayf "ядра нет — ставится Xray %s" "$_env"
-    _epr=0; eng_put "$_epkg" "$_enew" "$_esz" || _epr=$?
-    case "$_epr" in
-      0) ;;
-      2) eng_noexec_mark
-         die "ядро не запускается на этом железе — удалено" ;;
-      *) die "ядро не распаковалось на флеш — ничего не тронуто" ;;
-    esac
-    rm -f "$ENG_NOEXEC" 2>/dev/null || true
-    eng_bin_set "$_enew"
-    logf 'движок поставлен: %s (прежнего не было)' "$_env"
-    if [ "$(u enabled)" = "1" ]; then
-        say "запуск службы"
-        /etc/init.d/byway restart >/dev/null 2>&1 || true
-    fi
-    sayf "готово: Xray %s, на флеше свободно %s МБ" "$_env" "$(( $(eng_free_kb || echo 0) / 1024 ))"
-}
-
-# Путь «рядом». Прежнее ядро не трогается до успеха: откат -- вернуть путь.
-eng_side() {
-    say "места хватает — новое ядро кладётся рядом с прежним"
-    _epr=0; eng_put "$_epkg" "$_enew" "$_esz" || _epr=$?
-    rm -f "$_epkg" 2>/dev/null || true
-    case "$_epr" in
-      0) ;;
-      2) eng_noexec_mark
-         die "новое ядро не запускается на этом железе — удалено, работает прежнее" ;;
-      *) die "ядро не распаковалось на флеш — ничего не тронуто" ;;
-    esac
-    if eng_idle; then
-        eng_bin_set "$_enew"
-        case "$_eold" in /usr/local/bin/xray-*) rm -f "$_eold" 2>/dev/null || true ;; esac
-        sayf "служба не работает (выключена или нет ключа) — ядро заменено без проверки туннеля: Xray %s" "$_env"
-        return 0
-    fi
-    if ! eng_gen "$_enew"; then
-        tail -6 "$_ed/gen.log" | sed 's/^/    /'
-        rm -f "$_enew" 2>/dev/null || true
-        eng_gen "$_eold" || true
-        die "новый движок не принял конфиг — удалён, работает прежний"
-    fi
-    eng_bin_set "$_enew"
-    warn "перезапуск службы: туннель пропадёт на несколько секунд"
-    /etc/init.d/byway restart >/dev/null 2>&1 || true
-    say "проверка туннеля на новом движке (до 2,5 минуты)"
-    if eng_wait; then
-        # Удаляется, только если ядро наше: /usr/bin/xray -- файл пакета, снос
-        # в обход менеджера оставил бы пакет с дырой.
-        case "$_eold" in
-          /usr/local/bin/xray-*) rm -f "$_eold" 2>/dev/null || true
-                                 sayf "прежний движок удалён: %s" "$_eold" ;;
-          *) sayf "прежний движок %s — из пакета, оставлен; снять можно пакетным менеджером" "$_eold" ;;
-        esac
-        logf 'движок заменён: %s -> %s' "$_eov" "$_env"
-        sayf "готово: Xray %s, на флеше свободно %s МБ" "$_env" "$(( $(eng_free_kb || echo 0) / 1024 ))"
-        return 0
-    fi
-    warn "туннель на новом движке не поднялся — возврат прежнего"
-    eng_bin_set "$_eold"
-    eng_gen "$_eold" || true
-    /etc/init.d/byway restart >/dev/null 2>&1 || true
-    rm -f "$_enew" 2>/dev/null || true
-    logf 'движок: %s не поднялся, возвращён %s' "$_env" "$_eov"
-    dief "возвращён %s; новое ядро удалено" "$_eov"
-}
-
-# Путь «через память». После остановки службы -- никаких die: любой отказ
-# кончается запуском службы, иначе дом без туннеля.
-eng_ram() {
-    case "$_eold" in
-      /usr/local/bin/xray-*) ;;
-      *) dief "места на второе ядро нет, а прежнее (%s) — из пакета; снять пакет вручную и поставить заново: byway engine %s" "$_eold" "$_env" ;;
-    esac
-    sayf "места на второе ядро нет (свободно %s МБ) — замена через память" "$(( ${_efree:-0} / 1024 ))"
-    # Откат -- из архива прежней версии, он берётся СЕЙЧАС, пока туннель жив.
-    # Нет архива -- замена не начинается.
-    case "$_eold" in
-      /usr/local/bin/xray-*-*)
-        # Своя сборка (xray-26.9.30-h2l, xray-local-*): архив выпуска дал бы
-        # откат на ОФИЦИАЛЬНЫЙ бинарник под именем своей сборки -- без её
-        # правок. Копия -- сам файл, сжатый в память.
-        _eorb=$_ed/old.gz
-        sayf "прежний движок — своя сборка (%s): копия для отката сжимается в память" "$_eold"
-        gzip -c "$_eold" > "$_eorb" 2>/dev/null && [ -s "$_eorb" ] ||
-            die "копию своей сборки для отката не сделать — замена не начата" ;;
-      *)
-        _eorb=$_ed/old.zip
-        sayf "загрузка прежней версии %s — для отката" "$_eov"
-        _erc=0; eng_fetch "$_eov" "$_eorb" || _erc=$?
-        [ "$_erc" = 0 ] ||
-            dief "архив прежней версии %s не получен — без копии для отката замена не начата" "$_eov" ;;
-    esac
-
-    warn "остановка службы: туннель пропадёт примерно на минуту"
-    # Обрыв ssh (HUP) посреди замены оставлял службу остановленной: старт в
-    # конце не наступал, а метка ниже держала сторожа.
-    trap '' HUP
-    # При «не пускать мимо VPN» запрет держится всю минуту (stop_service).
-    BYWAY_KEEP_BLOCK=1 /etc/init.d/byway stop >/dev/null 2>&1 || true
-    # Сторож не должен «чинить» остановленную службу посреди замены; метку
-    # снимает plumb on при запуске. Номер процесса в ней: умрёт замена --
-    # сторож (plumb_down_held) метку не признает.
-    echo $$ > "$PLUMB_DOWN" 2>/dev/null || true
-    # С этой минуты каталог $_ed хранит архив прежнего ядра -- единственное
-    # средство отката. Ctrl+C игнорируется; по TERM выходим, но каталог не
-    # стираем. Прежде ловушка стирала его и шла дальше: замена доходила до
-    # «ни новое, ни прежнее ядро не легло». Обработчик, а не игнор, у TERM:
-    # игнор унаследовал бы start службы (см. Н-1).
-    say "идёт замена — прерывать нельзя"
-    trap '' INT
-    trap 'rm -rf "$_elk" 2>/dev/null; exit 143' TERM
-    trap 'rm -rf "$_elk" 2>/dev/null' EXIT
-    sleep 2
-    _emk=$(eng_mem_kb || echo 0)
-    if [ "$(( ${_emk:-0} * 1024 ))" -lt "$(( _esz + 20971520 ))" ]; then
-        warnf "памяти после остановки мало: %s МБ" "$(( ${_emk:-0} / 1024 ))"
-        eng_ram_back
-    fi
-    _etmp=$_ed/xray
-    if ! eng_cat "$_epkg" > "$_etmp" || ! chmod 755 "$_etmp" ||
-       ! "$_etmp" version >/dev/null 2>&1; then
-        warn "новое ядро не распаковалось или не запускается"
-        eng_ram_back
-    fi
-    rm -f "$_epkg" 2>/dev/null || true
-    # Без ключа конфига нет, сверять нечего (eng_idle, как в eng_side).
-    if ! eng_idle && ! eng_gen "$_etmp"; then
-        tail -6 "$_ed/gen.log" | sed 's/^/    /'
-        eng_gen "$_eold" || true
-        warn "новый движок не принял конфиг"
-        eng_ram_back
-    fi
-    # Точка невозврата: прежнее ядро уступает место.
-    rm -f "$_eold" 2>/dev/null || true
-    if ! cp "$_etmp" "$_enew.new" 2>/dev/null || ! chmod 755 "$_enew.new" ||
-       ! mv "$_enew.new" "$_enew"; then
-        rm -f "$_enew.new" "$_enew" 2>/dev/null || true
-        warn "новое ядро не легло на флеш"
-        eng_ram_restore
-    fi
-    rm -f "$_etmp" 2>/dev/null || true
-    eng_bin_set "$_enew"
-    /etc/init.d/byway start >/dev/null 2>&1 || true
-    say "проверка туннеля на новом движке (до 2,5 минуты)"
-    if eng_wait; then
-        rm -rf "$_ed" 2>/dev/null || true
-        logf 'движок заменён: %s -> %s' "$_eov" "$_env"
-        sayf "готово: Xray %s, на флеше свободно %s МБ" "$_env" "$(( $(eng_free_kb || echo 0) / 1024 ))"
-        return 0
-    fi
-    BYWAY_KEEP_BLOCK=1 /etc/init.d/byway stop >/dev/null 2>&1 || true
-    rm -f "$_enew" 2>/dev/null || true
-    warn "туннель на новом движке не поднялся"
-    eng_ram_restore
-}
-
-# Отказ ДО удаления прежнего ядра: оно на месте, достаточно запустить.
-eng_ram_back() {
-    /etc/init.d/byway start >/dev/null 2>&1 || true
-    rm -rf "$_ed" 2>/dev/null || true
-    die "служба запущена с прежним движком — ничего не заменено"
-}
-
-# Отказ ПОСЛЕ удаления: прежнее ядро -- из архива, скачанного до остановки.
-eng_ram_restore() {
-    sayf "возврат %s из архива" "$_eov"
-    if eng_put "$_eorb" "$_eold"; then
-        eng_bin_set "$_eold"
-        eng_gen "$_eold" || true
-        /etc/init.d/byway start >/dev/null 2>&1 || true
-        logf 'движок: %s не встал, возвращён %s' "$_env" "$_eov"
-        rm -rf "$_ed" 2>/dev/null || true
-        dief "возвращён %s" "$_eov"
-    fi
-    # Флеш не принял и прежнее ядро. Службу всё равно запускаем: без движка
-    # она не встанет, но и dnsmasq не останется смотреть в мёртвый порт --
-    # обвязку без движка plumb не ставит.
-    /etc/init.d/byway start >/dev/null 2>&1 || true
-    # Архив прежнего -- единственное, что осталось: ловушка его не трогает.
-    trap - EXIT INT TERM
-    rm -rf "$_elk" 2>/dev/null || true
-    logf 'движок: НИ НОВОЕ, НИ ПРЕЖНЕЕ ядро не легло на флеш -- туннеля нет'
-    case "$_eorb" in *.gz) _eorx="gunzip -c $_eorb" ;; *) _eorx="unzip -p $_eorb xray" ;; esac
-    dief "ни новое, ни прежнее ядро не легло на флеш — туннеля нет. Архив прежнего: %s (в памяти, до перезагрузки); поставить: %s > %s && chmod 755 %s && /etc/init.d/byway start" \
-        "$_eorb" "$_eorx" "$_eold" "$_eold"
-}
-
-# Служба не работает (выключена или нет ключа): туннеля для проверки нет,
-# ядро меняется без неё. Иначе на ненастроенном роутере замена откатывалась
-# бы «туннель не поднялся».
-eng_idle() {
-    [ "$(u enabled)" != "1" ] && return 0
-    case "$(u conn_mode)" in
-      urltest|selector) [ -z "$(u node_urls)" ] ;;
-      outbound)         [ -z "$(u outbound_json)" ] ;;
-      *)                [ -z "$(u node_url)" ] ;;
-    esac
-}
-
-# Своя сборка ядра из /tmp (.gz с бинарником xray или .zip выпуска): та же
-# замена с откатом, но без сверки с .dgst -- sha256 печатается, сверяет
-# человек со своей сборкой. Файл после установки удаляется (память).
-eng_local() {
-    case "$1" in
-      /tmp/*) ;;
-      *) die "своя сборка ядра — только из /tmp: на флеше рядом с ядром ей нет места" ;;
-    esac
-    [ -f "$1" ] || dief "нет файла %s" "$1"
-    # unzip и имя сборки -- для отката через память: прежнее ядро берётся
-    # архивом выпуска с GitHub.
-    command -v unzip >/dev/null 2>&1 ||
-        dief "нет unzip — поставить: %s unzip" "$PKG_FIX"
-    ENG_ASSET=$(eng_asset 2>/dev/null) || ENG_ASSET=""
-    _eold=$XRAY
-    _eov=""
-    [ -n "$_eold" ] && [ -x "$_eold" ] &&
-        _eov=$("$_eold" version 2>/dev/null | head -1 | awk '{print $2}' | tr -cd '0-9.')
-    _epkg=$1
-    _esz=$(eng_size "$_epkg")
-    [ "${_esz:-0}" -gt 1048576 ] ||
-        dief "в %s нет ядра xray — нужен .gz с бинарником или .zip выпуска" "$1"
-    sayf "своя сборка: %s, sha256 ядра %s" "$1" "$(eng_cat "$_epkg" | sha256sum | cut -d' ' -f1)"
-    _env=$(_t 'своя сборка')
-    _enew=/usr/local/bin/xray-local-$(date +%Y%m%d%H%M)
-    _elk=/var/run/byway-engine.lock
-    take_lock "$_elk" "$(_t 'замена движка')" || die "замена движка уже идёт"
-    # mktemp: атомарно и права 700 (см. cmd_update).
-    _ed=$(mktemp -d /tmp/byway-engine.XXXXXX) || { rm -rf "$_elk"; die "не создать рабочий каталог в /tmp"; }
-    # INT/TERM -- выйти (EXIT снимет): ловушка без exit оставляла процесс
-    # идти дальше после Ctrl+C уже без рабочего каталога.
-    trap 'rm -rf "$_ed" "$_elk" 2>/dev/null' EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    _emk=$(eng_mem_kb || echo 0)
-    [ "${_emk:-0}" -ge 40960 ] ||
-        dief "памяти доступно %s МБ, для замены нужно не меньше 40 — ничего не тронуто" "$(( ${_emk:-0} / 1024 ))"
-    _efree=$(eng_free_kb || echo 0)
-    if [ -z "$_eov" ]; then
-        eng_fresh
-        return 0
-    fi
-    _etun0=0
-    eng_idle || { tunnel_ok && _etun0=1; } || true
-    if [ "$(( ${_efree:-0} * 1024 ))" -ge "$(( _esz + 5242880 ))" ]; then
-        eng_side
-    else
-        eng_ram
-    fi
-}
-
-# Ядро на Go 1.27 без -tags http2legacy и с x/net старше v0.60.0: XHTTP
-# открывает соединение на каждый ждущий запрос, xmux.maxConnections их не
-# держит; при висящем рукопожатии -- сотни соединений и OOM (Xray#6797, сборки
-# XTLS с 26.9.8). Тег и версия x/net видны в buildinfo. $1 -- путь к ядру.
-eng_dial_bug() {
-    # Поиск по файлу ядра -- 36 МБ с флеша, секунды; итог помним для этого
-    # файла (inode, размер, время) в /tmp. Наша сборка помечена и в version.
-    _dk=$(ls -lni "$1" 2>/dev/null)
-    _dc=/tmp/byway-dialbug
-    if [ -n "$_dk" ] && [ "$(sed -n 1p "$_dc" 2>/dev/null)" = "$_dk" ]; then
-        [ "$(sed -n 2p "$_dc" 2>/dev/null)" = 1 ]
-        return
-    fi
-    _db=0
-    _dv=$("$1" version 2>/dev/null | head -1)
-    case "$_dv" in
-      *http2legacy*) ;;
-      *'(go1.27.'*|*'(go1.27 '*|*'(go1.27)'*)
-        grep -q 'http2legacy' "$1" 2>/dev/null ||
-            grep -qE 'golang\.org/x/net.v(0\.([6-9][0-9]|[1-9][0-9][0-9])|[1-9][0-9]*)\.' "$1" 2>/dev/null ||
-            _db=1 ;;
-    esac
-    printf '%s\n%s\n' "$_dk" "$_db" > "$_dc" 2>/dev/null || true
-    [ "$_db" = 1 ]
-}
-
-# Переключение на ядро, которое уже лежит рядом: проверка конфига, перезапуск,
-# проверка туннеля; не поднялось -- обратно на прежнее. Оба файла остаются.
-eng_switch() {
-    sayf "Xray %s уже лежит рядом — переключение без загрузки" "$_env"
-    _etun0=0
-    eng_idle || { tunnel_ok && _etun0=1; } || true
-    if eng_idle; then
-        eng_bin_set "$_enew"
-        sayf "служба не работает (выключена или нет ключа) — ядро заменено без проверки туннеля: Xray %s" "$_env"
-        return 0
-    fi
-    if ! eng_gen "$_enew"; then
-        tail -6 "$_ed/gen.log" | sed 's/^/    /'
-        eng_gen "$_eold" || true
-        die "этот движок не принял конфиг — остался прежний"
-    fi
-    eng_bin_set "$_enew"
-    warn "перезапуск службы: туннель пропадёт на несколько секунд"
-    /etc/init.d/byway restart >/dev/null 2>&1 || true
-    say "проверка туннеля на новом движке (до 2,5 минуты)"
-    if eng_wait; then
-        logf 'движок переключён: %s -> %s' "$_eov" "$_env"
-        sayf "готово: Xray %s; прежнее ядро осталось рядом: %s" "$_env" "$_eold"
-        return 0
-    fi
-    warn "туннель на этом движке не поднялся — возврат прежнего"
-    eng_bin_set "$_eold"
-    eng_gen "$_eold" || true
-    /etc/init.d/byway restart >/dev/null 2>&1 || true
-    logf 'движок: %s не поднялся, возвращён %s' "$_env" "$_eov"
-    dief "возвращён %s" "$_eov"
-}
-
-# Словари перевода для консоли и панели (byway lang).
-
-# Словари лежат только выбранного языка (~73 КБ консоли и ~38 КБ панели на
-# флеше для en; у ru файлов нет, ключи и есть русский текст). Английский
-# докачивается с ТЕГА текущей версии, не с main: иначе ключи разойдутся с
-# кодом. Панель зовёт эту же команду при смене языка.
-PANEL_LANG=/www/luci-static/resources/byway/lang.js
-
-# Полный ли словарь панели: у урезанного строк перевода нет вовсе.
-lang_panel_full() { grep -q '"Служба": "Service"' "$PANEL_LANG" 2>/dev/null; }
-
-# Не вышло переключить на английский: настройка языка, которую уже записала
-# панель, возвращается на русский (словаря нет) -- иначе панель показывала бы
-# «язык остался прежним» при lang=en в настройках.
-lang_back() {
-    [ -s "$LANGDIR/en.tsv" ] && return 0
-    [ "$(u lang)" = en ] || return 0
-    uci set byway.main.lang=ru 2>/dev/null && uci commit byway 2>/dev/null || true
-}
+# Словари перевода для консоли и панели (byway lang) -- в ucode (uc/update.uc).
 
 cmd_lang() {
-    _lw=${1:-}
-    case "$_lw" in
-      '') sayf "язык: %s" "$BW_LANG"
-          say "  сменить: byway lang ru | en"
-          return 0 ;;
-      ru|en) ;;
-      *) dief "непонятный язык «%s» — нужен ru или en" "$_lw" ;;
-    esac
-    if [ "$_lw" = en ]; then
-        _lt=$(mktemp -d /tmp/byway-lang.XXXXXX) || die "не создать рабочий каталог в /tmp"
-        mkdir -p "$LANGDIR"
-        # refs/tags: ветка с тем же именем, что тег, иначе перебила бы его.
-        _lb="https://raw.githubusercontent.com/$BYWAY_REPO/refs/tags/v$BYWAY_NUM"
-        # Словари -- строки форматов printf, которые byway печатает от root:
-        # берутся только сверенными с подписанным списком сумм выпуска.
-        _lnv=0
-        if [ "${BYWAY_NO_VERIFY:-0}" = 1 ]; then
-            warn "BYWAY_NO_VERIFY=1: подпись выпуска не проверяется"
-        else
-            _lsr=0; rel_sums "$BYWAY_NUM" "$_lt" || _lsr=$?
-            case "$_lsr" in
-              0) _lnv=1 ;;
-              1) rm -rf "$_lt"
-                 lang_back
-                 die "словарь не сверить с подписью выпуска — язык не переключён; без проверки: BYWAY_NO_VERIFY=1 byway lang en" ;;
-              *) rm -rf "$_lt"
-                 lang_back
-                 die "подпись выпуска не сошлась — язык не переключён" ;;
-            esac
-        fi
-        if [ ! -s "$LANGDIR/en.tsv" ]; then
-            say "загрузка английского словаря"
-            if ! eng_dl --max-time 30 -o "$_lt/en.tsv" "$_lb/lang/en.tsv" ||
-               ! grep -q '	' "$_lt/en.tsv" 2>/dev/null; then
-                rm -rf "$_lt"; eng_nonet
-                lang_back
-                die "словарь не скачался — язык не переключён"
-            fi
-            if [ "$_lnv" = 1 ] && ! rel_sum_ok "$_lt/en.tsv" lang/en.tsv "$_lt/SHA256SUMS"; then
-                rm -rf "$_lt"
-                lang_back
-                die "словарь не совпал с подписанным выпуском — язык не переключён"
-            fi
-            mv "$_lt/en.tsv" "$LANGDIR/en.tsv" && chmod 644 "$LANGDIR/en.tsv"
-        fi
-        if [ -f "$PANEL_LANG" ] && ! lang_panel_full; then
-            say "загрузка английского словаря панели"
-            if ! eng_dl --max-time 30 -o "$_lt/lang.js" "$_lb/luci/lang.js" ||
-               ! grep -q '"Служба": "Service"' "$_lt/lang.js" 2>/dev/null; then
-                rm -rf "$_lt"; eng_nonet
-                lang_back
-                die "словарь панели не скачался — язык не переключён"
-            fi
-            if [ "$_lnv" = 1 ] && ! rel_sum_ok "$_lt/lang.js" luci/lang.js "$_lt/SHA256SUMS"; then
-                rm -rf "$_lt"
-                lang_back
-                die "словарь не совпал с подписанным выпуском — язык не переключён"
-            fi
-            mv "$_lt/lang.js" "$PANEL_LANG" && chmod 644 "$PANEL_LANG"
-        fi
-        rm -rf "$_lt" 2>/dev/null || true
-    else
-        rm -f "$LANGDIR/en.tsv" 2>/dev/null || true
-        # Строки перевода в lang.js -- ровно те, что с двух табов и кавычки.
-        if [ -f "$PANEL_LANG" ] && lang_panel_full; then
-            _tb=$(printf '\t')
-            sed "/^$_tb$_tb\"/d" "$PANEL_LANG" > "$PANEL_LANG.new" &&
-                mv "$PANEL_LANG.new" "$PANEL_LANG" && chmod 644 "$PANEL_LANG"
-        fi
-    fi
-    if [ "$(u lang)" != "$_lw" ]; then
-        uci set byway.main.lang="$_lw" && uci commit byway
-    fi
-    BW_LANG=$_lw
-    sayf "язык: %s" "$_lw"
+    BW_LISTS=$LISTS BW_REPO=$BYWAY_REPO BW_NUM=$BYWAY_NUM BW_PUBKEY=$BYWAY_PUBKEY \
+        bw_uc lang "$@"
 }
 
 # Перенос настроек: export, import, clear. Тело выгрузки, разбор и приём
@@ -2103,348 +914,12 @@ cmd_top() {
     BW_LISTS=$LISTS BW_MERGED=$(merged_domains) bw_uc top "$@"
 }
 
-# Текстовое меню (byway menu) поверх тех же команд.
-
-m_line()  { printf '  \033[2m──────────────────────────────────────────\033[0m\n'; }
-
-m_item()  { printf '   \033[1m%s\033[0m  %s\n' "$1" "$(_t "$2")"; }
-
-m_head()  { clear 2>/dev/null || printf '\n\n'; printf '\n  \033[1m%s\033[0m\n\n' "$(_t "$1")"; }
-
-m_pause() { printf "$(_t '\n  \033[2mEnter — назад\033[0m')"; read -r _ || true; echo; }
-
-m_ask()   { printf '  %s: ' "$(_t "$1")"; read -r REPLY || REPLY=""; }
-
-m_yes()   {
-    # Подсказка [y/N] латиницей в обоих языках: терминал обычно на английской
-    # раскладке. Принимается и «д».
-    printf '  \033[1;33m%s\033[0m [y/N]: ' "$(_t "$1")"
-    read -r _a || _a=""
-    case "$_a" in [yYдД]*) return 0 ;; *) return 1 ;; esac
-}
-
-# Пересборка и перезапуск после правки: без неё настройка сохранена, но
-# не действует.
-m_apply() {
-    echo
-    if (cmd_gen); then
-        # restart на выключенной службе ничего не поднимает, а включить её
-        # из меню нельзя (enabled только через uci): сказать об этом.
-        if [ "$(u enabled)" != "1" ]; then
-            printf "$(_t '\n  \033[1;33mсобрано, но byway ВЫКЛЮЧЕН\033[0m — туннеля не будет\n')"
-            printf "$(_t '  включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart\n')"
-            return 0
-        fi
-        /etc/init.d/byway restart >/dev/null 2>&1 || true
-        printf "$(_t '\n  \033[1;32mприменено\033[0m — движок стартует до 15 секунд\n')"
-    else
-        printf "$(_t '\n  \033[1;31mне применилось\033[0m — работает прежняя настройка\n')"
-    fi
-}
-
-# Строка состояния в шапке: без обращений в сеть, меню открывается сразу.
-m_state() {
-    if [ -n "$(xray_pid)" ]; then
-        # ESC разворачивается здесь: в %s ниже escape-последовательности
-        # не обрабатываются.
-        _s=$(printf '\033[32m%s\033[0m' "$(_t работает)")
-    else
-        _s=$(printf '\033[31m%s\033[0m' "$(_t "не запущена")")
-    fi
-    if [ "$(u list_mode)" = "all" ]; then _m=$(_t "всё через VPN")
-    else _m=$(_t "по спискам"); fi
-    printf '  %s\n' "$(_f 'служба: %s     режим: %s' "$_s" "$_m")"
-}
-
-m_connection() {
-    while :; do
-        m_head "Подключение к VPN"
-        m_item 1 "Показать текущее"
-        m_item 2 "Вписать ключ"
-        m_item 3 "Загрузить из подписки"
-        m_item 4 "Проверить ключ отдельно, не трогая работающий туннель"
-        m_line
-        m_item 0 "Назад"
-        echo
-        m_ask "Выбор"
-        case "$REPLY" in
-          1) echo
-             # Грепать по переведённым словам: cmd_status печатает через
-             # словарь, русские литералы в английском режиме не совпадут.
-             _mf="$(_t 'подключение')|$(_t 'транспорт')|$(_t 'ключ')"
-             cmd_status 2>&1 | grep -E "$_mf" |
-                 sed "s/^/    /" || printf "    $(_t 'подключение не настроено\n')"
-             m_pause ;;
-          2) echo
-             printf "$(_t "  Ссылка целиком: vless://… trojan://… ss://… vmess://… hy2://… wireguard://…\n")"
-             printf "$(_t "  Ключ никуда не отправляется и в журнал не пишется.\n\n")"
-             m_ask "Ключ"
-             if [ -n "$REPLY" ]; then
-                 echo
-                 # Проверка до записи: неразобранный ключ в настройках
-                 # оставит без туннеля и без понятной причины.
-                 if (cmd_check "$REPLY" >/dev/null 2>&1); then
-                     uci set byway.main.node_url="$REPLY"
-                     uci set byway.main.conn_mode=key
-                     uci commit byway
-                     printf "$(_t "  \033[1;32mключ принят\033[0m\n")"
-                     m_apply
-                 else
-                     printf "$(_t "  \033[1;31mключ не разобран\033[0m, вот что говорит проверка:\n\n")"
-                     cmd_check "$REPLY" 2>&1 | tail -6 | sed "s/^/    /" || true
-                 fi
-             fi
-             m_pause ;;
-          3) echo
-             m_ask "Адрес подписки"
-             if [ -n "$REPLY" ]; then
-                 uci set byway.main.sub_url="$REPLY"; uci commit byway
-                 echo
-                 cmd_sub "$REPLY" 2>&1 | sed "s/^/    /" || true
-                 printf "$(_t "\n  Ключи выше. Вписать нужный — пункт 2.\n")"
-             fi
-             m_pause ;;
-          4) echo; cmd_probe 2>&1 | sed "s/^/    /" || true; m_pause ;;
-          0|"") return 0 ;;
-        esac
-    done
-}
-
-m_mode() {
-    while :; do
-        m_head "Режим работы"
-        if [ "$(u list_mode)" = "all" ]; then _now=$(_t "всё через VPN"); else _now=$(_t "по спискам"); fi
-        printf "$(_t "  Сейчас: \033[1m%s\033[0m\n\n")" "$_now"
-        m_item 1 "По спискам — через VPN только перечисленное"
-        m_item 2 "Всё через VPN"
-        if [ "$(u ru_direct)" = "1" ]; then _rd=$(_t включено); else _rd=$(_t выключено); fi
-        m_item 3 "$(_f 'Русские сайты мимо VPN: %s' "$_rd")"
-        m_line
-        m_item 0 "Назад"
-        echo
-        m_ask "Выбор"
-        case "$REPLY" in
-          1) uci set byway.main.list_mode=lists; uci commit byway; m_apply; m_pause ;;
-          2) echo
-             printf "$(_t "  Через VPN пойдёт весь трафик, включая загрузки и обновления.\n")"
-             if m_yes "Включить?"; then
-                 uci set byway.main.list_mode=all; uci commit byway; m_apply
-             fi
-             m_pause ;;
-          3) if [ "$(u ru_direct)" = "1" ]; then uci set byway.main.ru_direct=0
-             else uci set byway.main.ru_direct=1; fi
-             uci commit byway; m_apply; m_pause ;;
-          0|"") return 0 ;;
-        esac
-    done
-}
-
-m_lists() {
-    # Объединённый список, не только свой: в режиме «всё через VPN» своего
-    # нет по построению, и health писал бы «dns не выдаёт адрес».
-    _dl=$(merged_domains)
-    _sl=$LISTS/subnets.lst
-    while :; do
-        # Кэш пересобирается при каждом обращении: после добавления домена
-        # проверка «уже есть» и счёт судили по прежнему содержимому.
-        _dl=$(merged_domains)
-        m_head "Списки"
-        printf "$(_t "  доменов %s, подсетей %s\n\n")" \
-            "$(count_list "$_dl" 2>/dev/null || echo 0)" \
-            "$(count_list "$_sl" 2>/dev/null || echo 0)"
-        m_item 1 "Показать домены"
-        m_item 2 "Добавить домен"
-        m_item 3 "Убрать домен"
-        m_item 4 "Обновить готовые списки"
-        m_line
-        m_item 0 "Назад"
-        echo
-        m_ask "Выбор"
-        case "$REPLY" in
-          1) echo; grep -vE "^[[:space:]]*$" "$_dl" 2>/dev/null | more || true; m_pause ;;
-          2) echo; m_ask "Домен"
-             if [ -n "$REPLY" ]; then
-                 # Проверка -- по объединённому списку, запись -- в свой файл:
-                 # объединённый кэш пересобирается из своего и пресетов, и
-                 # дописанное в него пропадало при первой же сборке.
-                 if grep -qxF "$REPLY" "$_dl" 2>/dev/null; then
-                     printf "$(_t "\n  уже есть\n")"
-                 else
-                     [ ! -s "$LISTS/domains.lst" ] || [ -z "$(tail -c1 "$LISTS/domains.lst")" ] ||
-                         printf '\n' >> "$LISTS/domains.lst"
-                     printf "%s\n" "$REPLY" >> "$LISTS/domains.lst"
-                     printf "$(_t "\n  добавлено\n")"; m_apply
-                 fi
-             fi
-             m_pause ;;
-          3) echo; m_ask "Домен"
-             if [ -n "$REPLY" ]; then
-                 if grep -qxF "$REPLY" "$LISTS/domains.lst" 2>/dev/null; then
-                     grep -vxF "$REPLY" "$LISTS/domains.lst" > "$LISTS/domains.lst.new" &&
-                         mv "$LISTS/domains.lst.new" "$LISTS/domains.lst"
-                     printf "$(_t "\n  убрано\n")"; m_apply
-                 else
-                     printf "$(_t "\n  такой записи нет\n")"
-                 fi
-             fi
-             m_pause ;;
-          4) echo; cmd_presets 2>&1 | sed "s/^/    /" || true; m_apply; m_pause ;;
-          0|"") return 0 ;;
-        esac
-    done
-}
-
-# Итог после запуска службы: движок ждём (до 12 с) и судим по нему, а не по
-# коду init -- он при procd всегда 0.
-m_svc_done() {   # 1 -- «запущена» либо «перезапущена»
-    if [ "$(u enabled)" != "1" ]; then
-        printf "$(_t '\n  byway ВЫКЛЮЧЕН настройкой — служба не запускается\n')"
-        printf "$(_t '  включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart\n')"
-        return 0
-    fi
-    _mw=0
-    while [ "$_mw" -lt 12 ] && [ -z "$(xray_pid)" ]; do _mw=$((_mw + 1)); sleep 1; done
-    if [ -n "$(xray_pid)" ]; then printf "\n  %s\n" "$1"
-    else printf "$(_t '\n  движок не поднялся — смотреть: logread -e byway\n')"; fi
-}
-
-m_service() {
-    while :; do
-        m_head "Служба"
-        m_state
-        echo
-        m_item 1 "Перезапустить"
-        m_item 2 "Остановить"
-        m_item 3 "Запустить"
-        if ls /etc/rc.d/S*byway >/dev/null 2>&1; then _au=$(_t включён); else _au=$(_t выключен); fi
-        m_item 4 "$(_f 'Автозапуск: %s' "$_au")"
-        m_line
-        m_item 0 "Назад"
-        echo
-        m_ask "Выбор"
-        case "$REPLY" in
-          1) echo; /etc/init.d/byway restart; m_svc_done "$(_t перезапущена)"; m_pause ;;
-          2) echo
-             printf "$(_t "  Туннеля не станет, интернет продолжит работать напрямую.\n")"
-             if m_yes "Остановить?"; then
-                 /etc/init.d/byway stop; printf "$(_t "\n  остановлена\n")"
-             fi
-             m_pause ;;
-          3) echo; /etc/init.d/byway start; m_svc_done "$(_t запущена)"; m_pause ;;
-          4) if ls /etc/rc.d/S*byway >/dev/null 2>&1; then
-                 /etc/init.d/byway disable; printf "$(_t "\n  автозапуск выключен\n")"
-             else
-                 /etc/init.d/byway enable; printf "$(_t "\n  автозапуск включён\n")"
-             fi
-             m_pause ;;
-          0|"") return 0 ;;
-        esac
-    done
-}
-
-m_logs() {
-    while :; do
-        m_head "Журнал и статистика"
-        m_item 1 "Журнал состояния — что и когда менялось"
-        m_item 2 "Чем пользуются"
-        m_item 3 "Журнал движка"
-        m_line
-        m_item 0 "Назад"
-        echo
-        m_ask "Выбор"
-        case "$REPLY" in
-          1) echo
-             tail -30 "$LISTS/health.log" 2>/dev/null | sed "s/^/    /" ||
-                 printf "    $(_t 'пока пусто\n')"
-             m_pause ;;
-          2) echo; cmd_top 25 2>&1 | sed "s/^/    /" || true; m_pause ;;
-          3) echo
-             logread -e xray 2>/dev/null | tail -30 | sed "s/^/    /" ||
-                 printf "    $(_t 'пусто\n')"
-             m_pause ;;
-          0|"") return 0 ;;
-        esac
-    done
-}
-
-m_transfer() {
-    while :; do
-        m_head "Экспорт и импорт настроек"
-        printf "$(_t "  Все настройки и списки одним текстом: перенести на другой\n")"
-        printf "$(_t "  роутер, сохранить перед опытами, приложить к вопросу.\n\n")"
-        m_item 1 "Выгрузить без ключа — такой файл можно показывать"
-        m_item 2 "Выгрузить вместе с ключом"
-        m_item 3 "Принять из файла"
-        m_line
-        m_item 4 "Собрать отчёт для обращения — без ключа, но с диагностикой"
-        m_line
-        m_item 0 "Назад"
-        echo
-        m_ask "Выбор"
-        case "$REPLY" in
-          1) echo; m_ask "Куда сохранить [/tmp/settings-byway.txt]"
-             echo; cmd_export "${REPLY:-/tmp/settings-byway.txt}" --no-key || true
-             m_pause ;;
-          2) echo; m_ask "Куда сохранить [/tmp/settings-byway.txt]"
-             echo; cmd_export "${REPLY:-/tmp/settings-byway.txt}" --with-key || true
-             m_pause ;;
-          3) echo; m_ask "Файл"
-             if [ -n "$REPLY" ]; then
-                 _f=$REPLY
-                 echo
-                 printf "$(_t "  Настройки и списки будут заменены содержимым файла.\n")"
-                 printf "$(_t "  Прежние сохраняются в %s/before-import/\n\n")" "$LISTS"
-                 if m_yes "Принять?"; then
-                     echo
-                     if (cmd_import "$_f"); then
-                         /etc/init.d/byway restart >/dev/null 2>&1 || true
-                     fi
-                 fi
-             fi
-             m_pause ;;
-          4) echo; m_ask "Куда сохранить [/tmp/report-byway.txt]"
-             echo; cmd_report "${REPLY:-/tmp/report-byway.txt}" || true
-             m_pause ;;
-          0|"") return 0 ;;
-        esac
-    done
-}
+# Текстовое меню (byway menu) -- в ucode (uc/menu.uc).
 
 cmd_menu() {
-    [ -t 0 ] || die "меню работает только с терминала: byway menu"
-    while :; do
-        m_head "byway $BYWAY_VERSION"
-        m_state
-        echo
-        m_item 1 "Что сейчас происходит"
-        m_item 2 "Проверка связи"
-        m_item 3 "Проверка окружения"
-        m_line
-        m_item 4 "Подключение к VPN"
-        m_item 5 "Режим работы"
-        m_item 6 "Списки"
-        m_line
-        m_item 7 "Служба"
-        m_item 8 "Журнал и статистика"
-        m_item 9 "Экспорт и импорт настроек"
-        m_line
-        m_item 0 "Выход"
-        echo
-        m_ask "Выбор"
-        case "$REPLY" in
-          1) echo; cmd_status 2>&1 | sed "s/^/    /" || true; m_pause ;;
-          2) echo; printf "$(_t "    проверка занимает несколько секунд…\n\n")"
-             cmd_health 2>&1 | tr "\t" " " | sed "s/^/    /" || true; m_pause ;;
-          3) echo; cmd_doctor 2>&1 | sed "s/^/    /" || true; m_pause ;;
-          4) m_connection ;;
-          5) m_mode ;;
-          6) m_lists ;;
-          7) m_service ;;
-          8) m_logs ;;
-          9) m_transfer ;;
-          0|"") clear 2>/dev/null || true; return 0 ;;
-        esac
-    done
+    BW_SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0") \
+    BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR \
+    BW_BADLIST=$BADLIST bw_uc menu
 }
 
 # Справка и разбор команды.
@@ -2571,8 +1046,9 @@ let LANG = getenv('BW_LANG') || u('lang');
 if (!match(LANG, /^[a-z][a-z]$/)) LANG = 'ru';
 let _dict = null;
 
+// Ключи и переводы словаря пишут \n, \t и \033 (ESC) текстом, как в shell.
 function _unesc(s) {
-	return replace(replace(s, '\\n', '\n'), '\\t', '\t');
+	return replace(replace(replace(s, '\\n', '\n'), '\\t', '\t'), '\\033', '\033');
 }
 
 function _t(s) {
@@ -2584,7 +1060,7 @@ function _t(s) {
 			if (i > 0) _dict[substr(l, 0, i)] ??= substr(l, i + 1);
 		}
 	}
-	let v = _dict[replace(replace(s, '\n', '\\n'), '\t', '\\t')];
+	let v = _dict[replace(replace(replace(s, '\n', '\\n'), '\t', '\\t'), '\033', '\\033')];
 	return v == null ? s : _unesc(v);
 }
 
@@ -2630,6 +1106,13 @@ function logf(fmt, ...a)  { system([ 'logger', '-t', 'byway', _pf(_t(fmt), a) ])
 // popen принимает только строку для оболочки: каждый довод -- в одинарных
 // кавычках.
 function q(s) { return "'" + replace('' + s, "'", "'\\''") + "'"; }
+
+// system() со сбросом своего вывода: иначе при выводе в файл (панель, job)
+// строки byway шли бы после вывода дочерней программы.
+function sys(argv) {
+	fs.stdout?.flush();
+	return system(argv);
+}
 
 // Вывод и код выхода программы; stderr -- вместе с выводом, если err.
 function run(argv, err) {
@@ -6854,6 +5337,442 @@ function cmd_plumb(what, ...flags) {
 	die('byway plumb on|off|close');
 }
 
+// Обновление byway и выпуски (бывший update/*.sh): файлы проверки и
+// автообновления, подпись выпуска, последний выпуск на GitHub, словари (lang).
+// Номер, репозиторий и ключ подписи -- от shell (BW_NUM, BW_REPO, BW_PUBKEY).
+
+const UP_MARK = '/tmp/byway-upcheck';         // когда спрашивали в прошлый раз
+const UP_OK = '/tmp/byway-upcheck-ok';        // проверка, дошедшая до GitHub
+const UP_FAIL = '/tmp/byway-upcheck-fail';    // код ответа неудачной проверки
+const UP_NEWVER = '/tmp/byway-newver';        // найденная версия, если новее
+const UP_RELNOTE = '/tmp/byway-relnote';      // первая строка описания выпуска
+const UP_AULOG = '/tmp/byway-autoupdate';     // чем кончилось ночное обновление
+const UP_PREVBIN = '/etc/byway/byway.prev';   // копия одного скрипта (до 0.3.0)
+const UP_PREVSET = '/etc/byway/prev.tgz';     // прежняя версия целиком для отката
+const UP_AUTRY = '/etc/byway/.au-try';        // когда пробовали обновиться; флеш
+const UP_SEENF = '/etc/byway/.newver-seen';   // версия и когда увидели; флеш
+const UP_BINSUM = '/etc/byway/.binmd5';       // сумма выложенной версии
+const UP_AUFAIL = '/etc/byway/.au-failed';    // выпуск, который не поднялся
+const UP_PANEL_LANG = '/www/luci-static/resources/byway/lang.js';
+
+function up_read(f) { return rtrim(fs.readfile(f) ?? '', '\n'); }
+
+// «Не скачалось» чаще из-за туннеля: GitHub в списке byway, и при мёртвом
+// туннеле резолвер отдаёт подставной адрес.
+function up_nonet() {
+	warn('  GitHub не ответил ни через туннель, ни напрямую, ни по адресам из DoH — проверить связь роутера и повторить');
+}
+
+// Рабочий каталог: атомарно и с правами 700 (на имени с номером процесса
+// каталог, заведённый заранее другим пользователем, принимался бы как свой).
+function up_tmpdir(pfx) { return trim(run([ 'mktemp', '-d', '/tmp/' + pfx + '.XXXXXX' ]).out); }
+function up_rmrf(d) { if (d) run([ 'rm', '-rf', d ]); }
+
+// Подпись выпуска (с 0.3.0): SHA256SUMS -- суммы всех файлов архива тега -- и
+// его подпись лежат вложениями выпуска, ключ -- BW_PUBKEY. Список -- в
+// dir/SHA256SUMS. 0 -- сошлась; 1 -- проверить нечем (нет usign, подпись не
+// скачалась); 2 -- не сошлась. Общая для update и lang.
+function up_rel_sums(num, dir) {
+	if (run([ 'sh', '-c', 'command -v usign' ]).code != 0) {
+		warn('нет usign — подпись выпуска проверить нечем');
+		return 1;
+	}
+	let rel = 'https://github.com/' + getenv('BW_REPO') + '/releases/download/v' + num;
+	if (nt_get([ '--max-time', '30', '-o', dir + '/SHA256SUMS', rel + '/SHA256SUMS' ]) != 0 ||
+	    nt_get([ '--max-time', '30', '-o', dir + '/SHA256SUMS.sig', rel + '/SHA256SUMS.sig' ]) != 0) {
+		warnf('у выпуска %s нет подписи (SHA256SUMS.sig) либо она не скачалась', num);
+		return 1;
+	}
+	fs.writefile(dir + '/key.pub', 'untrusted comment: byway release key public key\n' + getenv('BW_PUBKEY') + '\n');
+	if (run([ 'usign', '-V', '-q', '-m', dir + '/SHA256SUMS', '-x', dir + '/SHA256SUMS.sig', '-p', dir + '/key.pub' ]).code != 0) {
+		warn('подпись выпуска не сошлась с ключом byway');
+		return 2;
+	}
+	return 0;
+}
+
+// Суммы из подписанного списка: путь в выпуске -> sha256 («*» перед путем --
+// двоичный режим sha256sum).
+function up_sums(file) {
+	let r = {};
+	for (let l in split(fs.readfile(file) ?? '', '\n')) {
+		let w = split(trim(l), /[ \t]+/);
+		if (length(w) < 2) continue;
+		let p = w[1];
+		if (substr(p, 0, 1) == '*') p = substr(p, 1);
+		r[p] ??= w[0];
+	}
+	return r;
+}
+
+function up_sha256(f) { return split(run([ 'sha256sum', f ]).out, ' ')[0] ?? ''; }
+
+// Файл совпал со своей строкой подписанного списка.
+function up_sum_ok(file, path, sums) {
+	let w = up_sums(sums)[path];
+	return w != null && w !== '' && up_sha256(file) == w;
+}
+
+// Последний выпуск byway на GitHub: [код, версия]; первая строка описания --
+// в RELNOTE. Прокси-вход, напрямую, потом адреса GitHub из DoH. Любой ответ,
+// кроме «не дозвонились», окончателен (404 -- нет репозитория).
+function up_latest() {
+	let px = u('local_proxy_port') || '1603';
+	let api = 'https://api.github.com/repos/' + getenv('BW_REPO') + '/releases/latest';
+	let code = '000', body = '';
+	for (let via in [ [ '--proxy', 'http://127.0.0.1:' + px ], [], null ]) {
+		if (via == null) {
+			via = nt_gh_resolve();
+			if (!length(via)) break;
+		}
+		let r = run([ 'curl', '-sSL', '--max-time', '25', '-A', 'Mozilla/5.0', ...via, '-w', '\n%{http_code}', api ]).out;
+		let i = rindex(r, '\n');
+		code = i >= 0 ? substr(r, i + 1) : r;
+		body = i >= 0 ? substr(r, 0, i) : '';
+		if (code != '000') break;
+	}
+	// В JSON перевод строки -- «\n» из двух знаков: обратная косая и есть
+	// граница первой строки описания.
+	let note = '', ver = '';
+	for (let l in split(body, '\n')) {
+		let m = match(l, /.*"body"[^"]*"([^"\\]*)/);
+		if (m && note === '') note = m[1];
+		let t = match(l, /.*"tag_name"[^"]*"v*([0-9][^"]*)"/);
+		if (t && ver === '') ver = t[1];
+	}
+	fs.writefile(UP_RELNOTE, note !== '' ? note + '\n' : '');
+	return [ code, ver ];
+}
+
+// ── язык (byway lang) ─────────────────────────────────────────────────────
+// Словари лежат только выбранного языка (у ru файлов нет, ключи и есть
+// русский текст). Английский докачивается с ТЕГА текущей версии, не с main:
+// иначе ключи разойдутся с кодом. Панель зовёт эту же команду.
+
+// Полный ли словарь панели: у урезанного строк перевода нет вовсе.
+function up_panel_full() { return index(fs.readfile(UP_PANEL_LANG) ?? '', '"Служба": "Service"') >= 0; }
+
+// Не вышло переключить на английский: настройка, которую уже записала панель,
+// возвращается на русский -- иначе панель показывала бы «язык остался
+// прежним» при lang=en в настройках.
+function up_lang_back(dir) {
+	if (fs.stat(dir + '/en.tsv')?.size) return;
+	if (u('lang') != 'en') return;
+	if (run([ 'uci', 'set', 'byway.main.lang=ru' ]).code == 0) run([ 'uci', 'commit', 'byway' ]);
+}
+
+// Отказ переключения: каталог прочь, язык назад, сообщение и выход.
+function up_lang_fail(tmp, dir, msg) {
+	up_rmrf(tmp);
+	up_lang_back(dir);
+	die_raw(msg);
+}
+
+// Файл выпуска (rel -- путь в нём) в dst: загрузка, признак содержимого,
+// подпись. Ложь -- отказ уже объяснён и всё прибрано (выход).
+function up_lang_get(tmp, dir, base, rel, dst, mark, nv, what) {
+	let f = tmp + '/' + split(rel, '/')[1];
+	if (nt_get([ '--max-time', '30', '-o', f, base + '/' + rel ]) != 0 || index(fs.readfile(f) ?? '', mark) < 0) {
+		up_nonet();
+		up_lang_fail(tmp, dir, what);
+	}
+	if (nv && !up_sum_ok(f, rel, tmp + '/SHA256SUMS'))
+		up_lang_fail(tmp, dir, _t('словарь не совпал с подписанным выпуском — язык не переключён'));
+	// Копией рядом и переименованием: /tmp и флеш -- разные файловые системы,
+	// rename между ними не работает.
+	let t = fs.readfile(f);
+	if (t == null || !fs.writefile(dst + '.new', t) || !fs.rename(dst + '.new', dst)) {
+		fs.unlink(dst + '.new');
+		up_lang_fail(tmp, dir, _f('не записан %s', dst));
+	}
+	fs.chmod(dst, 0644);
+}
+
+// bw_uc lang [ru|en]
+function cmd_lang(lw) {
+	if (lw == null || lw === '') {
+		sayf('язык: %s', LANG);
+		say('  сменить: byway lang ru | en');
+		return;
+	}
+	if (lw != 'ru' && lw != 'en') dief('непонятный язык «%s» — нужен ru или en', lw);
+	let dir = getenv('BW_LISTS') + '/lang';
+	if (lw == 'en') {
+		let tmp = up_tmpdir('byway-lang');
+		if (tmp === '') die('не создать рабочий каталог в /tmp');
+		fs.mkdir(dir);
+		// refs/tags: ветка с тем же именем, что тег, иначе перебила бы его.
+		let base = 'https://raw.githubusercontent.com/' + getenv('BW_REPO') + '/refs/tags/v' + getenv('BW_NUM');
+		// Словари -- строки форматов, которые byway печатает от root: берутся
+		// только сверенными с подписанным списком сумм выпуска.
+		let nv = false;
+		if (getenv('BYWAY_NO_VERIFY') == '1') {
+			warn('BYWAY_NO_VERIFY=1: подпись выпуска не проверяется');
+		} else {
+			let r = up_rel_sums(getenv('BW_NUM'), tmp);
+			if (r == 1) up_lang_fail(tmp, dir, _t('словарь не сверить с подписью выпуска — язык не переключён; без проверки: BYWAY_NO_VERIFY=1 byway lang en'));
+			if (r != 0) up_lang_fail(tmp, dir, _t('подпись выпуска не сошлась — язык не переключён'));
+			nv = true;
+		}
+		if (!fs.stat(dir + '/en.tsv')?.size) {
+			say('загрузка английского словаря');
+			up_lang_get(tmp, dir, base, 'lang/en.tsv', dir + '/en.tsv', '\t', nv, _t('словарь не скачался — язык не переключён'));
+		}
+		if (fs.stat(UP_PANEL_LANG) && !up_panel_full()) {
+			say('загрузка английского словаря панели');
+			up_lang_get(tmp, dir, base, 'luci/lang.js', UP_PANEL_LANG, '"Служба": "Service"', nv, _t('словарь панели не скачался — язык не переключён'));
+		}
+		up_rmrf(tmp);
+	} else {
+		fs.unlink(dir + '/en.tsv');
+		// Строки перевода в lang.js -- ровно те, что с двух табов и кавычки.
+		if (fs.stat(UP_PANEL_LANG) && up_panel_full()) {
+			let keep = filter(split(fs.readfile(UP_PANEL_LANG), '\n'), (l) => substr(l, 0, 3) != '\t\t"');
+			fs.writefile(UP_PANEL_LANG + '.new', join('\n', keep));
+			fs.rename(UP_PANEL_LANG + '.new', UP_PANEL_LANG);
+			fs.chmod(UP_PANEL_LANG, 0644);
+		}
+	}
+	if (u('lang') != lw && run([ 'uci', 'set', 'byway.main.lang=' + lw ]).code == 0)
+		run([ 'uci', 'commit', 'byway' ]);
+	// Итог -- уже на новом языке.
+	LANG = lw;
+	_dict = null;
+	sayf('язык: %s', lw);
+}
+
+// ── проверки связи (бывшие tunnel_ok, alive_ok, eng_idle, eng_wait) ───────
+// Служба не работает (выключена или нет ключа): туннеля для проверки нет.
+function up_idle() {
+	if (u('enabled') != '1') return true;
+	let m = u('conn_mode');
+	if (m == 'urltest' || m == 'selector') return u('node_urls') === '';
+	if (m == 'outbound') return u('outbound_json') === '';
+	return u('node_url') === '';
+}
+
+// Связь через сервер: запрос через прокси-вход к пробному домену.
+function up_tunnel_ok() {
+	let lp = u('local_proxy_port') || '1603';
+	let c = trim(run([ 'curl', '-s', '-o', '/dev/null', '--max-time', '8', '-w', '%{http_code}',
+	                   '--proxy', 'http://127.0.0.1:' + lp, 'https://' + getenv('BW_PROBE') + '/' ]).out);
+	return c !== '' && c != '000';
+}
+
+// Движок жив, перехват на месте, резолвер отдаёт fakeip. Пустой список -- не
+// поломка, проверять нечем.
+function up_alive_ok() {
+	if (st_xray_pid() === '' || !pl_has_table(PL_TABLE)) return false;
+	let d = st_plain_first(mg_path('domains'));
+	return d === '' || st_fake_of(d, st_pool()) !== '';
+}
+
+// Дождаться туннеля, до 150 с: обвязку после старта поднимает фоновый цикл
+// службы, ему нужно до ~65 с сверх запуска. Сервер -- только если он отвечал
+// ДО замены (tun0): мёртвый сервер -- не вина новой версии.
+function up_wait(tun0) {
+	if (up_idle()) return true;
+	for (let i = 0; i < 15; i++) {
+		sys([ 'sleep', '10' ]);
+		if (up_alive_ok() && (!tun0 || up_tunnel_ok())) return true;
+	}
+	return false;
+}
+
+// ── byway update ──────────────────────────────────────────────────────────
+// Рабочий каталог запуска: путь -- в /var/run, чтобы shell-обёртка убрала его
+// и после Ctrl+C (ucode сигналов не ловит).
+const UP_DIRF = '/var/run/byway-update.dir';
+let UP_DIR = null;
+function up_exit(code) {
+	up_rmrf(UP_DIR);
+	fs.unlink(UP_DIRF);
+	exit(code);
+}
+function up_die(msg) {
+	up_rmrf(UP_DIR);
+	fs.unlink(UP_DIRF);
+	die_raw(msg);
+}
+
+// Прежняя версия целиком -- в архив на флеш: откат одного скрипта оставлял
+// новые init, панель и словарь при старом byway. Только существующие пути.
+function up_snapshot() {
+	let p = [];
+	for (let f in [ '/usr/local/bin/byway', '/etc/init.d/byway', '/usr/local/bin/byway-uninstall',
+	                '/www/luci-static/resources/view/byway', '/www/luci-static/resources/byway',
+	                '/usr/share/luci/menu.d/luci-app-byway.json',
+	                '/usr/share/rpcd/acl.d/luci-app-byway.json', '/etc/byway/lang' ])
+		if (fs.stat(f)) push(p, substr(f, 1));
+	fs.unlink(UP_PREVBIN);
+	if (run([ 'tar', 'czf', UP_PREVSET + '.new', '-C', '/', ...p ]).code == 0 && fs.stat(UP_PREVSET + '.new')?.size &&
+	    fs.rename(UP_PREVSET + '.new', UP_PREVSET)) {
+		fs.chmod(UP_PREVSET, 0600);
+		return true;
+	}
+	fs.unlink(UP_PREVSET + '.new');
+	return false;
+}
+
+// Вернуть архив прежней версии и перезапустить службу. Через каталог в памяти
+// и mv на место: запись поверх файла, который сейчас исполняется, портила бы
+// его чтение. Автозапуск -- заново по init прежней версии.
+function up_restore() {
+	if (!fs.stat(UP_PREVSET)?.size) { warn('копии прежней версии нет'); return false; }
+	let r = up_tmpdir('byway-rollback');
+	if (r === '' || run([ 'tar', 'xzf', UP_PREVSET, '-C', r ]).code != 0) {
+		up_rmrf(r);
+		warnf('откат не удался -- копия в %s', UP_PREVSET);
+		return false;
+	}
+	let bad = false;
+	for (let f in split(trim(run([ 'sh', '-c', 'cd "$1" && find . -type f', 'sh', r ]).out), '\n')) {
+		if (f === '') continue;
+		let d = substr(f, 1);
+		run([ 'mkdir', '-p', substr(d, 0, rindex(d, '/')) ]);
+		if (run([ 'cp', '-p', r + d, d + '.new' ]).code != 0 || !fs.rename(d + '.new', d)) bad = true;
+	}
+	up_rmrf(r);
+	if (bad) { warnf('откат лёг не целиком -- копия в %s', UP_PREVSET); return false; }
+	fs.writefile(UP_BINSUM, split(run([ 'md5sum', '/usr/local/bin/byway' ]).out, ' ')[0] + '\n');
+	for (let a in [ [ '/etc/init.d/byway', 'disable' ], [ '/etc/init.d/byway', 'enable' ],
+	                [ '/etc/init.d/rpcd', 'reload' ], [ '/etc/init.d/byway', 'restart' ] ])
+		run(a);
+	say('прежняя версия возвращена');
+	return true;
+}
+
+// Распакованный архив против подписанного списка: каждый файл в списке и с
+// той суммой, лишних нет, номер внутри -- тот же. 0 / 1 (проверить нечем) / 2.
+function up_verify(num, root, dir) {
+	let r = up_rel_sums(num, dir);
+	if (r != 0) return r;
+	if (run([ 'sh', '-c', 'cd "$1" && sha256sum -c "$2"', 'sh', root, dir + '/SHA256SUMS' ]).code != 0) {
+		warn('файлы архива не совпали с подписанным списком');
+		return 2;
+	}
+	let have = sort(filter(split(trim(run([ 'sh', '-c', 'cd "$1" && find . -type f', 'sh', root ]).out), '\n'),
+	                       (x) => x !== ''));
+	have = map(have, (x) => substr(x, 2));
+	let want = sort(keys(up_sums(dir + '/SHA256SUMS')));
+	if (join('\n', sort(have)) != join('\n', want)) {
+		warn('в архиве есть файлы вне подписанного списка');
+		return 2;
+	}
+	// Подпись не несёт номера выпуска: подписанный список старого выпуска
+	// сошёлся бы и под новым тегом. Номер -- из подписанных файлов.
+	let iv = index(split(fs.readfile(root + '/install.sh') ?? '', '\n'), 'VER=' + num) >= 0;
+	let bv = index(split(fs.readfile(root + '/byway') ?? '', '\n'), 'BYWAY_NUM="' + num + '"') >= 0;
+	if (!iv || !bv) {
+		warnf('архив не того выпуска: внутри не v%s', num);
+		return 2;
+	}
+	return 0;
+}
+
+// bw_uc update [--check|--force|--rollback|--no-verify|--to ВЕРСИЯ]. Код
+// выхода для ночного обновления: 0 -- поставлено и туннель работает, 3 -- не
+// поднялось и откачено, 4 -- откат не удался, 5 -- копия для отката не
+// сделалась, 6 -- подпись не сошлась (оба -- ничего не тронуто), прочее -- не
+// скачалось.
+function cmd_update(...args) {
+	let num = getenv('BW_NUM'), uf = '', nov = false, uto = '';
+	for (let i = 0; i < length(args); i++) {
+		let a = args[i];
+		if (a == '--rollback') {
+			if (!fs.stat(UP_PREVSET)?.size) die('откатывать не на что: копия делается при byway update');
+			if (!up_restore()) die('откат не завершён — освободить место на флеше и повторить: byway update --rollback');
+			// Снятый вручную выпуск автообновление не вернёт.
+			fs.writefile(UP_AUFAIL, num + '\n');
+			sayf('автообновление выпуск %s больше не поставит', num);
+			return;
+		} else if (a == '--check' || a == '--force') {
+			uf = a;
+		} else if (a == '--no-verify') {
+			nov = true;
+		} else if (a == '--to') {
+			// Ночное: ставится выдержавший три дня номер, а не свежий на 04:00.
+			uto = args[++i] ?? '';
+			if (uto === '' || !_only(uto, '0123456789.')) dief('непонятная версия «%s»', uto);
+		} else {
+			dief('непонятный ключ: %s — byway update [--check|--force|--rollback|--no-verify]', a);
+		}
+	}
+	let lv = uto !== '' ? [ '200', uto ] : up_latest(), code = lv[0], nw = lv[1];
+	if (nw === '' || nw == code) {
+		if (code == '000') die('GitHub не ответил -- похоже, нет связи');
+		if (code == '404') dief('на GitHub нет ни репозитория %s, ни его выпусков', getenv('BW_REPO'));
+		if (code == '403') die('GitHub ответил «слишком часто спрашиваете» -- подождать час');
+		dief('GitHub ответил %s, но версии в ответе нет', code);
+	}
+	// Метка «найдена новая» устаревает с самим обновлением.
+	if (!st_ver_gt(nw, num)) {
+		fs.unlink(UP_NEWVER);
+		// Тег могут пересобрать на новом коммите под тем же номером: «новее
+		// нет» верно про номер, но не про файлы. Отсюда --force.
+		if (uf == '--force') {
+			sayf('версия та же (%s), но ставится заново -- так велит --force', num);
+		} else {
+			sayf('версия %s -- новее нет', num);
+			say('  переставить ту же: byway update --force');
+			return;
+		}
+	} else {
+		sayf('есть новая версия: %s (у вас %s)', nw, num);
+	}
+	if (uf == '--check') return;
+
+	UP_DIR = up_tmpdir('byway-update');
+	if (UP_DIR === '') die('не создать рабочий каталог в /tmp');
+	fs.writefile(UP_DIRF, UP_DIR);
+	let d = UP_DIR;
+	say('загрузка');
+	if (nt_get([ '--max-time', '120', '-o', d + '/p.tar.gz',
+	             'https://github.com/' + getenv('BW_REPO') + '/archive/refs/tags/v' + nw + '.tar.gz' ]) != 0) {
+		up_die(_t('не скачалось -- ничего не тронуто'));
+	}
+	if (run([ 'tar', 'xzf', d + '/p.tar.gz', '-C', d ]).code != 0) { up_die(_t('не распаковалось -- ничего не тронуто')); }
+	let src = split(trim(run([ 'find', d, '-maxdepth', '2', '-name', 'install.sh' ]).out), '\n')[0] ?? '';
+	if (src === '') { up_die(_t('в пакете нет install.sh -- ничего не тронуто')); }
+	let root = substr(src, 0, rindex(src, '/'));
+	if (nov) {
+		warn('--no-verify: подпись выпуска не проверяется');
+	} else {
+		// 1 -- проверить нечем (обход назвать можно), 2 -- подлинность
+		// опровергнута (обход не советовать).
+		let r = up_verify(nw, root, d);
+		if (r == 0) say('подпись выпуска сошлась с ключом byway');
+		else if (r == 1) { warn('выпуск не поставлен -- ничего не тронуто; поставить без проверки подписи: byway update --no-verify'); up_exit(6); }
+		else { warn('архив не совпал с подписанным выпуском -- подменён или повреждён; ничего не тронуто, повторить позже'); up_exit(6); }
+	}
+
+	// Связь до установки: откатывать за мёртвый сервер нельзя.
+	let tun0 = !up_idle() && up_tunnel_ok();
+	if (!up_snapshot()) {
+		warn('копия прежней версии для отката не сделалась (место на флеше?) -- ничего не тронуто');
+		up_exit(5);
+	}
+	// Ставит install.sh: он один знает, что куда класть и что оставить.
+	say('установка');
+	if (sys([ 'sh', '-c', 'cd "$1" && sh install.sh', 'sh', root ]) != 0) {
+		warn('установка оборвалась -- возврат прежней версии');
+		up_exit(up_restore() ? 3 : 4);
+	}
+	fs.unlink(UP_NEWVER);
+	fs.unlink(UP_RELNOTE);
+	// Поставленный вручную выпуск, который раньше не поднимался, больше не
+	// «отвергнут»: doctor писал бы об этом вечно.
+	if (up_read(UP_AUFAIL) == nw) fs.unlink(UP_AUFAIL);
+	if (up_idle()) up_exit(0);
+	say('проверка туннеля на новой версии (до 2,5 минуты)');
+	if (up_wait(tun0)) {
+		say('готово: туннель на новой версии работает');
+		up_exit(0);
+	}
+	warn('на новой версии туннель не поднялся -- возврат прежней');
+	up_exit(up_restore() ? 3 : 4);
+}
+
 // Сторож из cron (бывший service/watch.sh): возврат ядра, починка перехвата,
 // обновление списков и byway по расписанию, журнал состояния; pulse раз в
 // минуту. Не перенесённое (update, engine, gen) и перехват (у него замок) --
@@ -6862,20 +5781,6 @@ function cmd_plumb(what, ...flags) {
 const WT_LAST = '/tmp/byway-watch.last';
 // Сколько проверок подряд не нашлось движка; в tmpfs, после перезагрузки с 0.
 const WT_NOPID = '/tmp/byway-nopid';
-// Файлы проверки обновлений (update/update.sh -- те же, править парой до Ф7).
-const WT_UPMARK = '/tmp/byway-upcheck';
-const WT_UPOK = '/tmp/byway-upcheck-ok';
-const WT_UPFAIL = '/tmp/byway-upcheck-fail';
-const WT_NEWVER = '/tmp/byway-newver';
-const WT_RELNOTE = '/tmp/byway-relnote';
-const WT_AULOG = '/tmp/byway-autoupdate';
-const WT_PREVBIN = '/etc/byway/byway.prev';
-const WT_PREVSET = '/etc/byway/prev.tgz';
-const WT_AUTRY = '/etc/byway/.au-try';
-const WT_SEENF = '/etc/byway/.newver-seen';
-const WT_BINSUM = '/etc/byway/.binmd5';
-const WT_AUFAIL = '/etc/byway/.au-failed';
-
 // Состояние прогона: pid, tab, rul, rt, dm, fk, healed.
 let W = {};
 
@@ -6961,7 +5866,7 @@ function wt_xray_ok(f) {
 // ── прогон ────────────────────────────────────────────────────────────────
 // Копия одного скрипта от автообновления 0.2.4: нужна ей полчаса, потом лишняя.
 function wt_prevbin() {
-	if (fs.stat(WT_PREVBIN) && !wt_fresh(WT_PREVBIN, 60)) fs.unlink(WT_PREVBIN);
+	if (fs.stat(UP_PREVBIN) && !wt_fresh(UP_PREVBIN, 60)) fs.unlink(UP_PREVBIN);
 }
 
 // Возврат ядра, если файла движка нет. Повтор раз в 15 мин, в фоне: загрузка
@@ -7094,76 +5999,45 @@ function wt_lists() {
 	wt_reload();
 }
 
-// Последний выпуск на GitHub: [код, версия]; первая строка описания -- в
-// RELNOTE. Прокси-вход, напрямую, потом адреса GitHub из DoH. Любой ответ,
-// кроме «не дозвонились», окончателен (404 -- нет репозитория).
-function wt_latest() {
-	let px = u('local_proxy_port') || '1603';
-	let api = 'https://api.github.com/repos/' + getenv('BW_REPO') + '/releases/latest';
-	let code = '000', body = '';
-	for (let via in [ [ '--proxy', 'http://127.0.0.1:' + px ], [], null ]) {
-		if (via == null) {
-			via = nt_gh_resolve();
-			if (!length(via)) break;
-		}
-		let r = run([ 'curl', '-sSL', '--max-time', '25', '-A', 'Mozilla/5.0', ...via, '-w', '\n%{http_code}', api ]).out;
-		let i = rindex(r, '\n');
-		code = i >= 0 ? substr(r, i + 1) : r;
-		body = i >= 0 ? substr(r, 0, i) : '';
-		if (code != '000') break;
-	}
-	// В JSON перевод строки -- «\n» из двух знаков: обратная косая и есть
-	// граница первой строки описания.
-	let note = '', ver = '';
-	for (let l in split(body, '\n')) {
-		let m = match(l, /.*"body"[^"]*"([^"\\]*)/);
-		if (m && note === '') note = m[1];
-		let t = match(l, /.*"tag_name"[^"]*"v*([0-9][^"]*)"/);
-		if (t && ver === '') ver = t[1];
-	}
-	fs.writefile(WT_RELNOTE, note !== '' ? note + '\n' : '');
-	return [ code, ver ];
-}
-
 // Проверка новой версии, без установки: установка рвёт туннель в
 // невыбранный момент. Промежуток случайный, 12-36 ч: запрос к GitHub в одно
 // время суток выделялся бы в трафике. В UPMARK -- минуты до следующей
 // проверки, mtime -- время прошлой.
 function wt_upcheck() {
 	if (u('update_check') == '0') return;
-	let m = wt_read(WT_UPMARK);
+	let m = wt_read(UP_MARK);
 	if (m === '' || !_only(m, '0123456789')) m = '1440';
-	if (wt_fresh(WT_UPMARK, int(m))) return;
+	if (wt_fresh(UP_MARK, int(m))) return;
 	// Случайность из uuid ядра: od и hexdump есть не в каждом busybox.
 	let r = substr(trim(fs.readfile('/proc/sys/kernel/random/uuid') ?? ''), 0, 4);
 	if (r === '' || !_only(r, '0123456789abcdef')) r = '0';
-	fs.writefile(WT_UPMARK, (720 + hex(r) % 1441) + '\n');
-	let lv = wt_latest(), uc = lv[0], un = lv[1], num = getenv('BW_NUM');
+	fs.writefile(UP_MARK, (720 + hex(r) % 1441) + '\n');
+	let lv = up_latest(), uc = lv[0], un = lv[1], num = getenv('BW_NUM');
 	// Дошла ли проверка до GitHub: doctor иначе писал бы «новее не найдено» и
 	// про сутки без связи, и про отказ 403.
 	if (un !== '' && un != uc) {
-		fs.writefile(WT_UPOK, '');
-		fs.unlink(WT_UPFAIL);
+		fs.writefile(UP_OK, '');
+		fs.unlink(UP_FAIL);
 	} else {
-		fs.writefile(WT_UPFAIL, uc + '\n');
+		fs.writefile(UP_FAIL, uc + '\n');
 		// Нет связи -- повтор через час, а не через 12-36 ч.
-		if (uc == '000') fs.writefile(WT_UPMARK, '60\n');
+		if (uc == '000') fs.writefile(UP_MARK, '60\n');
 	}
 	if (un !== '' && un != uc && st_ver_gt(un, num)) {
-		if (wt_read(WT_NEWVER) != un) {
-			fs.writefile(WT_NEWVER, un + '\n');
+		if (wt_read(UP_NEWVER) != un) {
+			fs.writefile(UP_NEWVER, un + '\n');
 			// Дата первого обнаружения -- во флеш и один раз на номер: NEWVER
 			// после перезагрузки стёрт, и выдержка (3 суток) не копилась бы.
 			// Только при разумных часах: без батарейки роутер в 1970-м.
 			let y = int(trim(run([ 'date', '+%Y' ]).out));
-			if (substr(wt_read(WT_SEENF), 0, length(un) + 1) != un + ' ' && y >= 2020)
-				fs.writefile(WT_SEENF, un + ' ' + time() + '\n');
-			logf('новая версия byway %s (у вас %s): %s', un, num, wt_read(WT_RELNOTE));
+			if (substr(wt_read(UP_SEENF), 0, length(un) + 1) != un + ' ' && y >= 2020)
+				fs.writefile(UP_SEENF, un + ' ' + time() + '\n');
+			logf('новая версия byway %s (у вас %s): %s', un, num, wt_read(UP_RELNOTE));
 		}
 	} else if (un !== '') {
 		// Стираем, только когда ответ получен и новой версии нет: отказ связи
 		// не доказывает, что выпуска нет, и сбросил бы выдержку.
-		fs.unlink(WT_NEWVER);
+		fs.unlink(UP_NEWVER);
 	}
 }
 
@@ -7172,23 +6046,23 @@ function wt_upcheck() {
 // 12 раз. Повторы гасят AUTRY (раз в сутки) и AUFAIL (проваливавшийся номер
 // второй раз не ставим).
 function wt_au_install(au, y, h) {
-	if (au === '' || y < 2020 || h != dr_au_hour() || wt_read(WT_AUFAIL) == au || wt_fresh(WT_AUTRY, 1440)) return;
+	if (au === '' || y < 2020 || h != dr_au_hour() || wt_read(UP_AUFAIL) == au || wt_fresh(UP_AUTRY, 1440)) return;
 	let num = getenv('BW_NUM'), when = trim(run([ 'date', '+%Y-%m-%d %H:%M' ]).out);
-	fs.writefile(WT_AUTRY, '');
+	fs.writefile(UP_AUTRY, '');
 	logf('автообновление: установка %s (было %s)', au, num);
 	let rc = wt_byway('update', '--to', au).code;
 	if (rc == 0) {
-		fs.writefile(WT_AULOG, _f('обновлено до %s, %s\n', au, when));
+		fs.writefile(UP_AULOG, _f('обновлено до %s, %s\n', au, when));
 		logf('автообновление: %s поднялось', au);
-		fs.unlink(WT_NEWVER);
+		fs.unlink(UP_NEWVER);
 	} else if (rc == 3) {
-		fs.writefile(WT_AUFAIL, au + '\n');
-		fs.writefile(WT_AULOG, _f('ОТКАТ с %s на %s, %s\n', au, num, when));
+		fs.writefile(UP_AUFAIL, au + '\n');
+		fs.writefile(UP_AULOG, _f('ОТКАТ с %s на %s, %s\n', au, num, when));
 		logf('автообновление: %s не поднялось -- откат на %s', au, num);
 	} else if (rc == 4) {
-		fs.writefile(WT_AUFAIL, au + '\n');
-		fs.writefile(WT_AULOG, _f('ОТКАТ НЕ УДАЛСЯ: на диске %s, копия в %s\n', au, WT_PREVSET));
-		logf('автообновление: ОТКАТ НЕ УДАЛСЯ -- копия в %s, вернуть: byway update --rollback', WT_PREVSET);
+		fs.writefile(UP_AUFAIL, au + '\n');
+		fs.writefile(UP_AULOG, _f('ОТКАТ НЕ УДАЛСЯ: на диске %s, копия в %s\n', au, UP_PREVSET));
+		logf('автообновление: ОТКАТ НЕ УДАЛСЯ -- копия в %s, вернуть: byway update --rollback', UP_PREVSET);
 	} else if (rc == 5) {
 		logf('автообновление: копия для отката не сделалась -- установка ОТМЕНЕНА (место на /overlay?)');
 	} else if (rc == 6) {
@@ -7200,15 +6074,15 @@ function wt_au_install(au, y, h) {
 
 // Ночная установка по настройке auto_update (выключено по умолчанию).
 function wt_autoupdate() {
-	let num = getenv('BW_NUM'), au = wt_read(WT_NEWVER);
+	let num = getenv('BW_NUM'), au = wt_read(UP_NEWVER);
 	if (u('auto_update') != '1' || au === '' || !st_ver_gt(au, num)) return;
-	let note = wt_read(WT_RELNOTE);
+	let note = wt_read(UP_RELNOTE);
 	let y = int(trim(run([ 'date', '+%Y' ]).out)), h = trim(run([ 'date', '+%H' ]).out);
 	// Выдержка: не раньше трёх суток после первого обнаружения; метка
 	// важности снимает. Возраст -- по записанной дате, не по mtime: ntpd
 	// переводит часы скачком после старта.
 	let bake = !(substr(note, 0, 5) == 'ВАЖНО' || substr(note, 0, 8) == 'CRITICAL' || substr(note, 0, 1) == '!');
-	let age = 0, sv = wt_read(WT_SEENF);
+	let age = 0, sv = wt_read(UP_SEENF);
 	if (substr(sv, 0, length(au) + 1) == au + ' ') {
 		let st = substr(sv, length(au) + 1);
 		st = (st !== '' && _only(st, '0123456789')) ? int(st) : 0;
@@ -7220,8 +6094,8 @@ function wt_autoupdate() {
 	if (au !== '' && minor(au) != minor(num)) au = '';
 	// Правленое руками не трогаем; суммы нет -- версия неизвестна.
 	if (au !== '') {
-		if (fs.stat(WT_BINSUM)) {
-			if (split(run([ 'md5sum', '/usr/local/bin/byway' ]).out, ' ')[0] != wt_read(WT_BINSUM)) {
+		if (fs.stat(UP_BINSUM)) {
+			if (split(run([ 'md5sum', '/usr/local/bin/byway' ]).out, ' ')[0] != wt_read(UP_BINSUM)) {
 				logt('автообновление: byway правлен руками -- не трогается');
 				au = '';
 			}
@@ -7341,6 +6215,515 @@ function cmd_pulse() {
 		fs.unlink(WT_NOPID);
 		if (!pl_has_table(PL_TABLE)) wt_engine_back();
 	}
+}
+
+// Ядро Xray (бывший update/engine.sh): byway engine ВЕРСИЯ|tested|newest|
+// stable|restore|ФАЙЛ -- загрузка со сверкой sha256, замена рядом или через
+// память, откат. Замок и уборку рабочего каталога держит shell-обёртка;
+// фаза «через память» (служба стоит) идёт отдельным процессом с игнором INT и
+// HUP: ucode сигналов не ловит, а оборванная там замена оставляла бы дом без
+// туннеля.
+//
+// Два ядра по ~35 МБ на 43 МБ раздела не встают: при месте новое кладётся
+// рядом, иначе служба стоит, а ядро проверяется в /tmp. Архив прежней версии
+// берётся ДО остановки. SHA2-256 из .dgst -- от битой загрузки, не подпись.
+
+// Ядро с GitHub на этом процессоре не запустилось: метка во флеше, чтобы
+// восстановление не качало 14 МБ каждые четверть часа. Снимается удачей.
+const EN_NOEXEC = '/etc/byway/.github-noexec';
+const EN_LOCK = '/var/run/byway-engine.lock';
+// Рабочий каталог (для обёртки) и метка фазы «через память»: с ней обёртка
+// каталог не трогает -- там архив прежнего ядра, единственное средство отката.
+const EN_DIRF = '/var/run/byway-engine.dir';
+const EN_RAMF = '/var/run/byway-engine.ram';
+
+// Состояние замены: asset, old, ov, nw (версия), new (путь), d (каталог),
+// pkg, sz, free, tun0, orb.
+let E = {};
+
+function en_uname() { return trim(run([ 'uname', '-m' ]).out); }
+function en_noexec_mark() { fs.writefile(EN_NOEXEC, en_uname() + '\n'); }
+
+// Сборки XTLS на MIPS без сопроцессора не запускаются (только hardfloat) --
+// та же проверка в install.sh, править парой.
+function en_mips_nofpu() {
+	if (substr(en_uname(), 0, 4) != 'mips') return false;
+	let ci = fs.readfile('/proc/cpuinfo') ?? '';
+	return ci !== '' && index(lc(ci), 'fpu') < 0;
+}
+
+// Имя файла выпуска под эту машину -- та же функция в install.sh, править
+// парой. DISTRIB_ARCH первым: uname -m на MIPS не различает порядок байтов.
+function en_asset() {
+	let m = match(fs.readfile('/etc/openwrt_release') ?? '', /\nDISTRIB_ARCH='([^']*)'/), a = m ? m[1] : '';
+	for (let p in [ [ 'aarch64', 'linux-arm64-v8a' ], [ 'mipsel_', 'linux-mips32le' ], [ 'mips64el_', 'linux-mips64le' ],
+	                [ 'mips64_', 'linux-mips64' ], [ 'mips_', 'linux-mips32' ], [ 'x86_64', 'linux-64' ],
+	                [ 'i386', 'linux-32' ], [ 'i486', 'linux-32' ], [ 'i686', 'linux-32' ], [ 'riscv64', 'linux-riscv64' ] ])
+		if (substr(a, 0, length(p[0])) == p[0]) return p[1];
+	let u = en_uname();
+	let t = { aarch64: 'linux-arm64-v8a', armv7l: 'linux-arm32-v7a', armv7: 'linux-arm32-v7a', arm: 'linux-arm32-v7a',
+	          armv6l: 'linux-arm32-v6', x86_64: 'linux-64', i386: 'linux-32', i486: 'linux-32', i686: 'linux-32',
+	          mips: 'linux-mips32', mipsel: 'linux-mips32le', mips64: 'linux-mips64', mips64el: 'linux-mips64le',
+	          riscv64: 'linux-riscv64' };
+	return t[u];
+}
+
+// Версия ядра по пути: второе поле первой строки `version`, только цифры.
+function en_ver(p) {
+	if (!p || !(fs.stat(p)?.mode & 73)) return '';
+	let w = pl_words(split(run([ p, 'version' ]).out, '\n')[0] ?? '');
+	return replace(w[1] ?? '', /[^0-9.]/g, '');
+}
+
+// Номер выпуска XTLS: stable -- releases/latest, any -- самый свежий. У XTLS
+// предвыпуском помечено всё новее 26.3.27, и «latest» отдаёт мартовский.
+function en_top(kind) {
+	let url = kind == 'stable' ? 'https://api.github.com/repos/XTLS/Xray-core/releases/latest'
+	                          : 'https://api.github.com/repos/XTLS/Xray-core/releases?per_page=1';
+	let f = '/var/run/byway-engine-top.json';
+	fs.unlink(f);
+	if (nt_get([ '--max-time', '25', '-o', f, url ]) != 0) { fs.unlink(f); return ''; }
+	let t = fs.readfile(f) ?? '';
+	fs.unlink(f);
+	for (let l in split(t, '\n')) {
+		let m = match(l, /.*"tag_name"[^"]*"v([^"]*)"/);
+		if (m) return m[1];
+	}
+	return '';
+}
+
+// Архив версии в файл, со сверкой суммы: 0 -- лежит и сверен, 1 -- не
+// скачался, 2 -- сумма не сошлась или её нет, 3 -- не сошлась с суммой,
+// вшитой в подписанный byway для проверенной версии. Файла при отказе нет.
+function en_fetch(ver, f) {
+	let url = 'https://github.com/XTLS/Xray-core/releases/download/v' + ver + '/Xray-' + E.asset + '.zip';
+	fs.unlink(f); fs.unlink(f + '.dgst');
+	if (nt_get([ '--max-time', '300', '-o', f, url ]) != 0) { fs.unlink(f); return 1; }
+	if (nt_get([ '--max-time', '30', '-o', f + '.dgst', url + '.dgst' ]) != 0) { fs.unlink(f); fs.unlink(f + '.dgst'); return 2; }
+	let w = '';
+	for (let l in split(fs.readfile(f + '.dgst') ?? '', '\n')) {
+		let m = match(l, /^SHA2-256= *([0-9a-f]{64})/);
+		if (m) { w = m[1]; break; }
+	}
+	fs.unlink(f + '.dgst');
+	let g = up_sha256(f);
+	if (w === '' || w != g) { fs.unlink(f); return 2; }
+	// Подменивший архив подменил бы и .dgst рядом с ним.
+	if (ver == getenv('BW_XTESTED')) {
+		for (let l in split(getenv('BW_XSUMS') ?? '', '\n'))
+			if (substr(l, 0, length(E.asset) + 1) == E.asset + '=' && substr(l, length(E.asset) + 1) != g) {
+				fs.unlink(f);
+				return 3;
+			}
+	}
+	return 0;
+}
+
+// Бинарник xray из пакета -- в файл: .gz -- своя сборка, иначе архив XTLS.
+function en_cat(pkg, out) {
+	let c = substr(pkg, -3) == '.gz' ? 'gunzip -c "$1" > "$2"' : 'unzip -p "$1" xray > "$2"';
+	return run([ 'sh', '-c', c, 'sh', pkg, out ]).code == 0;
+}
+
+// Размер ядра внутри архива, байты; пусто -- в архиве нет файла xray.
+function en_size(pkg) {
+	if (substr(pkg, -3) == '.gz') return trim(run([ 'sh', '-c', 'gunzip -c "$1" | wc -c', 'sh', pkg ]).out);
+	for (let l in split(run([ 'unzip', '-l', pkg, 'xray' ]).out, '\n')) {
+		let w = pl_words(l);
+		if (length(w) && w[length(w) - 1] == 'xray') return w[0];
+	}
+	return '';
+}
+
+// Ядро из архива в путь: через временное имя, размер и запуск -- ДО замены
+// (2026-10-04: недописанное на полный диск ядро заменило рабочее). 0 / 1 --
+// не распаковалось / 2 -- распаковано, но не запускается.
+function en_put(pkg, path, sz) {
+	let n = path + '.new';
+	fs.unlink(n);
+	if (!en_cat(pkg, n) || !fs.stat(n)?.size || !fs.chmod(n, 0755) || (sz && '' + fs.stat(n).size != '' + sz)) {
+		fs.unlink(n);
+		return 1;
+	}
+	if (run([ n, 'version' ]).code != 0) { fs.unlink(n); return 2; }
+	if (fs.rename(n, path)) return 0;
+	fs.unlink(n);
+	return 1;
+}
+
+function en_free_kb() { return int(pl_words(split(run([ 'df', '-k', '/usr/local/bin' ]).out, '\n')[1] ?? '')[3] ?? '0'); }
+function en_mem_kb() {
+	let m = match(fs.readfile('/proc/meminfo') ?? '', /MemAvailable:[ \t]+([0-9]+)/);
+	return m ? int(m[1]) : 0;
+}
+function en_mb(kb) { return int(kb / 1024); }
+
+// Конфиг под движок тем же gen: развилки по версии берутся от НОВОГО
+// движка, он же проверяет итог. Вывод -- в журнал каталога.
+function en_gen(x) {
+	let r = run([ 'env', 'BW_GEN_XRAY=' + x, getenv('BW_SELF'), 'gen' ], true);
+	fs.writefile(E.d + '/gen.log', r.out);
+	return r.code == 0;
+}
+function en_gen_tail() {
+	let l = pl_lines(fs.readfile(E.d + '/gen.log'));
+	for (let x in slice(l, -6)) print('    ', x, '\n');
+}
+
+// Без выхода по отказу: на пути «через память» он случается при
+// остановленной службе.
+function en_bin_set(p) {
+	if (run([ 'uci', 'set', 'byway.main.xray_bin=' + p ]).code != 0 || run([ 'uci', 'commit', 'byway' ]).code != 0)
+		warnf('путь к движку не записался в настройки: uci set byway.main.xray_bin=%s && uci commit byway', p);
+}
+
+function en_svc(a) { run([ '/etc/init.d/byway', a ]); }
+function en_done() { sayf('готово: Xray %s, на флеше свободно %s МБ', E.nw, en_mb(en_free_kb())); }
+
+// Путь «ядра нет» (после sysupgrade или снятого пакета): ставится без отката.
+// 25 МБ, как у установщика: ubifs дожимает ядро примерно вдвое.
+function en_fresh() {
+	if (E.free < 25600) dief('на флеше свободно %s МБ, ядру нужно %s — ничего не тронуто', en_mb(E.free), 25);
+	sayf('ядра нет — ставится Xray %s', E.nw);
+	let r = en_put(E.pkg, E.new, E.sz);
+	if (r == 2) { en_noexec_mark(); die('ядро не запускается на этом железе — удалено'); }
+	if (r != 0) die('ядро не распаковалось на флеш — ничего не тронуто');
+	fs.unlink(EN_NOEXEC);
+	en_bin_set(E.new);
+	logf('движок поставлен: %s (прежнего не было)', E.nw);
+	if (u('enabled') == '1') {
+		say('запуск службы');
+		en_svc('restart');
+	}
+	en_done();
+}
+
+// Путь «рядом». Прежнее ядро не трогается до успеха: откат -- вернуть путь.
+function en_side() {
+	say('места хватает — новое ядро кладётся рядом с прежним');
+	let r = en_put(E.pkg, E.new, E.sz);
+	fs.unlink(E.pkg);
+	if (r == 2) { en_noexec_mark(); die('новое ядро не запускается на этом железе — удалено, работает прежнее'); }
+	if (r != 0) die('ядро не распаковалось на флеш — ничего не тронуто');
+	let ours = substr(E.old, 0, 20) == '/usr/local/bin/xray-';
+	if (up_idle()) {
+		en_bin_set(E.new);
+		if (ours) fs.unlink(E.old);
+		sayf('служба не работает (выключена или нет ключа) — ядро заменено без проверки туннеля: Xray %s', E.nw);
+		return;
+	}
+	if (!en_gen(E.new)) {
+		en_gen_tail();
+		fs.unlink(E.new);
+		en_gen(E.old);
+		die('новый движок не принял конфиг — удалён, работает прежний');
+	}
+	en_bin_set(E.new);
+	warn('перезапуск службы: туннель пропадёт на несколько секунд');
+	en_svc('restart');
+	say('проверка туннеля на новом движке (до 2,5 минуты)');
+	if (up_wait(E.tun0)) {
+		// Удаляется, только если ядро наше: /usr/bin/xray -- файл пакета.
+		if (ours) {
+			fs.unlink(E.old);
+			sayf('прежний движок удалён: %s', E.old);
+		} else {
+			sayf('прежний движок %s — из пакета, оставлен; снять можно пакетным менеджером', E.old);
+		}
+		logf('движок заменён: %s -> %s', E.ov, E.nw);
+		en_done();
+		return;
+	}
+	warn('туннель на новом движке не поднялся — возврат прежнего');
+	en_bin_set(E.old);
+	en_gen(E.old);
+	en_svc('restart');
+	fs.unlink(E.new);
+	logf('движок: %s не поднялся, возвращён %s', E.nw, E.ov);
+	dief('возвращён %s; новое ядро удалено', E.ov);
+}
+
+// Путь «через память», подготовка (процесс обёртки): архив прежней версии --
+// СЕЙЧАС, пока туннель жив; потом -- дочерний процесс без INT и HUP.
+function en_ram() {
+	if (substr(E.old, 0, 20) != '/usr/local/bin/xray-')
+		dief('места на второе ядро нет, а прежнее (%s) — из пакета; снять пакет вручную и поставить заново: byway engine %s', E.old, E.nw);
+	sayf('места на второе ядро нет (свободно %s МБ) — замена через память', en_mb(E.free));
+	if (match(E.old, /^\/usr\/local\/bin\/xray-[^-]*-/)) {
+		// Своя сборка: архив выпуска дал бы откат на ОФИЦИАЛЬНЫЙ бинарник под
+		// именем своей сборки. Копия -- сам файл, сжатый в память.
+		E.orb = E.d + '/old.gz';
+		sayf('прежний движок — своя сборка (%s): копия для отката сжимается в память', E.old);
+		if (run([ 'sh', '-c', 'gzip -c "$1" > "$2"', 'sh', E.old, E.orb ]).code != 0 || !fs.stat(E.orb)?.size)
+			die('копию своей сборки для отката не сделать — замена не начата');
+	} else {
+		E.orb = E.d + '/old.zip';
+		sayf('загрузка прежней версии %s — для отката', E.ov);
+		if (en_fetch(E.ov, E.orb) != 0)
+			dief('архив прежней версии %s не получен — без копии для отката замена не начата', E.ov);
+	}
+	fs.writefile(E.d + '/ram.json', sprintf('%J', E));
+	fs.writefile(EN_RAMF, '');
+	let rc = sys([ 'sh', '-c', 'trap "" INT HUP; exec "$@"', 'sh', 'ucode', ...split(getenv('BW_UCRUN'), ' '), 'engine-ram', E.d ]);
+	exit(rc);
+}
+
+// Конец фазы: замок и метка -- прочь; каталог -- если в нём не осталось
+// единственной копии прежнего ядра.
+function en_ram_end(rmdir) {
+	// Каталог остаётся -- обёртке о нём не говорить, она бы его стёрла.
+	if (rmdir) up_rmrf(E.d);
+	else fs.unlink(EN_DIRF);
+	fs.unlink(EN_RAMF);
+	run([ 'rm', '-rf', EN_LOCK ]);
+}
+
+// Отказ ДО удаления прежнего ядра: оно на месте, достаточно запустить.
+function en_ram_back() {
+	en_svc('start');
+	en_ram_end(true);
+	die('служба запущена с прежним движком — ничего не заменено');
+}
+
+// Отказ ПОСЛЕ удаления: прежнее ядро -- из архива, скачанного до остановки.
+function en_ram_restore() {
+	sayf('возврат %s из архива', E.ov);
+	if (en_put(E.orb, E.old) == 0) {
+		en_bin_set(E.old);
+		en_gen(E.old);
+		en_svc('start');
+		logf('движок: %s не встал, возвращён %s', E.nw, E.ov);
+		en_ram_end(true);
+		dief('возвращён %s', E.ov);
+	}
+	// Флеш не принял и прежнее ядро. Службу всё равно запускаем: без движка
+	// она не встанет, но и dnsmasq не останется смотреть в мёртвый порт.
+	en_svc('start');
+	en_ram_end(false);
+	logf('движок: НИ НОВОЕ, НИ ПРЕЖНЕЕ ядро не легло на флеш -- туннеля нет');
+	let x = substr(E.orb, -3) == '.gz' ? 'gunzip -c ' + E.orb : 'unzip -p ' + E.orb + ' xray';
+	dief('ни новое, ни прежнее ядро не легло на флеш — туннеля нет. Архив прежнего: %s (в памяти, до перезагрузки); поставить: %s > %s && chmod 755 %s && /etc/init.d/byway start',
+	     E.orb, x, E.old, E.old);
+}
+
+// bw_uc engine-ram КАТАЛОГ: фаза «через память», служба остановлена здесь же.
+// Любой отказ кончается запуском службы, иначе дом без туннеля.
+function cmd_engine_ram(d) {
+	E = json(fs.readfile(d + '/ram.json'));
+	warn('остановка службы: туннель пропадёт примерно на минуту');
+	// При «не пускать мимо VPN» запрет держится всю минуту (stop_service).
+	run([ 'env', 'BYWAY_KEEP_BLOCK=1', '/etc/init.d/byway', 'stop' ]);
+	// Сторож не «чинит» остановленную службу посреди замены; метку снимает
+	// plumb on при запуске. Номер этого процесса: умрёт замена -- сторож
+	// метку не признает.
+	fs.writefile(PL_DOWN, fs.readlink('/proc/self') + '\n');
+	say('идёт замена — прерывать нельзя');
+	sys([ 'sleep', '2' ]);
+	let mk = en_mem_kb();
+	if (mk * 1024 < int(E.sz) + 20971520) {
+		warnf('памяти после остановки мало: %s МБ', en_mb(mk));
+		en_ram_back();
+	}
+	let t = E.d + '/xray';
+	if (!en_cat(E.pkg, t) || !fs.chmod(t, 0755) || run([ t, 'version' ]).code != 0) {
+		warn('новое ядро не распаковалось или не запускается');
+		en_ram_back();
+	}
+	fs.unlink(E.pkg);
+	// Без ключа конфига нет, сверять нечего.
+	if (!up_idle() && !en_gen(t)) {
+		en_gen_tail();
+		en_gen(E.old);
+		warn('новый движок не принял конфиг');
+		en_ram_back();
+	}
+	// Точка невозврата: прежнее ядро уступает место.
+	fs.unlink(E.old);
+	if (run([ 'cp', t, E.new + '.new' ]).code != 0 || !fs.chmod(E.new + '.new', 0755) || !fs.rename(E.new + '.new', E.new)) {
+		fs.unlink(E.new + '.new'); fs.unlink(E.new);
+		warn('новое ядро не легло на флеш');
+		en_ram_restore();
+	}
+	fs.unlink(t);
+	en_bin_set(E.new);
+	en_svc('start');
+	say('проверка туннеля на новом движке (до 2,5 минуты)');
+	if (up_wait(E.tun0)) {
+		en_ram_end(true);
+		logf('движок заменён: %s -> %s', E.ov, E.nw);
+		en_done();
+		return;
+	}
+	run([ 'env', 'BYWAY_KEEP_BLOCK=1', '/etc/init.d/byway', 'stop' ]);
+	fs.unlink(E.new);
+	warn('туннель на новом движке не поднялся');
+	en_ram_restore();
+}
+
+// Переключение на ядро, которое уже лежит рядом: проверка конфига,
+// перезапуск, проверка туннеля; не поднялось -- обратно. Оба файла остаются.
+function en_switch() {
+	sayf('Xray %s уже лежит рядом — переключение без загрузки', E.nw);
+	E.tun0 = !up_idle() && up_tunnel_ok();
+	if (up_idle()) {
+		en_bin_set(E.new);
+		sayf('служба не работает (выключена или нет ключа) — ядро заменено без проверки туннеля: Xray %s', E.nw);
+		return;
+	}
+	if (!en_gen(E.new)) {
+		en_gen_tail();
+		en_gen(E.old);
+		die('этот движок не принял конфиг — остался прежний');
+	}
+	en_bin_set(E.new);
+	warn('перезапуск службы: туннель пропадёт на несколько секунд');
+	en_svc('restart');
+	say('проверка туннеля на новом движке (до 2,5 минуты)');
+	if (up_wait(E.tun0)) {
+		logf('движок переключён: %s -> %s', E.ov, E.nw);
+		sayf('готово: Xray %s; прежнее ядро осталось рядом: %s', E.nw, E.old);
+		return;
+	}
+	warn('туннель на этом движке не поднялся — возврат прежнего');
+	en_bin_set(E.old);
+	en_gen(E.old);
+	en_svc('restart');
+	logf('движок: %s не поднялся, возвращён %s', E.nw, E.ov);
+	dief('возвращён %s', E.ov);
+}
+
+// Рабочий каталог замены (путь -- обёртке, для уборки после Ctrl+C).
+function en_workdir() {
+	E.d = up_tmpdir('byway-engine');
+	if (E.d === '') die('не создать рабочий каталог в /tmp');
+	fs.writefile(EN_DIRF, E.d);
+}
+
+// Общий хвост: память, место и выбор пути.
+function en_go() {
+	E.free = en_free_kb();
+	// Ядра нет вовсе: откатываться не на что -- просто ставим.
+	if (E.ov === '') { en_fresh(); return; }
+	E.tun0 = !up_idle() && up_tunnel_ok();
+	// Рядом -- если на флеше есть весь размер ядра и 5 МБ сверху (сжатие
+	// ubifs не угадать, меряется по несжатому).
+	if (E.free * 1024 >= int(E.sz) + 5242880) en_side();
+	else en_ram();
+}
+
+// Своя сборка ядра из /tmp (.gz с бинарником или .zip выпуска): та же замена
+// с откатом, но без сверки с .dgst -- sha256 печатается, сверяет человек.
+function en_local(f) {
+	if (substr(f, 0, 5) != '/tmp/') die('своя сборка ядра — только из /tmp: на флеше рядом с ядром ей нет места');
+	if (!fs.stat(f)) dief('нет файла %s', f);
+	if (run([ 'sh', '-c', 'command -v unzip' ]).code != 0) dief('нет unzip — поставить: %s unzip', getenv('BW_PKGFIX'));
+	E.asset = en_asset() ?? '';
+	E.old = getenv('BW_XRAY') ?? '';
+	E.ov = en_ver(E.old);
+	E.pkg = f;
+	E.sz = en_size(f);
+	if (int(E.sz || '0') <= 1048576) dief('в %s нет ядра xray — нужен .gz с бинарником или .zip выпуска', f);
+	let sum = trim(split(run([ 'sh', '-c', (substr(f, -3) == '.gz' ? 'gunzip -c' : 'unzip -p') + ' "$1" ' +
+	                         (substr(f, -3) == '.gz' ? '' : 'xray ') + '| sha256sum', 'sh', f ]).out, ' ')[0] ?? '');
+	sayf('своя сборка: %s, sha256 ядра %s', f, sum);
+	E.nw = _t('своя сборка');
+	E.new = '/usr/local/bin/xray-local-' + trim(run([ 'date', '+%Y%m%d%H%M' ]).out);
+	en_workdir();
+	if (en_mem_kb() < 40960) dief('памяти доступно %s МБ, для замены нужно не меньше 40 — ничего не тронуто', en_mb(en_mem_kb()));
+	en_go();
+}
+
+// bw_uc engine [ВЕРСИЯ|tested|newest|stable|restore|--check|/ФАЙЛ]
+function cmd_engine(arg) {
+	arg ??= '';
+	if (substr(arg, 0, 1) == '/') { en_local(arg); return; }
+	let pf = getenv('BW_PKGFIX'), tested = getenv('BW_XTESTED');
+	if (run([ 'sh', '-c', 'command -v unzip' ]).code != 0) dief('нет unzip — поставить: %s unzip', pf);
+	if (run([ 'sh', '-c', 'command -v sha256sum' ]).code != 0) die('нет sha256sum — сверить архив нечем, замена не начата');
+	if (en_mips_nofpu())
+		dief('на этом процессоре сборки Xray-core с GitHub не запускаются — движок ставится и обновляется пакетом OpenWrt: %s xray-core', pf);
+	E.asset = en_asset();
+	if (!E.asset) dief('неизвестно, какой файл выпуска брать для %s', en_uname());
+	E.old = getenv('BW_XRAY') ?? '';
+	E.ov = en_ver(E.old);
+
+	if (arg === '' || arg == '--check') {
+		// Первым -- ответ «есть ли новее». Подробности -- не в --check (его
+		// зовёт панель).
+		let nv = en_top('any'), sv = en_top('stable');
+		if (E.ov === '') {
+			warn('ядро Xray не указано или не запускается (byway.main.xray_bin)');
+			say('  поставить: byway engine restore');
+		} else if (nv === '') {
+			sayf('стоит Xray %s; есть ли новее — неизвестно: GitHub не ответил', E.ov);
+			up_nonet();
+		} else if (st_ver_gt(nv, E.ov)) {
+			sayf('есть обновление ядра: Xray %s (стоит %s)', nv, E.ov);
+		} else {
+			sayf('обновлений ядра нет: стоит Xray %s', E.ov);
+		}
+		if (E.ov !== '' && tested != E.ov) {
+			if (st_ver_gt(E.ov, tested)) sayf('  стоит новее проверенной с byway (%s)', tested);
+			else sayf('  проверенная с byway: %s', tested);
+		}
+		if (nv !== '' && E.ov !== '' && st_ver_gt(nv, E.ov)) {
+			sayf('  поставить: byway engine %s', nv);
+			if (tested != nv && st_ver_gt(tested, E.ov)) say('  или проверенную: byway engine tested');
+		}
+		if (arg == '--check') return;
+		say('подробно:');
+		if (E.ov !== '') sayf('  файл: %s', E.old);
+		if (nv !== '') sayf('  самая свежая у XTLS: %s, стабильная: %s', nv, sv || '?');
+		sayf('  на флеше свободно %s МБ, памяти доступно %s МБ', en_mb(en_free_kb()), en_mb(en_mem_kb()));
+		say('  варианты: byway engine ВЕРСИЯ | tested | newest | stable | restore | /tmp/ФАЙЛ.gz');
+		return;
+	}
+	if (arg == 'tested') {
+		E.nw = tested;
+	} else if (arg == 'restore') {
+		// Ядра нет (sysupgrade его не сохраняет): версия из имени файла в
+		// xray_bin (настройки sysupgrade переживают), иначе проверенная.
+		if (E.ov !== '') { sayf('ядро на месте: Xray %s', E.ov); return; }
+		if (trim(fs.readfile(EN_NOEXEC) ?? '') == en_uname())
+			dief('сборка Xray-core с GitHub на этом процессоре не запускалась — ядро ставится пакетом: %s xray-core', pf);
+		let rb = rtrim(run([ 'uci', '-q', 'get', 'byway.main.xray_bin' ]).out, '\n');
+		let v = '';
+		if (substr(rb, 0, 20) == '/usr/local/bin/xray-') v = split(substr(rb, 20), '-')[0];
+		E.nw = (v !== '' && _only(v, '0123456789.')) ? v : tested;
+	} else if (arg == 'newest' || arg == 'stable') {
+		E.nw = en_top(arg == 'newest' ? 'any' : 'stable');
+		if (E.nw === '') die('GitHub не ответил — номер свежей версии неизвестен, ничего не тронуто');
+	} else {
+		E.nw = arg;
+	}
+	if (!_only(E.nw, '0123456789.') || substr(E.nw, 0, 1) == '.' || substr(E.nw, -1) == '.')
+		dief('непонятная версия «%s» — нужен номер вида 26.9.9 либо tested, newest, stable, restore', arg);
+	// Своя сборка той же версии (xray-local-*, xray-26.9.30-h2l) -- не
+	// «стоит уже»: официальная возвращается той же командой.
+	if (!match(E.old, /^\/usr\/local\/bin\/xray-[^-]*-/) && E.nw == E.ov) {
+		sayf('стоит уже %s — менять нечего', E.nw);
+		return;
+	}
+	E.new = '/usr/local/bin/xray-' + E.nw;
+	en_workdir();
+	// Нужная версия уже лежит рядом -- переключение без загрузки.
+	if (E.ov !== '' && E.new != E.old && wt_xray_ok(E.new)) { en_switch(); return; }
+	// Архив в память: ~14 МБ. Меньше 40 МБ -- живой движок рядом с ним
+	// рискует OOM, а он и есть туннель.
+	if (en_mem_kb() < 40960) dief('памяти доступно %s МБ, для замены нужно не меньше 40 — ничего не тронуто', en_mb(en_mem_kb()));
+	// Ядра нет -- место проверяем ДО загрузки: сторож повторяет раз в 15 мин.
+	if (E.ov === '' && en_free_kb() < 25600)
+		dief('на флеше свободно %s МБ, ядру нужно %s — ничего не тронуто', en_mb(en_free_kb()), 25);
+	sayf('загрузка Xray-core %s (%s)', E.nw, E.asset);
+	E.pkg = E.d + '/new.zip';
+	let r = en_fetch(E.nw, E.pkg);
+	if (r == 1) { up_nonet(); dief('архив %s не скачался — ничего не тронуто', E.nw); }
+	if (r == 3) dief('архив %s не сошёлся с суммой, вшитой в byway для проверенной версии — отброшен, ничего не тронуто', E.nw);
+	if (r != 0) dief('архив %s не сошёлся с суммой SHA2-256 из .dgst выпуска — отброшен, ничего не тронуто', E.nw);
+	E.sz = en_size(E.pkg);
+	if (E.sz === '') die('в архиве нет файла xray — ничего не тронуто');
+	say('архив сверен с суммой из выпуска');
+	en_go();
 }
 
 // Готовые наборы (presets) и подписка (бывшие lists/presets.sh и
@@ -7839,6 +7222,406 @@ function cmd_clear(what) {
 	else say('журнал и статистика очищены');
 }
 
+// Текстовое меню (бывший ui/menu.sh) поверх тех же команд: команды --
+// отдельным вызовом byway (BW_SELF), их вывод -- с отступом.
+
+function m_self() { return getenv('BW_SELF') || '/usr/local/bin/byway'; }
+
+// Строка ввода; конец ввода -- пусто (меню закрывается).
+function m_read() {
+	fs.stdout?.flush();
+	let l = fs.stdin.read('line');
+	return l == null ? '' : rtrim(l, '\r\n');
+}
+
+function m_line()     { print('  \033[2m──────────────────────────────────────────\033[0m\n'); }
+function m_item(n, t) { print('   \033[1m', n, '\033[0m  ', _t(t), '\n'); }
+function m_head(t) {
+	if (sys([ 'sh', '-c', 'clear 2>/dev/null' ]) != 0) print('\n\n');
+	print('\n  \033[1m', _t(t), '\033[0m\n\n');
+}
+function m_pause() { print(_t('\n  \033[2mEnter — назад\033[0m')); m_read(); print('\n'); }
+function m_ask(t)  { print('  ', _t(t), ': '); return m_read(); }
+
+// Подсказка [y/N] латиницей в обоих языках: терминал обычно на английской
+// раскладке. Принимается и «д».
+function m_yes(t) {
+	print('  \033[1;33m', _t(t), '\033[0m [y/N]: ');
+	let a = m_read();
+	return index('yYдД', substr(a, 0, 1)) >= 0 && a !== '';
+}
+
+// Вывод команды byway с отступом.
+function m_out(...a) {
+	for (let l in pl_lines(run([ m_self(), ...a ], true).out)) print('    ', l, '\n');
+}
+
+function m_uci(...kv) {
+	for (let x in kv) run([ 'uci', 'set', 'byway.main.' + x ]);
+	run([ 'uci', 'commit', 'byway' ]);
+	_cur = null;
+}
+
+// Пересборка и перезапуск после правки: без неё настройка сохранена, но не
+// действует.
+function m_apply() {
+	print('\n');
+	if (sys([ m_self(), 'gen' ]) == 0) {
+		// restart на выключенной службе ничего не поднимает, а включить её
+		// из меню нельзя (enabled только через uci): сказать об этом.
+		if (u('enabled') != '1') {
+			print(_t('\n  \033[1;33mсобрано, но byway ВЫКЛЮЧЕН\033[0m — туннеля не будет\n'));
+			print(_t('  включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart\n'));
+			return;
+		}
+		run([ '/etc/init.d/byway', 'restart' ]);
+		print(_t('\n  \033[1;32mприменено\033[0m — движок стартует до 15 секунд\n'));
+	} else {
+		print(_t('\n  \033[1;31mне применилось\033[0m — работает прежняя настройка\n'));
+	}
+}
+
+// Строка состояния в шапке: без обращений в сеть, меню открывается сразу.
+function m_state() {
+	let s = st_xray_pid() !== '' ? '\033[32m' + _t('работает') + '\033[0m' : '\033[31m' + _t('не запущена') + '\033[0m';
+	let m = u('list_mode') == 'all' ? _t('всё через VPN') : _t('по спискам');
+	print('  ', _f('служба: %s     режим: %s', s, m), '\n');
+}
+
+function m_connection() {
+	while (true) {
+		m_head('Подключение к VPN');
+		m_item(1, 'Показать текущее');
+		m_item(2, 'Вписать ключ');
+		m_item(3, 'Загрузить из подписки');
+		m_item(4, 'Проверить ключ отдельно, не трогая работающий туннель');
+		m_line();
+		m_item(0, 'Назад');
+		print('\n');
+		let r = m_ask('Выбор');
+		if (r == '1') {
+			print('\n');
+			// По переведённым словам: status печатает через словарь.
+			let w = [ _t('подключение'), _t('транспорт'), _t('ключ') ], n = 0;
+			for (let l in pl_lines(run([ m_self(), 'status' ], true).out))
+				if (length(filter(w, (x) => index(l, x) >= 0))) { print('    ', l, '\n'); n++; }
+			if (!n) print('    ', _t('подключение не настроено\n'));
+			m_pause();
+		} else if (r == '2') {
+			print('\n');
+			print(_t('  Ссылка целиком: vless://… trojan://… ss://… vmess://… hy2://… wireguard://…\n'));
+			print(_t('  Ключ никуда не отправляется и в журнал не пишется.\n\n'));
+			let k = m_ask('Ключ');
+			if (k !== '') {
+				print('\n');
+				// Проверка до записи: неразобранный ключ в настройках оставит
+				// без туннеля и без понятной причины.
+				if (run([ m_self(), 'check', k ]).code == 0) {
+					m_uci('node_url=' + k, 'conn_mode=key');
+					print(_t('  \033[1;32mключ принят\033[0m\n'));
+					m_apply();
+				} else {
+					print(_t('  \033[1;31mключ не разобран\033[0m, вот что говорит проверка:\n\n'));
+					for (let l in slice(pl_lines(run([ m_self(), 'check', k ], true).out), -6)) print('    ', l, '\n');
+				}
+			}
+			m_pause();
+		} else if (r == '3') {
+			print('\n');
+			let a = m_ask('Адрес подписки');
+			if (a !== '') {
+				m_uci('sub_url=' + a);
+				print('\n');
+				m_out('sub', a);
+				print(_t('\n  Ключи выше. Вписать нужный — пункт 2.\n'));
+			}
+			m_pause();
+		} else if (r == '4') {
+			print('\n');
+			m_out('probe');
+			m_pause();
+		} else if (r == '0' || r === '') {
+			return;
+		}
+	}
+}
+
+function m_mode() {
+	while (true) {
+		m_head('Режим работы');
+		printf(_t('  Сейчас: \033[1m%s\033[0m\n\n'), u('list_mode') == 'all' ? _t('всё через VPN') : _t('по спискам'));
+		m_item(1, 'По спискам — через VPN только перечисленное');
+		m_item(2, 'Всё через VPN');
+		m_item(3, _f('Русские сайты мимо VPN: %s', u('ru_direct') == '1' ? _t('включено') : _t('выключено')));
+		m_line();
+		m_item(0, 'Назад');
+		print('\n');
+		let r = m_ask('Выбор');
+		if (r == '1') {
+			m_uci('list_mode=lists');
+			m_apply();
+			m_pause();
+		} else if (r == '2') {
+			print('\n');
+			print(_t('  Через VPN пойдёт весь трафик, включая загрузки и обновления.\n'));
+			if (m_yes('Включить?')) {
+				m_uci('list_mode=all');
+				m_apply();
+			}
+			m_pause();
+		} else if (r == '3') {
+			m_uci('ru_direct=' + (u('ru_direct') == '1' ? '0' : '1'));
+			m_apply();
+			m_pause();
+		} else if (r == '0' || r === '') {
+			return;
+		}
+	}
+}
+
+function m_lists() {
+	let own = getenv('BW_LISTS') + '/domains.lst', sl = getenv('BW_LISTS') + '/subnets.lst';
+	while (true) {
+		// Объединённый список, не только свой: в режиме «всё через VPN» своего
+		// нет по построению. Пересобирается при каждом обращении: после
+		// добавления домена проверка «уже есть» судила бы по прежнему.
+		let dl = mg_path('domains');
+		m_head('Списки');
+		printf(_t('  доменов %s, подсетей %s\n\n'), lj_count(dl), lj_count(sl));
+		m_item(1, 'Показать домены');
+		m_item(2, 'Добавить домен');
+		m_item(3, 'Убрать домен');
+		m_item(4, 'Обновить готовые списки');
+		m_line();
+		m_item(0, 'Назад');
+		print('\n');
+		let r = m_ask('Выбор');
+		if (r == '1') {
+			print('\n');
+			sys([ 'sh', '-c', 'grep -vE "^[[:space:]]*$" "$1" 2>/dev/null | more', 'sh', dl ]);
+			m_pause();
+		} else if (r == '2') {
+			print('\n');
+			let d = m_ask('Домен');
+			if (d !== '') {
+				// Проверка -- по объединённому, запись -- в свой файл:
+				// объединённый пересобирается, и дописанное туда пропадало.
+				if (index(pl_lines(fs.readfile(dl)), d) >= 0) {
+					print(_t('\n  уже есть\n'));
+				} else {
+					let t = fs.readfile(own) ?? '';
+					if (t !== '' && substr(t, -1) != '\n') t += '\n';
+					fs.writefile(own, t + d + '\n');
+					print(_t('\n  добавлено\n'));
+					m_apply();
+				}
+			}
+			m_pause();
+		} else if (r == '3') {
+			print('\n');
+			let d = m_ask('Домен');
+			if (d !== '') {
+				let l = split(fs.readfile(own) ?? '', '\n');
+				if (index(l, d) >= 0) {
+					fs.writefile(own + '.new', join('\n', filter(l, (x) => x != d)));
+					fs.rename(own + '.new', own);
+					print(_t('\n  убрано\n'));
+					m_apply();
+				} else {
+					print(_t('\n  такой записи нет\n'));
+				}
+			}
+			m_pause();
+		} else if (r == '4') {
+			print('\n');
+			m_out('presets');
+			m_apply();
+			m_pause();
+		} else if (r == '0' || r === '') {
+			return;
+		}
+	}
+}
+
+// Итог после запуска службы: движок ждём (до 12 с) и судим по нему, а не по
+// коду init -- он при procd всегда 0.
+function m_svc_done(what) {
+	if (u('enabled') != '1') {
+		print(_t('\n  byway ВЫКЛЮЧЕН настройкой — служба не запускается\n'));
+		print(_t('  включить: uci set byway.main.enabled=1 && uci commit byway && /etc/init.d/byway restart\n'));
+		return;
+	}
+	for (let i = 0; i < 12 && st_xray_pid() === ''; i++) sys([ 'sleep', '1' ]);
+	if (st_xray_pid() !== '') print('\n  ', what, '\n');
+	else print(_t('\n  движок не поднялся — смотреть: logread -e byway\n'));
+}
+
+function m_autostart() { return length(filter(fs.lsdir('/etc/rc.d') ?? [], (f) => substr(f, 0, 1) == 'S' && substr(f, -5) == 'byway')) > 0; }
+
+function m_service() {
+	while (true) {
+		m_head('Служба');
+		m_state();
+		print('\n');
+		m_item(1, 'Перезапустить');
+		m_item(2, 'Остановить');
+		m_item(3, 'Запустить');
+		m_item(4, _f('Автозапуск: %s', m_autostart() ? _t('включён') : _t('выключен')));
+		m_line();
+		m_item(0, 'Назад');
+		print('\n');
+		let r = m_ask('Выбор');
+		if (r == '1') {
+			print('\n');
+			sys([ '/etc/init.d/byway', 'restart' ]);
+			m_svc_done(_t('перезапущена'));
+			m_pause();
+		} else if (r == '2') {
+			print('\n');
+			print(_t('  Туннеля не станет, интернет продолжит работать напрямую.\n'));
+			if (m_yes('Остановить?')) {
+				sys([ '/etc/init.d/byway', 'stop' ]);
+				print(_t('\n  остановлена\n'));
+			}
+			m_pause();
+		} else if (r == '3') {
+			print('\n');
+			sys([ '/etc/init.d/byway', 'start' ]);
+			m_svc_done(_t('запущена'));
+			m_pause();
+		} else if (r == '4') {
+			if (m_autostart()) {
+				sys([ '/etc/init.d/byway', 'disable' ]);
+				print(_t('\n  автозапуск выключен\n'));
+			} else {
+				sys([ '/etc/init.d/byway', 'enable' ]);
+				print(_t('\n  автозапуск включён\n'));
+			}
+			m_pause();
+		} else if (r == '0' || r === '') {
+			return;
+		}
+	}
+}
+
+function m_indent(lines, empty) {
+	if (!length(lines)) print('    ', empty);
+	for (let l in lines) print('    ', l, '\n');
+}
+
+function m_logs() {
+	while (true) {
+		m_head('Журнал и статистика');
+		m_item(1, 'Журнал состояния — что и когда менялось');
+		m_item(2, 'Чем пользуются');
+		m_item(3, 'Журнал движка');
+		m_line();
+		m_item(0, 'Назад');
+		print('\n');
+		let r = m_ask('Выбор');
+		if (r == '1') {
+			print('\n');
+			m_indent(slice(pl_lines(fs.readfile(getenv('BW_LISTS') + '/health.log')), -30), _t('пока пусто\n'));
+			m_pause();
+		} else if (r == '2') {
+			print('\n');
+			m_out('top', '25');
+			m_pause();
+		} else if (r == '3') {
+			print('\n');
+			m_indent(slice(pl_lines(run([ 'logread', '-e', 'xray' ]).out), -30), _t('пусто\n'));
+			m_pause();
+		} else if (r == '0' || r === '') {
+			return;
+		}
+	}
+}
+
+function m_transfer() {
+	while (true) {
+		m_head('Экспорт и импорт настроек');
+		print(_t('  Все настройки и списки одним текстом: перенести на другой\n'));
+		print(_t('  роутер, сохранить перед опытами, приложить к вопросу.\n\n'));
+		m_item(1, 'Выгрузить без ключа — такой файл можно показывать');
+		m_item(2, 'Выгрузить вместе с ключом');
+		m_item(3, 'Принять из файла');
+		m_line();
+		m_item(4, 'Собрать отчёт для обращения — без ключа, но с диагностикой');
+		m_line();
+		m_item(0, 'Назад');
+		print('\n');
+		let r = m_ask('Выбор');
+		if (r == '1' || r == '2') {
+			print('\n');
+			let f = m_ask('Куда сохранить [/tmp/settings-byway.txt]');
+			print('\n');
+			sys([ m_self(), 'export', f || '/tmp/settings-byway.txt', r == '1' ? '--no-key' : '--with-key' ]);
+			m_pause();
+		} else if (r == '3') {
+			print('\n');
+			let f = m_ask('Файл');
+			if (f !== '') {
+				print('\n');
+				print(_t('  Настройки и списки будут заменены содержимым файла.\n'));
+				printf(_t('  Прежние сохраняются в %s/before-import/\n\n'), getenv('BW_LISTS'));
+				if (m_yes('Принять?')) {
+					print('\n');
+					if (sys([ m_self(), 'import', f ]) == 0) run([ '/etc/init.d/byway', 'restart' ]);
+				}
+			}
+			m_pause();
+		} else if (r == '4') {
+			print('\n');
+			let f = m_ask('Куда сохранить [/tmp/report-byway.txt]');
+			print('\n');
+			sys([ m_self(), 'report', f || '/tmp/report-byway.txt' ]);
+			m_pause();
+		} else if (r == '0' || r === '') {
+			return;
+		}
+	}
+}
+
+// bw_uc menu
+function cmd_menu() {
+	if (sys([ 'sh', '-c', '[ -t 0 ]' ]) != 0) die('меню работает только с терминала: byway menu');
+	while (true) {
+		m_head('byway ' + getenv('BW_VERSION'));
+		m_state();
+		print('\n');
+		m_item(1, 'Что сейчас происходит');
+		m_item(2, 'Проверка связи');
+		m_item(3, 'Проверка окружения');
+		m_line();
+		m_item(4, 'Подключение к VPN');
+		m_item(5, 'Режим работы');
+		m_item(6, 'Списки');
+		m_line();
+		m_item(7, 'Служба');
+		m_item(8, 'Журнал и статистика');
+		m_item(9, 'Экспорт и импорт настроек');
+		m_line();
+		m_item(0, 'Выход');
+		print('\n');
+		let r = m_ask('Выбор');
+		if (r == '1') { print('\n'); m_out('status'); m_pause(); }
+		else if (r == '2') {
+			print('\n');
+			print(_t('    проверка занимает несколько секунд…\n\n'));
+			for (let l in pl_lines(run([ m_self(), 'health' ], true).out)) print('    ', replace(l, '\t', ' '), '\n');
+			m_pause();
+		}
+		else if (r == '3') { print('\n'); m_out('doctor'); m_pause(); }
+		else if (r == '4') m_connection();
+		else if (r == '5') m_mode();
+		else if (r == '6') m_lists();
+		else if (r == '7') m_service();
+		else if (r == '8') m_logs();
+		else if (r == '9') m_transfer();
+		else if (r == '0' || r === '') { sys([ 'sh', '-c', 'clear 2>/dev/null' ]); return; }
+	}
+}
+
 // Разбор команды. Сюда попадают только перенесённые на ucode команды: прочие
 // разбирает shell (ui/main.sh) и зовёт bw_uc лишь для этих.
 
@@ -7877,6 +7660,11 @@ const CMDS = {
 	nftblock: cmd_nftblock,
 	selfmark: cmd_selfmark,
 	watch: cmd_watch,
+	lang: cmd_lang,
+	update: cmd_update,
+	engine: cmd_engine,
+	'engine-ram': cmd_engine_ram,
+	menu: cmd_menu,
 	pulse: cmd_pulse,
 };
 

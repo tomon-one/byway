@@ -11,6 +11,9 @@ cmd_gen() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
 
+    # Замена ядра проверяет конфиг под новым движком до переключения на него
+    # (uc/engine.uc): путь -- окружением.
+    if [ -n "${BW_GEN_XRAY:-}" ]; then XRAY=$BW_GEN_XRAY; XRAYVER=""; fi
     [ -f "$CONF" ] || dief "нет %s" "$CONF"
     [ -x "$XRAY" ] || die "xray не найден"
     mkdir -p "$LISTS"
@@ -36,14 +39,3 @@ cmd_gen() {
     [ "$_grc" = 0 ] || exit "$_grc"
 }
 
-# Настоящий адрес сервера для DNS через туннель. Местный резолвер в этом
-# режиме отдаёт адрес из прежнего конфига (hosts), смена адреса не увиделась
-# бы: сперва пин /etc/hosts, потом внешние резолверы, потом местный.
-server_addr() {   # $1 -- имя
-    _sa=$(awk -v n="$1" '$1 !~ /^#/ { for (i = 2; i <= NF; i++) if ($i == n) { print $1; exit } }' \
-          /etc/hosts 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1)
-    [ -n "$_sa" ] || _sa=$(a_of "$1" 8.8.8.8)
-    [ -n "$_sa" ] || _sa=$(a_of "$1" 1.1.1.1)
-    [ -n "$_sa" ] || _sa=$(a_of "$1")
-    printf '%s' "$_sa"
-}

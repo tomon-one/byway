@@ -39,8 +39,9 @@ let LANG = getenv('BW_LANG') || u('lang');
 if (!match(LANG, /^[a-z][a-z]$/)) LANG = 'ru';
 let _dict = null;
 
+// Ключи и переводы словаря пишут \n, \t и \033 (ESC) текстом, как в shell.
 function _unesc(s) {
-	return replace(replace(s, '\\n', '\n'), '\\t', '\t');
+	return replace(replace(replace(s, '\\n', '\n'), '\\t', '\t'), '\\033', '\033');
 }
 
 function _t(s) {
@@ -52,7 +53,7 @@ function _t(s) {
 			if (i > 0) _dict[substr(l, 0, i)] ??= substr(l, i + 1);
 		}
 	}
-	let v = _dict[replace(replace(s, '\n', '\\n'), '\t', '\\t')];
+	let v = _dict[replace(replace(replace(s, '\n', '\\n'), '\t', '\\t'), '\033', '\\033')];
 	return v == null ? s : _unesc(v);
 }
 
@@ -98,6 +99,13 @@ function logf(fmt, ...a)  { system([ 'logger', '-t', 'byway', _pf(_t(fmt), a) ])
 // popen принимает только строку для оболочки: каждый довод -- в одинарных
 // кавычках.
 function q(s) { return "'" + replace('' + s, "'", "'\\''") + "'"; }
+
+// system() со сбросом своего вывода: иначе при выводе в файл (панель, job)
+// строки byway шли бы после вывода дочерней программы.
+function sys(argv) {
+	fs.stdout?.flush();
+	return system(argv);
+}
 
 // Вывод и код выхода программы; stderr -- вместе с выводом, если err.
 function run(argv, err) {

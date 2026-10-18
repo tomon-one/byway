@@ -1,19 +1,8 @@
 # Перехват (nft, маршрут, dnsmasq, запрет «не пускать мимо VPN») -- в ucode
-# (uc/plumb.uc). Здесь замок и снятие по сигналу, имена, которые читают
-# сторож и проверки (service/*), и обёртки команд.
+# (uc/plumb.uc). Здесь замок и снятие по сигналу и обёртки команд.
 
-TABLE=byway
-RT_TABLE=100
-BLOCK_MARK=/tmp/byway-blocked
 # Умолчание пула IPv6 для конфига движка -- константа Xray (fakedns.go).
 POOL6_DEF="fc00::/18"
-
-# Образец ip rule по fwmark и таблице (сторож считает правила). Конец
-# закреплён: «lookup 100» совпадает и с «lookup 1000».
-rule_re() {
-    _rm=$(eff_mark)
-    printf 'fwmark %s(/%s)?[[:space:]]+lookup %s([[:space:]]|$)' "$_rm" "$_rm" "$RT_TABLE"
-}
 
 plumb_env() {
     BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR \
@@ -50,13 +39,6 @@ cmd_plumb() {
     rm -rf "$_plock" 2>/dev/null || true
     return "$_prc"
 }
-
-# Резолверы dnsmasq от byway (файл в каталоге добавок) через пробел; нет --
-# none. Сторож судит по ним, на нас ли DNS дома.
-dns_servers() { plumb_env bw_uc plumb servers 2>/dev/null || echo none; }
-
-# Снять запрет (сторож: служба выключена).
-block_off() { plumb_env bw_uc plumb unblock; }
 
 cmd_nft() { plumb_env bw_uc nft; }
 

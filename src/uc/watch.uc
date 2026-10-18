@@ -6,20 +6,6 @@
 const WT_LAST = '/tmp/byway-watch.last';
 // Сколько проверок подряд не нашлось движка; в tmpfs, после перезагрузки с 0.
 const WT_NOPID = '/tmp/byway-nopid';
-// Файлы проверки обновлений (update/update.sh -- те же, править парой до Ф7).
-const WT_UPMARK = '/tmp/byway-upcheck';
-const WT_UPOK = '/tmp/byway-upcheck-ok';
-const WT_UPFAIL = '/tmp/byway-upcheck-fail';
-const WT_NEWVER = '/tmp/byway-newver';
-const WT_RELNOTE = '/tmp/byway-relnote';
-const WT_AULOG = '/tmp/byway-autoupdate';
-const WT_PREVBIN = '/etc/byway/byway.prev';
-const WT_PREVSET = '/etc/byway/prev.tgz';
-const WT_AUTRY = '/etc/byway/.au-try';
-const WT_SEENF = '/etc/byway/.newver-seen';
-const WT_BINSUM = '/etc/byway/.binmd5';
-const WT_AUFAIL = '/etc/byway/.au-failed';
-
 // Состояние прогона: pid, tab, rul, rt, dm, fk, healed.
 let W = {};
 
@@ -105,7 +91,7 @@ function wt_xray_ok(f) {
 // ── прогон ────────────────────────────────────────────────────────────────
 // Копия одного скрипта от автообновления 0.2.4: нужна ей полчаса, потом лишняя.
 function wt_prevbin() {
-	if (fs.stat(WT_PREVBIN) && !wt_fresh(WT_PREVBIN, 60)) fs.unlink(WT_PREVBIN);
+	if (fs.stat(UP_PREVBIN) && !wt_fresh(UP_PREVBIN, 60)) fs.unlink(UP_PREVBIN);
 }
 
 // Возврат ядра, если файла движка нет. Повтор раз в 15 мин, в фоне: загрузка
@@ -238,76 +224,45 @@ function wt_lists() {
 	wt_reload();
 }
 
-// Последний выпуск на GitHub: [код, версия]; первая строка описания -- в
-// RELNOTE. Прокси-вход, напрямую, потом адреса GitHub из DoH. Любой ответ,
-// кроме «не дозвонились», окончателен (404 -- нет репозитория).
-function wt_latest() {
-	let px = u('local_proxy_port') || '1603';
-	let api = 'https://api.github.com/repos/' + getenv('BW_REPO') + '/releases/latest';
-	let code = '000', body = '';
-	for (let via in [ [ '--proxy', 'http://127.0.0.1:' + px ], [], null ]) {
-		if (via == null) {
-			via = nt_gh_resolve();
-			if (!length(via)) break;
-		}
-		let r = run([ 'curl', '-sSL', '--max-time', '25', '-A', 'Mozilla/5.0', ...via, '-w', '\n%{http_code}', api ]).out;
-		let i = rindex(r, '\n');
-		code = i >= 0 ? substr(r, i + 1) : r;
-		body = i >= 0 ? substr(r, 0, i) : '';
-		if (code != '000') break;
-	}
-	// В JSON перевод строки -- «\n» из двух знаков: обратная косая и есть
-	// граница первой строки описания.
-	let note = '', ver = '';
-	for (let l in split(body, '\n')) {
-		let m = match(l, /.*"body"[^"]*"([^"\\]*)/);
-		if (m && note === '') note = m[1];
-		let t = match(l, /.*"tag_name"[^"]*"v*([0-9][^"]*)"/);
-		if (t && ver === '') ver = t[1];
-	}
-	fs.writefile(WT_RELNOTE, note !== '' ? note + '\n' : '');
-	return [ code, ver ];
-}
-
 // Проверка новой версии, без установки: установка рвёт туннель в
 // невыбранный момент. Промежуток случайный, 12-36 ч: запрос к GitHub в одно
 // время суток выделялся бы в трафике. В UPMARK -- минуты до следующей
 // проверки, mtime -- время прошлой.
 function wt_upcheck() {
 	if (u('update_check') == '0') return;
-	let m = wt_read(WT_UPMARK);
+	let m = wt_read(UP_MARK);
 	if (m === '' || !_only(m, '0123456789')) m = '1440';
-	if (wt_fresh(WT_UPMARK, int(m))) return;
+	if (wt_fresh(UP_MARK, int(m))) return;
 	// Случайность из uuid ядра: od и hexdump есть не в каждом busybox.
 	let r = substr(trim(fs.readfile('/proc/sys/kernel/random/uuid') ?? ''), 0, 4);
 	if (r === '' || !_only(r, '0123456789abcdef')) r = '0';
-	fs.writefile(WT_UPMARK, (720 + hex(r) % 1441) + '\n');
-	let lv = wt_latest(), uc = lv[0], un = lv[1], num = getenv('BW_NUM');
+	fs.writefile(UP_MARK, (720 + hex(r) % 1441) + '\n');
+	let lv = up_latest(), uc = lv[0], un = lv[1], num = getenv('BW_NUM');
 	// Дошла ли проверка до GitHub: doctor иначе писал бы «новее не найдено» и
 	// про сутки без связи, и про отказ 403.
 	if (un !== '' && un != uc) {
-		fs.writefile(WT_UPOK, '');
-		fs.unlink(WT_UPFAIL);
+		fs.writefile(UP_OK, '');
+		fs.unlink(UP_FAIL);
 	} else {
-		fs.writefile(WT_UPFAIL, uc + '\n');
+		fs.writefile(UP_FAIL, uc + '\n');
 		// Нет связи -- повтор через час, а не через 12-36 ч.
-		if (uc == '000') fs.writefile(WT_UPMARK, '60\n');
+		if (uc == '000') fs.writefile(UP_MARK, '60\n');
 	}
 	if (un !== '' && un != uc && st_ver_gt(un, num)) {
-		if (wt_read(WT_NEWVER) != un) {
-			fs.writefile(WT_NEWVER, un + '\n');
+		if (wt_read(UP_NEWVER) != un) {
+			fs.writefile(UP_NEWVER, un + '\n');
 			// Дата первого обнаружения -- во флеш и один раз на номер: NEWVER
 			// после перезагрузки стёрт, и выдержка (3 суток) не копилась бы.
 			// Только при разумных часах: без батарейки роутер в 1970-м.
 			let y = int(trim(run([ 'date', '+%Y' ]).out));
-			if (substr(wt_read(WT_SEENF), 0, length(un) + 1) != un + ' ' && y >= 2020)
-				fs.writefile(WT_SEENF, un + ' ' + time() + '\n');
-			logf('новая версия byway %s (у вас %s): %s', un, num, wt_read(WT_RELNOTE));
+			if (substr(wt_read(UP_SEENF), 0, length(un) + 1) != un + ' ' && y >= 2020)
+				fs.writefile(UP_SEENF, un + ' ' + time() + '\n');
+			logf('новая версия byway %s (у вас %s): %s', un, num, wt_read(UP_RELNOTE));
 		}
 	} else if (un !== '') {
 		// Стираем, только когда ответ получен и новой версии нет: отказ связи
 		// не доказывает, что выпуска нет, и сбросил бы выдержку.
-		fs.unlink(WT_NEWVER);
+		fs.unlink(UP_NEWVER);
 	}
 }
 
@@ -316,23 +271,23 @@ function wt_upcheck() {
 // 12 раз. Повторы гасят AUTRY (раз в сутки) и AUFAIL (проваливавшийся номер
 // второй раз не ставим).
 function wt_au_install(au, y, h) {
-	if (au === '' || y < 2020 || h != dr_au_hour() || wt_read(WT_AUFAIL) == au || wt_fresh(WT_AUTRY, 1440)) return;
+	if (au === '' || y < 2020 || h != dr_au_hour() || wt_read(UP_AUFAIL) == au || wt_fresh(UP_AUTRY, 1440)) return;
 	let num = getenv('BW_NUM'), when = trim(run([ 'date', '+%Y-%m-%d %H:%M' ]).out);
-	fs.writefile(WT_AUTRY, '');
+	fs.writefile(UP_AUTRY, '');
 	logf('автообновление: установка %s (было %s)', au, num);
 	let rc = wt_byway('update', '--to', au).code;
 	if (rc == 0) {
-		fs.writefile(WT_AULOG, _f('обновлено до %s, %s\n', au, when));
+		fs.writefile(UP_AULOG, _f('обновлено до %s, %s\n', au, when));
 		logf('автообновление: %s поднялось', au);
-		fs.unlink(WT_NEWVER);
+		fs.unlink(UP_NEWVER);
 	} else if (rc == 3) {
-		fs.writefile(WT_AUFAIL, au + '\n');
-		fs.writefile(WT_AULOG, _f('ОТКАТ с %s на %s, %s\n', au, num, when));
+		fs.writefile(UP_AUFAIL, au + '\n');
+		fs.writefile(UP_AULOG, _f('ОТКАТ с %s на %s, %s\n', au, num, when));
 		logf('автообновление: %s не поднялось -- откат на %s', au, num);
 	} else if (rc == 4) {
-		fs.writefile(WT_AUFAIL, au + '\n');
-		fs.writefile(WT_AULOG, _f('ОТКАТ НЕ УДАЛСЯ: на диске %s, копия в %s\n', au, WT_PREVSET));
-		logf('автообновление: ОТКАТ НЕ УДАЛСЯ -- копия в %s, вернуть: byway update --rollback', WT_PREVSET);
+		fs.writefile(UP_AUFAIL, au + '\n');
+		fs.writefile(UP_AULOG, _f('ОТКАТ НЕ УДАЛСЯ: на диске %s, копия в %s\n', au, UP_PREVSET));
+		logf('автообновление: ОТКАТ НЕ УДАЛСЯ -- копия в %s, вернуть: byway update --rollback', UP_PREVSET);
 	} else if (rc == 5) {
 		logf('автообновление: копия для отката не сделалась -- установка ОТМЕНЕНА (место на /overlay?)');
 	} else if (rc == 6) {
@@ -344,15 +299,15 @@ function wt_au_install(au, y, h) {
 
 // Ночная установка по настройке auto_update (выключено по умолчанию).
 function wt_autoupdate() {
-	let num = getenv('BW_NUM'), au = wt_read(WT_NEWVER);
+	let num = getenv('BW_NUM'), au = wt_read(UP_NEWVER);
 	if (u('auto_update') != '1' || au === '' || !st_ver_gt(au, num)) return;
-	let note = wt_read(WT_RELNOTE);
+	let note = wt_read(UP_RELNOTE);
 	let y = int(trim(run([ 'date', '+%Y' ]).out)), h = trim(run([ 'date', '+%H' ]).out);
 	// Выдержка: не раньше трёх суток после первого обнаружения; метка
 	// важности снимает. Возраст -- по записанной дате, не по mtime: ntpd
 	// переводит часы скачком после старта.
 	let bake = !(substr(note, 0, 5) == 'ВАЖНО' || substr(note, 0, 8) == 'CRITICAL' || substr(note, 0, 1) == '!');
-	let age = 0, sv = wt_read(WT_SEENF);
+	let age = 0, sv = wt_read(UP_SEENF);
 	if (substr(sv, 0, length(au) + 1) == au + ' ') {
 		let st = substr(sv, length(au) + 1);
 		st = (st !== '' && _only(st, '0123456789')) ? int(st) : 0;
@@ -364,8 +319,8 @@ function wt_autoupdate() {
 	if (au !== '' && minor(au) != minor(num)) au = '';
 	// Правленое руками не трогаем; суммы нет -- версия неизвестна.
 	if (au !== '') {
-		if (fs.stat(WT_BINSUM)) {
-			if (split(run([ 'md5sum', '/usr/local/bin/byway' ]).out, ' ')[0] != wt_read(WT_BINSUM)) {
+		if (fs.stat(UP_BINSUM)) {
+			if (split(run([ 'md5sum', '/usr/local/bin/byway' ]).out, ' ')[0] != wt_read(UP_BINSUM)) {
 				logt('автообновление: byway правлен руками -- не трогается');
 				au = '';
 			}

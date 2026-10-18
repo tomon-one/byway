@@ -36,6 +36,11 @@ const CMDS = {
 	nftblock: cmd_nftblock,
 	selfmark: cmd_selfmark,
 	watch: cmd_watch,
+	lang: cmd_lang,
+	update: cmd_update,
+	engine: cmd_engine,
+	'engine-ram': cmd_engine_ram,
+	menu: cmd_menu,
 	pulse: cmd_pulse,
 };
 
