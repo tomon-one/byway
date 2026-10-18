@@ -20,8 +20,8 @@
 
 Что нужно знать о коде:
 
-- **POSIX sh под busybox ash**, без bash-измов: `[[ ]]`, массивы, `echo -e` не годятся. Проверка синтаксиса — `sh -n`.
-- **Код — в `src/`**: каталог на область (`core`, `keys` — разбор ключей, `config` — конфиг Xray, `lists`, `plumb` — перехват, `service` — сторож и состояние, `diag`, `update` — обновление и ядро, `data`, `ui`), файл на тему; разборщик ключей — `keys/parse.uc` на ucode. Файл `byway` собирается командой `sh src/build.sh` в порядке `src/ORDER` — правьте `src/`, а не `byway`, и коммитьте оба.
+- **Две части в одном файле.** Обёртка — POSIX sh под busybox ash (замки, ловушки сигналов, пути), без bash-измов: `[[ ]]`, массивы, `echo -e` не годятся; проверка — `sh -n`. Остальное — ucode в `src/uc/`, файл на тему (`keys.uc` — разбор ключей, `gen.uc` — конфиг Xray, `plumb.uc` — перехват, `watch.uc` — сторож и т. д.). Только модули `fs` и `uci`: на OpenWrt 22.03 других нет. Функции — верхнего уровня: вложенная функция, трогающая локальные переменные объемлющей, на ucode 22.03 и 23.05 роняет программу. Функция видит только то, что объявлено выше неё в порядке `src/uc/ORDER`, и ошибка всплывает лишь при вызове.
+- **Код — в `src/`**: shell — каталог на область (`core`, `config`, `lists`, `plumb`, `service`, `diag`, `update`, `data`, `ui`), ucode — `src/uc/`. Файл `byway` собирается командой `sh src/build.sh` в порядке `src/ORDER` и `src/uc/ORDER` — правьте `src/`, а не `byway`, и коммитьте оба.
 - **Всё, что видит человек, переводится.** Русская строка в коде — ключ,
   английский перевод лежит отдельно:
   - `byway` — в `lang/en.tsv`: русская строка целиком, табуляция, перевод;
@@ -65,14 +65,20 @@ way. Typos and text fixes can go straight to a pull request.
 
 What to know about the code:
 
-- **POSIX sh under busybox ash**, no bashisms: `[[ ]]`, arrays, `echo -e` will
-  not do. Check syntax with `sh -n`.
-- **The code lives in `src/`**: a directory per area (`core`, `keys` — key
-  parsing, `config` — the Xray config, `lists`, `plumb` — interception,
-  `service` — watchdog and status, `diag`, `update` — updates and the engine,
-  `data`, `ui`), a file per topic; the key parser is `keys/parse.uc` in ucode.
-  `byway` is built with `sh src/build.sh` in the order of `src/ORDER` — edit
-  `src/`, not `byway`, and commit both.
+- **Two parts in one file.** The wrapper is POSIX sh under busybox ash
+  (locks, signal traps, paths), no bashisms: `[[ ]]`, arrays, `echo -e` will
+  not do; check with `sh -n`. The rest is ucode in `src/uc/`, a file per topic
+  (`keys.uc` — key parsing, `gen.uc` — the Xray config, `plumb.uc` —
+  interception, `watch.uc` — the watchdog, and so on). Only the `fs` and `uci`
+  modules: OpenWrt 22.03 has no others. Functions stay at the top level: a
+  nested function that touches the enclosing function's locals crashes the
+  program on ucode from 22.03 and 23.05. A function sees only what is declared
+  above it in the order of `src/uc/ORDER`, and the error shows up only when
+  the call runs.
+- **The code lives in `src/`**: shell — a directory per area (`core`,
+  `config`, `lists`, `plumb`, `service`, `diag`, `update`, `data`, `ui`),
+  ucode — `src/uc/`. `byway` is built with `sh src/build.sh` in the order of
+  `src/ORDER` and `src/uc/ORDER` — edit `src/`, not `byway`, and commit both.
 - **Everything a person sees is translated.** The Russian string in the code is
   the key, the English translation lives separately:
   - `byway` — in `lang/en.tsv`: the whole Russian string, a tab, the

@@ -79,8 +79,9 @@ If you want the full toolbox, there are
 [OpenClash](https://github.com/vernesong/OpenClash): they do more and weigh
 accordingly.
 
-**What it is, technically.** Neither a package nor a binary: a set of POSIX sh
-scripts plus a LuCI panel. Xray-core carries the traffic, while byway decides
+**What it is, technically.** Neither a package nor a binary: one program file —
+a POSIX sh wrapper and the main part in ucode, the language OpenWrt has had
+since 22.03 — plus a LuCI panel. Xray-core carries the traffic, while byway decides
 what goes where, builds the engine's config, installs the firewall rules and
 makes sure they stay in place. byway itself encrypts nothing and sends no
 traffic anywhere. It goes online only for lists and updates, and once every

@@ -488,12 +488,13 @@ list`. To turn it on:
 uci set byway.main.router_via_vpn=1 && uci commit byway && /etc/init.d/byway reload
 ```
 
-Reloading the rules is not enough here: the setting adds an inbound for the
-router's traffic to the engine config, and reload rebuilds it and restarts
-the service.
+Reloading the rules is not enough here: the setting changes both the nft
+rules and the engine config (the mark on its connections), and reload
+rebuilds the config and restarts the service.
 
-Only TCP to placeholder addresses is redirected, that is, to list domains;
-subnets do not apply to programs on the router. byway downloads through its
+TCP and UDP to list domains go into the tunnel, and, when the engine does not
+run as root, to the list's subnets as well. VPN server addresses go past, even
+if they ended up in the subnets. byway downloads through its
 proxy inbound `127.0.0.1:1603` and does not depend on the setting. A one-off
 download can go the same way: `curl --proxy http://127.0.0.1:1603 …`.
 
@@ -525,9 +526,11 @@ If IPv6 is on but the kernel has no rule for it, doctor suggests
 
 byway takes the nft table `inet byway` (plus `inet byway_block` while "Block"
 is in effect), the mark `0x100000` (`mark`), the engine's own connection
-mark `0x400000` (`self_mark`), routing table 100, ports 1602–1604 and the
-pool `198.18.0.0/15`. It points dnsmasq at its own resolver and removes the
-other upstream servers. A service of the same kind (podkop, passwall,
+mark `0x400000` (`self_mark`), routing table 100, ports 1602–1603 and the
+pool `198.18.0.0/15`. It points dnsmasq at its own resolver with a
+`byway-dns.conf` file in the drop-in directory (`no-resolv`: other upstream
+servers are off); general servers set in the dnsmasq settings it leaves
+alone and warns about. A service of the same kind (podkop, passwall,
 OpenClash and the like) does the same with its own values. Two of them side
 by side do not mean slowness, they mean traffic going the wrong way.
 
@@ -542,7 +545,8 @@ route in table 100 and extra `ip rule` entries for it.
 
 doctor names pbr when it is enabled; zapret and your own scripts it does not. Check by
 hand: `nft list tables`, `ip rule show`, `ip route show table 100`,
-`uci get dhcp.@dnsmasq[0].server`, `uci show firewall | grep mark`.
+`cat /tmp/dnsmasq*.d/byway-dns.conf`, `uci get dhcp.@dnsmasq[0].server`,
+`uci show firewall | grep mark`.
 
 While byway runs, table 100 should hold only `local default dev lo`; byway
 warns about foreign routes there when it loads its rules. The mark, ports
