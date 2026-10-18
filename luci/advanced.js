@@ -48,8 +48,7 @@ return view.extend({
 				if (r.code !== 0)
 					ui.addNotification(null, [
 						E('p', {}, _('Словарь не установлен — язык остался прежним.')),
-						E('pre', { 'style': 'white-space:pre-wrap' },
-							[ bwui.plain((r.stdout || '') + (r.stderr || '')) ])
+						bwui.pretty(bwui.plain((r.stdout || '') + (r.stderr || '')))
 					], 'error');
 				else
 					location.reload();

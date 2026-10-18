@@ -167,11 +167,10 @@ return view.extend({
 			   полосой, и на странице появляется прямоугольник ниоткуда.
 			   Именно display, а не атрибут hidden: тема задаёт <pre> свой
 			   display и в этой борьбе побеждает. */
-			var out = E('pre', {
-				'style': 'white-space:pre-wrap;margin:.6em 0 0;font-size:90%;display:none'
-			}, '');
+			var out = E('div', { 'style': 'margin:.6em 0 0;display:none' });
 			function show(text) {
-				out.textContent = text || '';
+				out.innerHTML = '';
+				if (text) out.appendChild(bwui.pretty(text));
 				out.style.display = text ? 'block' : 'none';
 			}
 			return E('div', {}, [
@@ -325,7 +324,7 @@ return view.extend({
 					ui.hideModal();
 					ui.addNotification(null, [
 						E('p', {}, _('Не применилось — работает прежняя настройка.')),
-						E('pre', { 'style': 'white-space:pre-wrap' }, [ out ])
+						bwui.pretty(out)
 					], 'error');
 					return;
 				}
@@ -345,7 +344,7 @@ return view.extend({
 				if (warns.trim())
 					ui.addNotification(null, [
 						E('p', {}, _('Применено, но byway есть что сказать:')),
-						E('pre', { 'style': 'white-space:pre-wrap' }, [ warns.trim() ])
+						bwui.pretty(warns.trim())
 					], 'warning');
 				else
 					ui.addNotification(null, E('p', {}, _('Применено')), 'info');

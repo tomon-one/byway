@@ -63,6 +63,111 @@ return baseclass.extend({
 	   в браузере это мусор вида [1;32m. */
 	plain: function (s) { return (s || '').replace(/\x1b\[[0-9;]*m/g, ''); },
 
+	/* Вывод byway для человека (владелец 2026-10-18: «разбросано, выделить
+	   итог цветом, компактнее»). Метки [ ok ] [ ?? ] [ !! ] (doctor) и [*] [!]
+	   [x] -- цветным значком; «== конец» задачи и пустые строки подряд --
+	   прочь; итог пробы -- цветом, проба по ключам -- таблицей. Текст тот же,
+	   что в консоли: копируется как есть. mono -- колонки (сводка, журнал,
+	   статистика): моноширинный и без переноса. */
+	pretty: function (text, mono) {
+		var self = this;
+		var lines = this.plain(text).replace(/\s+$/, '').split('\n')
+			.filter(function (l) { return !/^== \S+$/.test(l.trim()); });
+		var keep = [], blank = false;
+		lines.forEach(function (l) {
+			if (!l.trim()) { if (!blank && keep.length) keep.push(''); blank = true; }
+			else { keep.push(l); blank = false; }
+		});
+		var box = E('div', { 'style': 'font-size:90%;line-height:1.5;' +
+			(mono ? 'font-family:monospace;white-space:pre' : 'white-space:pre-wrap') });
+		var probe = this.probeTable(keep);
+		if (probe) { box.appendChild(probe.table); keep = probe.rest; }
+		keep.forEach(function (l) { box.appendChild(self.line(l, mono)); });
+		return box;
+	},
+
+	/* Одна строка: значок вместо метки, слова итога -- цветом. */
+	line: function (l, mono) {
+		var C = { ok: '#2a2', warn: '#d80', bad: '#c00' };
+		if (!l.trim()) return E('div', { 'style': 'height:.6em' });
+		if (!mono) {
+			/* Заголовок раздела (doctor): строка без отступа и без метки. */
+			if (/^\S/.test(l) && !/^\[/.test(l))
+				return E('div', { 'style': 'font-weight:bold;margin-top:.2em' }, l);
+			/* Подсказка к неисправности -- глубокий отступ без метки. */
+			if (/^ {5,}\S/.test(l))
+				return E('div', { 'style': 'opacity:.75;padding-left:2.6em;font-size:95%' }, l.trim());
+		}
+		var m = l.match(/^(\s*)\[\s*(ok|\?\?|!!|\*|!|x)\s*\]\s?(.*)$/);
+		var ind = '', body = l, mark = null;
+		if (m) {
+			ind = m[1]; body = m[3];
+			mark = { 'ok': [ '✓', C.ok ], '??': [ '!', C.warn ], '!': [ '!', C.warn ],
+			         '!!': [ '✗', C.bad ], 'x': [ '✗', C.bad ] }[m[2]] || null;
+		}
+		var row = E('div', {}, ind);
+		if (mark)
+			row.appendChild(E('span', { 'style': 'color:' + mark[1] + ';font-weight:bold;display:inline-block;width:1.3em' }, mark[0]));
+		var sum = body.match(/(\d+)\D+?(\d+)/);
+		if (/^(работают|\d+ of \d+ work)/.test(body) && sum) {
+			var a = +sum[1], b = +sum[2];
+			row.appendChild(E('span', { 'style': 'font-weight:bold;color:' +
+				(a === b ? C.ok : a ? C.warn : C.bad) }, body));
+		} else if (m && m[2] === '!!' || m && m[2] === 'x') {
+			row.appendChild(E('span', { 'style': 'color:' + C.bad }, body));
+		} else if (m && m[2] === '!') {
+			row.appendChild(E('span', { 'style': 'color:' + C.warn }, body));
+		} else if (/^(окружение в порядке|the environment is fine)$/.test(body)) {
+			row.appendChild(E('span', { 'style': 'font-weight:bold;color:' + C.ok }, body));
+		} else {
+			row.appendChild(document.createTextNode(body));
+		}
+		return row;
+	},
+
+	/* Проба ключей (byway probe, --all): строки «  транспорт  сервер:порт
+	   итог» под заголовками «[*] ключ N имя» -- таблицей. Нет таких строк --
+	   null. rest -- что осталось для построчного вывода. */
+	probeTable: function (lines) {
+		var C = { ok: '#2a2', bad: '#c00' };
+		var rows = [], rest = [], name = '', cur = null;
+		var OK = /^(РАБОТАЕТ|WORKS)\s+(выход|exit)\s+(\S+)\s+([\d.]+)\s*(\S*)/;
+		lines.forEach(function (l) {
+			var h = l.match(/^\[\*\]\s+(ключ|key)\s+\d+\s*(.*)$/);
+			if (h) { name = h[2]; return; }
+			var d = l.match(/^  (\S+)\s+(\S+:\d+)\s+(\S.*)$/);
+			if (d) {
+				var ok = d[3].match(OK);
+				cur = { name: name, tr: d[1], srv: d[2], ok: !!ok,
+				        st: ok ? ok[1] : d[3].trim(), ip: ok ? ok[3] : '',
+				        t: ok ? (+ok[4]).toFixed(2) + ' ' + ok[5] : '', more: [] };
+				rows.push(cur); name = '';
+				return;
+			}
+			if (cur && /^      \S/.test(l)) { cur.more.push(l.trim()); return; }
+			if (l.trim() || rest.length) rest.push(l);
+		});
+		if (!rows.length) return null;
+		var td = 'padding:.15em 1em .15em 0;vertical-align:top';
+		var table = E('table', { 'style': 'border-collapse:collapse;margin-bottom:.4em' },
+			rows.map(function (r) {
+				return E('tr', {}, [
+					E('td', { 'style': td + ';color:' + (r.ok ? C.ok : C.bad) + ';font-weight:bold' }, r.ok ? '✓' : '✗'),
+					E('td', { 'style': td }, r.name || '—'),
+					E('td', { 'style': td + ';opacity:.7' }, r.tr),
+					E('td', { 'style': td + ';opacity:.7' }, r.srv),
+					E('td', { 'style': td + ';color:' + (r.ok ? C.ok : C.bad), 'title': r.ip }, [
+						r.st,
+						r.more.length ? E('div', { 'style': 'color:inherit;opacity:.75;font-size:90%;white-space:pre-wrap' }, r.more.join('\n')) : ''
+					]),
+					E('td', { 'style': td + ';opacity:.7;white-space:nowrap' }, r.t)
+				]);
+			}));
+		/* пустые строки между ключами больше не нужны */
+		while (rest.length && !rest[0].trim()) rest.shift();
+		return { table: table, rest: rest };
+	},
+
 	run: function (args) {
 		var self = this;
 		return fs.exec(BYWAY, args).then(function (r) {
@@ -99,12 +204,9 @@ return baseclass.extend({
 	   странице появлялся прямоугольник ниоткуда -- под «Ответ» в импорте и
 	   обновлении, где до первого нажатия сказать нечего. */
 	output: function (text) {
-		var pre = E('pre', {
-			'style': 'white-space:pre-wrap;font-size:90%;margin:0'
-		}, [ text || '' ]);
 		var box = E('div', {
 			'class': 'byway-out', 'style': 'max-width:100%'
-		}, pre);
+		}, [ this.pretty(text || '') ]);
 		if (!text) box.style.display = 'none';
 		return box;
 	},
@@ -113,12 +215,9 @@ return baseclass.extend({
 	   прокрутка. На телефоне таблица «чем пользуются» иначе переносилась по
 	   пробелам, и колонки переставали быть колонками. */
 	table: function (text) {
-		var pre = E('pre', {
-			'style': 'white-space:pre;font-size:90%;margin:0'
-		}, [ text || '' ]);
 		var box = E('div', {
-			'class': 'byway-out', 'style': 'overflow-x:auto;max-width:100%'
-		}, pre);
+			'class': 'byway-out', 'data-mono': '1', 'style': 'overflow-x:auto;max-width:100%'
+		}, [ this.pretty(text || '', true) ]);
 		if (!text) box.style.display = 'none';
 		return box;
 	},
@@ -200,7 +299,7 @@ return baseclass.extend({
 			if (r.code !== 0) {
 				ui.addNotification(null, [
 					E('p', {}, [ failText ]),
-					E('pre', { 'style': 'white-space:pre-wrap' }, [ out ])
+					self.pretty(out)
 				], 'error');
 				return;
 			}
@@ -213,7 +312,7 @@ return baseclass.extend({
 			if (warns.trim())
 				ui.addNotification(null, [
 					E('p', {}, _('Применено, но byway есть что сказать:')),
-					E('pre', { 'style': 'white-space:pre-wrap' }, [ warns.trim() ])
+					self.pretty(warns.trim())
 				], 'warning');
 			else
 				ui.addNotification(null, E('p', {}, _('Применено')), 'info');
@@ -225,7 +324,8 @@ return baseclass.extend({
 	},
 
 	say: function (box, text) {
-		box.firstChild.textContent = text || '';
+		box.innerHTML = '';
+		box.appendChild(this.pretty(text || '', box.getAttribute('data-mono') === '1'));
 		box.style.display = text ? '' : 'none';
 		var row = this.row(box);
 		if (row) row.style.display = text ? '' : 'none';

@@ -86,7 +86,7 @@ return view.extend({
 		o.cfgvalue = function () { return bwui.table(data[1] || ''); };
 
 		/* doctor и report укладываются в секунды -- прямым вызовом. */
-		var diagMsg = bwui.table('');
+		var diagMsg = bwui.output('');
 		o = ss.option(form.Button, '_doctor', _('Проверка окружения'));
 		o.inputstyle = 'action';
 		o.inputtitle = _('Проверить окружение');
