@@ -152,7 +152,7 @@ function parse_key(URL, prev_sni, prev_wshost) {
 		    PBK: '', SID: '', FLOW: '', MODE: '', ALPN: '',
 		    HDR: '', SEED: '', SVC: '', AUTH: '', SPX: '', PQV: '',
 		    ENC: '', QSEC: '', QKEY: '', EXTRA: '', INSEC: '',
-		    OBFS: '', OBFSPW: '', PIN: '', VCN: '',
+		    OBFS: '', OBFSPW: '', HOP: '', PIN: '', VCN: '',
 		    WGKEY: '', WGPUB: '', WGPSK: '', WGADDR: '', WGMTU: '', WGRES: '', WGKA: ''
 		};
 		// sni и host ss не задаёт: в sh остаются прежние, их и проверяем.
@@ -324,11 +324,12 @@ function parse_key(URL, prev_sni, prev_wshost) {
 		    // QUIC нет uTLS-отпечатка.
 		    PK_N.TYPE = 'hysteria'; PK_N.SEC = 'tls'; PK_N.FP = '';
 		    if (PK_N.ALPN == '') PK_N.ALPN = 'h3';
-		    // Диапазон портов Xray-core через hysteriaSettings не берёт.
+		    // Смена портов: диапазон прямо в порту (host:443,20000-30000) или
+		    // mport=. Соединение открывается на первый порт, дальше Xray-core
+		    // меняет его маской udphop (uc/outbound.uc).
 		    if (match(PK_N.PORT, /[,-]/)) {
-		        let p1 = match(PK_N.PORT, /^[^,-]*/)[0];
-		        pk_warnf("диапазон портов в ключе не переносится: соединение идёт на порт %s", p1);
-		        PK_N.PORT = p1;
+		        PK_N.HOP = PK_N.PORT;
+		        PK_N.PORT = match(PK_N.PORT, /^[^,-]*/)[0];
 		    }
 		    v = pk_qp('obfs');
 		    if (v == 'salamander') {
@@ -338,8 +339,20 @@ function parse_key(URL, prev_sni, prev_wshost) {
 		    else if (v != '' && v != 'none') {
 		        pk_flush(); pk_dief("obfs=%s у hysteria2 не поддержан: в Xray-core есть только salamander", v);
 		    }
-		    if (pk_qp('mport') != '')
-		        pk_warn("mport (смена портов) не переносится: соединение идёт на основной порт из ключа");
+		    if (pk_qp('mport') != '') PK_N.HOP = pk_qp('mport');
+		    // Только числа и диапазоны через запятую, порты 1..65535, начало не
+		    // больше конца: строка идёт в конфиг ядра.
+		    if (PK_N.HOP != '') {
+		        let okh = match(PK_N.HOP, /^[0-9]{1,5}(-[0-9]{1,5})?(,[0-9]{1,5}(-[0-9]{1,5})?)*$/) != null;
+		        for (let r in split(PK_N.HOP, ',')) {
+		            let a = split(r, '-'), lo = int(a[0]), hi = int(a[1] ?? a[0]);
+		            if (lo < 1 || hi > 65535 || lo > hi) okh = false;
+		        }
+		        if (!okh) {
+		            pk_warnf("смена портов «%s» не похожа на список портов и пропущена — соединение идёт на основной порт", PK_N.HOP);
+		            PK_N.HOP = '';
+		        }
+		    }
 		}
 
 		if (PK_N.PROTO == 'wireguard') {

@@ -125,10 +125,11 @@ other. For `insecure` and `pinSHA256` see "Security".
 Hysteria2 always runs over TLS, and `security` in the link is ignored. `fp` is
 not written: QUIC has no TLS client fingerprint.
 
-There is no port hopping. Neither `mport=` nor a range in the port
-(`host:443,20000-30000`, `host:20000-30000`) is accepted by the hysteria
-settings in Xray-core. byway warns and connects to the first port, so the
-server has to listen on it as well.
+Port hopping is carried over — both a range right in the port
+(`host:443,20000-30000`, `host:20000-30000`) and the `mport=20000-30000`
+parameter. The server port is picked from the list at random and changes every
+30 seconds, as the hysteria2 client does. It needs Xray-core 26.9.30 or newer;
+on an older core byway warns and connects to the main port only.
 
 ### WireGuard
 
@@ -160,8 +161,8 @@ interface is needed. It has no transport and no TLS.
 `tuic://` and first-version `hysteria://` do not exist in Xray-core; byway
 answers "is not in Xray-core; the closest thing there is hysteria2". HTTP(S)
 proxies have no link format, and byway does not parse MASQUE or XDRIVE links:
-all of these connect through "Custom config". Hysteria2 port hopping and
-Shadowsocks plugins are not carried over (see above). Any other scheme gets
+all of these connect through "Custom config". Shadowsocks plugins are not
+carried over (see above). Any other scheme gets
 "unknown link type".
 
 ## Link parameters

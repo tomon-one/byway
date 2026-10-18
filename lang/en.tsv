@@ -589,7 +589,6 @@ engine [ВЕРСИЯ|tested|newest|stable|restore|/tmp/ФАЙЛ]	engine [VERSION
 %s в Xray-core нет; из похожего есть hysteria2	%s is not in Xray-core; the closest thing there is hysteria2
 obfs=salamander без obfs-password: пароль обфускации обязателен	obfs=salamander without obfs-password: the obfuscation password is required
 obfs=%s у hysteria2 не поддержан: в Xray-core есть только salamander	obfs=%s is not supported for hysteria2: Xray-core has only salamander
-mport (смена портов) не переносится: соединение идёт на основной порт из ключа	mport (port hopping) is not carried over: the connection goes to the main port from the key
 в ключе wireguard нет закрытого ключа либо он не той формы (base64 на 44 знака либо 64 шестнадцатеричных)	the wireguard key has no private key, or it has the wrong form (44 base64 characters or 64 hex digits)
 в ключе wireguard нет публичного ключа сервера (publickey) либо он не той формы	the wireguard key has no server public key (publickey), or it has the wrong form
 presharedkey в ключе wireguard не той формы	presharedkey in the wireguard key has the wrong form
@@ -611,7 +610,6 @@ obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а 
 проверка сертификата по отпечатку (pcs, vcn) нужна Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested	certificate checks by fingerprint (pcs, vcn) need Xray-core 26.3.27 or newer, and %s is installed — update: byway engine tested
 mux к wireguard не применяется: у него нет потока, который можно делить	mux does not apply to wireguard: it has no stream to split
 в поле «%s» ссылки управляющий знак (перевод строки, табуляция): такая ссылка подменяет поля конфига	the «%s» field of the link has a control character (newline, tab): such a link overrides config fields
-диапазон портов в ключе не переносится: соединение идёт на порт %s	the port range in the key is not carried over: the connection goes to port %s
 scy=%s у vmess Xray-core не знает: есть auto, aes-128-gcm, chacha20-poly1305, none, zero	Xray-core does not know scy=%s for vmess: there are auto, aes-128-gcm, chacha20-poly1305, none, zero
 plugin у shadowsocks не переносится: Xray-core плагины не запускает, сервер с плагином не ответит	the shadowsocks plugin is not carried over: Xray-core does not run plugins, and a server with a plugin will not answer
 не отвечает	not responding
@@ -658,7 +656,6 @@ xmux не ограничивает соединения: ядро собрано
 в %s нет ядра xray — нужен .gz с бинарником или .zip выпуска	%s holds no xray core — a .gz with the binary or a release .zip is needed
 своя сборка: %s, sha256 ядра %s	custom build: %s, core sha256 %s
 при сбое сервера xhttp открывает сотни соединений: память роутера, риск блокировки адреса. Ядро с -tags http2legacy либо на x/net v0.60.0+: docs/engine.md, «Ядро на Go 1.27»	when the server fails, xhttp opens hundreds of connections: router memory, risk of the address being blocked. A core built with -tags http2legacy or x/net v0.60.0+: docs/engine.en.md, "Engine built with Go 1.27"
-ключ не разобрался: сбой разборщика (ucode)	the key could not be parsed: the parser (ucode) failed
 есть ucode (разбор ключей)	ucode is present (key parsing)
 движок работает от root	the engine runs as root
 движок работает не от root (пользователь byway)	the engine runs as a non-root user (byway)
@@ -779,3 +776,5 @@ byway: неизвестная команда «%s». Список: byway	byway: 
 черновик конфига %s не записан: %s	the config draft %s was not written: %s
 конфиг не перенесён на место: %s	the config was not moved into place: %s
 настройки не записаны в UCI: %s	settings were not written to UCI: %s
+смена портов «%s» не похожа на список портов и пропущена — соединение идёт на основной порт	the port hopping «%s» does not look like a list of ports and is skipped — connecting to the main port
+смена портов hysteria2 нужна Xray-core 26.9.30 или новее, а стоит %s — соединение идёт только на порт %s; обновить: byway engine tested	hysteria2 port hopping needs Xray-core 26.9.30 or newer, but %s is installed — connecting to port %s only; to update: byway engine tested

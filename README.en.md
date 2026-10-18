@@ -145,9 +145,7 @@ Worth knowing before installing, not after.
   > exactly here.
 
 - **No `tuic` or first-version `hysteria` keys** — they are not in Xray-core
-  itself. Port hopping of `hysteria2` is not carried over (neither the `mport`
-  parameter nor a range right in the port): the connection goes to the main or
-  first port.
+  itself.
 - **One engine — Xray-core, and no second one is planned.** byway itself
   really does not depend on the engine, but sing-box supports neither the
   `xhttp` nor the `kcp` transport, keeps no access log for byway to count usage

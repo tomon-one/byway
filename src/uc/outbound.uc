@@ -114,12 +114,24 @@ function ob_transport(N) {
 		if (xv < 260327)
 			ob_dief('hysteria2 нужен Xray-core 26.3.27 или новее, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
 		ob_warn('hysteria2 идёт поверх QUIC (UDP), а в РФ его ограничивают первым делом');
-		let s = { network: 'hysteria', hysteriaSettings: { version: 2, auth: N.PASS } };
+		let s = { network: 'hysteria', hysteriaSettings: { version: 2, auth: N.PASS } }, masks = [];
+		// Смена портов, как у клиента hysteria2: порт сервера меняется раз в
+		// 30 с. udphop сам открывает соединение и обязан стоять ПЕРВЫМ
+		// (иначе ядро отвергает конфиг: «incorrect index»). Маска есть в
+		// исходниках 26.9.30 (раньше -- quicParams.udpHop, новые ядра его
+		// молча игнорируют); старое ядро -- основной порт.
+		if (N.HOP) {
+			if (xv < 260930)
+				ob_warnf('смена портов hysteria2 нужна Xray-core 26.9.30 или новее, а стоит %s — соединение идёт только на порт %s; обновить: byway engine tested', ob_xrayv(2), N.PORT);
+			else
+				push(masks, { type: 'udphop', settings: { mode: 'intervalRemote', remotePorts: N.HOP } });
+		}
 		if (N.OBFS != '') {
 			if (xv < 260711)
 				ob_dief('obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а стоит %s — обновить: byway engine tested', ob_xrayv(2));
-			s.finalmask = { udp: [ { type: 'salamander', settings: { password: N.OBFSPW } } ] };
+			push(masks, { type: 'salamander', settings: { password: N.OBFSPW } });
 		}
+		if (length(masks)) s.finalmask = { udp: masks };
 		return s;
 	}
 	// У wireguard транспорта нет; в streamSettings остаётся метка.
