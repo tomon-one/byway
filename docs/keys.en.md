@@ -30,13 +30,13 @@ address in the key is not supported: … — use IPv4 or a name".
 
 | type | scheme | requires |
 |---|---|---|
-| VLESS | `vless://` | — |
-| Trojan | `trojan://` | — |
-| VMess | `vmess://` | — |
-| Shadowsocks | `ss://` | — |
-| SOCKS5 | `socks://` | — |
-| Hysteria2 | `hysteria2://`, `hy2://` | Xray-core 26.3.27 or newer |
-| WireGuard | `wireguard://`, `wg://` | — |
+| [VLESS](https://xtls.github.io/en/config/outbounds/vless.html) | `vless://` | — |
+| [Trojan](https://xtls.github.io/en/config/outbounds/trojan.html) | `trojan://` | — |
+| [VMess](https://xtls.github.io/en/config/outbounds/vmess.html) | `vmess://` | — |
+| [Shadowsocks](https://xtls.github.io/en/config/outbounds/shadowsocks.html) | `ss://` | — |
+| [SOCKS5](https://xtls.github.io/en/config/outbounds/socks.html) | `socks://` | — |
+| [Hysteria2](https://xtls.github.io/en/config/outbounds/hysteria.html) | `hysteria2://`, `hy2://` | Xray-core 26.3.27 or newer |
+| [WireGuard](https://xtls.github.io/en/config/outbounds/wireguard.html) | `wireguard://`, `wg://` | — |
 
 BusyBox on OpenWrt usually has no base64; byway decodes base64 itself, no
 extra package is needed.
@@ -138,8 +138,8 @@ wireguard://AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA%3D@example.com:51820?pub
 wg://example.com:51820?pk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA%3D&peer_pk=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB%3D&local_address=10.7.0.2%2F32&keepalive=25#Name
 ```
 
-The first form (as v2rayN writes it) has the private key before the `@`. The
-second (as Hiddify writes it) has everything in parameters. Both are parsed.
+The first form (as [v2rayN](https://github.com/2dust/v2rayN) writes it) has the private key before the `@`. The
+second (as [Hiddify](https://github.com/hiddify/hiddify-app) writes it) has everything in parameters. Both are parsed.
 
 | field | names in the link | required | format |
 |---|---|---|---|
@@ -207,12 +207,12 @@ and the braces and quotes `%7B %7D %22 %5B %5D` are decoded in it.
 
 | `type` | what goes into the config | engine below 1.8.24 |
 |---|---|---|
-| `tcp`, `raw` | `network: tcp`; with `headerType=http`, HTTP camouflage with `path` and `host` | — |
-| `ws` | path and Host | Host written in the old form, in headers |
-| `grpc` | `serviceName`, `multiMode` with `mode=multi`, `authority` | — |
-| `httpupgrade` | path and Host | warning |
-| `xhttp` | path, Host, `mode`, `extra` | refused |
-| `kcp` | `header` and `seed` are written on an engine older than 26.1.31; not on 26.1.31 and newer | warning |
+| [`tcp`, `raw`](https://xtls.github.io/en/config/transports/raw.html) | `network: tcp`; with `headerType=http`, HTTP camouflage with `path` and `host` | — |
+| [`ws`](https://xtls.github.io/en/config/transports/websocket.html) | path and Host | Host written in the old form, in headers |
+| [`grpc`](https://xtls.github.io/en/config/transports/grpc.html) | `serviceName`, `multiMode` with `mode=multi`, `authority` | — |
+| [`httpupgrade`](https://xtls.github.io/en/config/transports/httpupgrade.html) | path and Host | warning |
+| [`xhttp`](https://xtls.github.io/en/config/transports/xhttp.html) | path, Host, `mode`, `extra` | refused |
+| [`kcp`](https://xtls.github.io/en/config/transports/mkcp.html) | `header` and `seed` are written on an engine older than 26.1.31; not on 26.1.31 and newer | warning |
 | `hysteria` | version 2, password, salamander | — |
 
 Any other `type` except h2, http and quic (see below) is rejected: "transport
@@ -275,7 +275,7 @@ override it.
 
 `sni` → `serverName`, `fp` → `fingerprint` (default `chrome`), `pbk` →
 `publicKey`, `sid` → `shortId`. `spx` → `spiderX` and `pqv` → `mldsa65Verify`
-are written only if present in the link.
+are written only if present in the link. The protocol is described in [XTLS/REALITY](https://github.com/XTLS/REALITY).
 
 ### none
 
@@ -294,7 +294,7 @@ needed.
 ### VLESS encryption
 
 `encryption=mlkem768x25519plus.…` is post-quantum VLESS encryption and needs
-engine 25.8.29 or newer. byway checks only the shape: the
+engine 25.8.29 or newer ([Xray docs](https://xtls.github.io/en/config/outbounds/vless.html)). byway checks only the shape: the
 `mlkem768x25519plus.` prefix and allowed characters. The engine parses the
 parts. Any other value except `none` is refused, and so is `encryption` on
 anything other than vless.
@@ -351,7 +351,7 @@ JSON object.
 
 ## Multiplexing
 
-Mux folds many client connections into a few connections to the server. The
+[Mux](https://xtls.github.io/en/config/outbound.html#muxobject) folds many client connections into a few connections to the server. The
 number of streams per connection is the "Mux" setting on the Network tab
 (`mux_concurrency`). It ships as 8; `0` turns it off. Values from 0 to 999 are
 accepted; an empty value means 0, an invalid one also means 0, with a warning.
@@ -397,8 +397,8 @@ panel. The other keys in the list do not go into the config unless a route
 uses them.
 
 **Several, automatic.** Each key becomes its own outbound (`proxy-0`,
-`proxy-1`, …). The engine's `observatory` checks each one with a request to
-`https://www.google.com/generate_204`, and a balancer with the `leastPing`
+`proxy-1`, …). The engine's [`observatory`](https://xtls.github.io/en/config/observatory.html) checks each one with a request to
+`https://www.google.com/generate_204`, and a balancer with the [`leastPing`](https://xtls.github.io/en/config/routing.html)
 strategy sends traffic through the key with the lowest latency. The interval
 is "Key check interval" on the Advanced tab (`probe_interval`), `3m` by
 default; the format is a number followed by `s`, `m` or `h`. A key that byway

@@ -13,12 +13,12 @@ stated.
 
 | part | role |
 |---|---|
-| `/usr/local/bin/byway` | one file: a POSIX sh wrapper (busybox ash) — locks, signal traps, paths — followed by the ucode program; builds the Xray-core config, installs and removes the interception rules, checks state, updates itself |
-| `/etc/init.d/byway` | procd service: runs Xray-core and calls `byway plumb on/off` |
+| `/usr/local/bin/byway` | one file: a POSIX sh wrapper ([busybox ash](https://busybox.net/)) — locks, signal traps, paths — followed by the [ucode](https://ucode-lang.org/) program; builds the Xray-core config, installs and removes the interception rules, checks state, updates itself |
+| `/etc/init.d/byway` | [procd](https://openwrt.org/docs/techref/procd) service: runs Xray-core and calls `byway plumb on/off` |
 | Xray-core | DNS inbound with fake addresses, tproxy inbound, routing, outbounds |
-| nft table `inet byway` | intercepts traffic from the trusted bridges |
+| [nft](https://wiki.nftables.org/) table `inet byway` | intercepts traffic from the trusted bridges |
 | `ip rule` + routing table 100 | delivers marked packets to a local socket |
-| dnsmasq | forwards every query to the Xray-core DNS inbound |
+| [dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html) | forwards every query to the Xray-core DNS inbound |
 | cron | `byway watch` every 5 minutes, `byway stat` hourly, `byway pulse` every minute |
 
 "Interception rules" below means everything `byway plumb on` sets up: the nft
@@ -55,11 +55,11 @@ routing → proxy | route-NAME | direct | block
 
 ### DNS and fake addresses
 
-dnsmasq forwards everything to `dns_listen` (127.0.0.42). A `dokodemo-door`
+dnsmasq forwards everything to `dns_listen` (127.0.0.42). A [`dokodemo-door`](https://xtls.github.io/en/config/inbounds/tunnel.html)
 tagged `dns-in` listens there; the first routing rule hands it to the
 `dns-out` outbound, which passes queries to the built-in DNS. Its servers:
 
-- `fakedns` for names in the merged list (your own `domains.lst`, the
+- [`fakedns`](https://xtls.github.io/en/config/fakedns.html) for names in the merged list (your own `domains.lst`, the
   ready-made lists in `list preset`, the per-route lists) and for
   `full:example.com`;
 - `dns_upstream`, then `dns_upstream2` (`none` disables it) for everything
@@ -100,7 +100,7 @@ name either, hits the `block` rule.
 applying anything. Sets: `fakeip` (the pool), `privnets` (`0/8`, `10/8`, `127/8`,
 `169.254/16`, `172.16/12`, `192.168/16`, `100.64/10`, `224/4`, `240/4`) and
 `subnets` (merged subnet list). The pool is not in `privnets`, so the private
-cut-off can come before the tproxy rules without eating anything needed.
+cut-off can come before the [tproxy](https://docs.kernel.org/networking/tproxy.html) rules without eating anything needed.
 
 Order in `prerouting` matters. Only packets arriving from bridges in `list
 interface` are intercepted. The `privnets` return comes before the `socket
@@ -158,7 +158,7 @@ numbers above 255. Foreign routes in table 100 are left alone, with a warning.
 `tproxy-in` is a `dokodemo-door` with `followRedirect` and `sockopt.tproxy`.
 Sniffing uses `destOverride` `fakedns`, `http`, `tls`, `quic` with `routeOnly:
 false`: the destination is replaced by the recovered name, and routing works
-with the name from then on. Rules, first match wins, `domainStrategy:
+with the name from then on. [Rules](https://xtls.github.io/en/config/routing.html), first match wins, `domainStrategy:
 IPIfNonMatch`:
 
 | # | rule | goes to |
@@ -191,7 +191,7 @@ hour; by hand — `/etc/init.d/byway reload`.
 `byway health` can test the whole chain regardless of what the lists contain.
 
 With `conn_mode urltest` there are several outbounds (`proxy-0`, `proxy-1`,
-…), and rules point to the `auto` balancer (`leastPing`). `observatory` probes
+…), and rules point to the `auto` balancer (`leastPing`). [`observatory`](https://xtls.github.io/en/config/observatory.html) probes
 each key with a request to `https://www.google.com/generate_204` every
 `probe_interval`: `3m` is the default in code, the shipped config does not
 have this option. Each key is first parsed and built on its own (`ob_key` in
@@ -448,7 +448,7 @@ The service runs `byway gen` on every start. If the build fails but the
 previous config still passes `xray run -test`, the engine starts on the
 previous one.
 
-Memory. The init script passes `GOMEMLIMIT` to the engine via `procd_set_param
+Memory. The init script passes [`GOMEMLIMIT`](https://go.dev/doc/gc-guide#Memory_limit) to the engine via `procd_set_param
 env` (function `xray_memlimit`): with `xray_memlimit` unset, 40 % of
 `MemTotal`, at least 32 MiB; `0`/`off`/`no`, not set; Go format (`B`, `KiB`,
 `MiB`, `GiB`, `TiB`), passed as is; `MB`/`M` → `MiB`, `GB`/`G` → `GiB`; a bare
@@ -482,7 +482,7 @@ kept them until the TTL ran out. The installer calls `disable` before
 `/etc/sysupgrade.conf`. Instance: `$XRAY run -c /etc/byway/config.json`,
 `stdout` and `stderr` to syslog (Xray-core logs to stdout), pidfile
 `/var/run/byway.pid`, `respawn 3600 5 0`. The engine runs as the `byway` system
-user in a `procd-ujail` cage (`procd_add_jail byway`, capabilities from
+user in a [`procd-ujail`](https://openwrt.org/docs/guide-developer/procd-init-scripts) cage (`procd_add_jail byway`, capabilities from
 `/var/run/byway-caps.json`: `CAP_NET_RAW`, or `CAP_NET_ADMIN` on kernels before
 5.17, plus `CAP_NET_BIND_SERVICE`, `no_new_privs`); the pid file holds the
 wrapper, the engine is its child. The config is read by the group (`640
@@ -758,8 +758,8 @@ server=/use-application-dns.net/
 - Without `no-resolv` dnsmasq would also ask the ISP, take the first answer,
   and some listed names would get real addresses.
 - `server=/use-application-dns.net/` is an entry without an address, "local
-  only": dnsmasq answers NXDOMAIN. This is the Firefox canary: Firefox turns
-  off DoH it enabled by itself (the default in Russia since 2022) on this
+  only": dnsmasq answers NXDOMAIN. This is the Firefox [canary](https://support.mozilla.org/en-US/kb/canary-domain-use-application-dnsnet): Firefox turns
+  off DoH it enabled by itself (the default on desktop in Russia since 2022) on this
   answer and asks the router. DoH turned on by hand, Android Private DNS and
   iOS DNS profiles ignore it.
 - `/domain/address` entries in the dnsmasq settings keep working: they are

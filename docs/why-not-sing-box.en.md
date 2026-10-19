@@ -1,6 +1,6 @@
 # Why byway runs on Xray-core only
 
-The short answer: **sing-box is a good engine, but it gives byway nothing and
+The short answer: **[sing-box](https://sing-box.sagernet.org/) is a good engine, but it gives byway nothing and
 costs a lot.** Below are the numbers behind that decision, so the question does
 not have to be asked again.
 
@@ -29,7 +29,7 @@ So "impossible" is not the issue. The trade is.
 ### The xhttp and kcp transports
 
 sing-box's list of transports is closed: HTTP, WebSocket, QUIC, gRPC,
-HTTPUpgrade. Its documentation names what is absent — mKCP is listed explicitly,
+HTTPUpgrade. Its [documentation](https://sing-box.sagernet.org/configuration/shared/v2ray-transport/) names what is absent — mKCP is listed explicitly,
 and xhttp never existed there at all.
 
 byway parses seven transports, and sing-box cannot carry two of them. Some keys
@@ -76,7 +76,7 @@ and WireGuard were on this list until autumn 2026: Xray-core added Hysteria2 in
 since release 0.2.4 (Hysteria2 — on engine 26.3.27 or newer: before it the
 protocol settings changed from release to release). Of what remains, mostly TUIC gets asked for.
 
-Like Hysteria2, it runs over QUIC, that is, over UDP. In Russia UDP is the first thing to be
+Like Hysteria2, it runs over QUIC, that is, over UDP. In some regions of Russia UDP is the first thing to be
 throttled — long and widely documented, and matching what we see on a working
 router. So the gain is smaller than the length of the list suggests: a protocol
 that gets throttled first is a poor replacement for one that works.

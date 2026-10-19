@@ -18,9 +18,13 @@ byway лишь решает, что через него пустить.
 
 ## Что понадобится
 
-- **Роутер с OpenWrt 22.03 или новее.** Версию видно в LuCI (веб-интерфейсе
+- **Роутер с OpenWrt 22.03 или новее.** Версию видно в [LuCI](glossary.md#luci) (веб-интерфейсе
   роутера): *Status → Overview*, строка *Firmware Version*. На 21.02 и старше
-  byway не встанет — установщик откажется и скажет почему.
+  byway не встанет — установщик откажется и скажет почему. Подходит ли ваша
+  модель, видно в [таблице устройств OpenWrt](https://openwrt.org/toh/start)
+  (на английском). Прошивку для неё собирает
+  [Firmware Selector](https://firmware-selector.openwrt.org/), порядок первой
+  установки описан в [инструкции OpenWrt](https://openwrt.org/ru/docs/guide-quick-start/start).
 - **Ключ от сервиса VPN** — ссылка вида `vless://…`, `trojan://…`, `ss://…` и
   подобные, либо адрес [подписки](glossary.md#подписка) (`https://…`). Её дают в
   письме, в личном кабинете сервиса или в его боте.
@@ -35,7 +39,8 @@ byway лишь решает, что через него пустить.
    ssh root@192.168.1.1
    ```
 
-   Пароль — тот же, что для входа в LuCI.
+   Пароль — тот же, что для входа в LuCI. Подробнее о входе — на [вики
+   OpenWrt](https://openwrt.org/ru/docs/guide-quick-start/sshadministration).
 
 2. Вставьте строку установки и нажмите Enter:
 
@@ -103,7 +108,8 @@ byway лишь решает, что через него пустить.
 - На устройстве включён «Частный DNS» (Android) или
   [DoH](glossary.md#doh) в браузере. Такое устройство узнаёт адреса сайтов не у
   роутера, и byway не видит, что сайт из списка. Выключите эту настройку на
-  устройстве. Подробнее — в
+  устройстве ([Android](https://support.google.com/android/answer/9654714?hl=ru), [Firefox](https://support.mozilla.org/ru/kb/dns-cherez-https-v-firefox),
+  [Chrome](https://support.google.com/chrome/answer/10468685?hl=ru&co=GENIE.Platform%3DDesktop)). Подробнее — в
   [когда не работает](troubleshooting.md).
 
 **Сайты из списка перестали открываться совсем.** Если VPN на роутере не

@@ -11,12 +11,12 @@
 
 | часть | роль |
 |---|---|
-| `/usr/local/bin/byway` | один файл: обёртка на POSIX sh (busybox ash) — замки, ловушки сигналов, пути — и программа на ucode после неё; собирает конфиг Xray-core, ставит и снимает правила перехвата, проверяет состояние, обновляется |
-| `/etc/init.d/byway` | служба procd: запускает Xray-core и зовёт `byway plumb on/off` |
+| `/usr/local/bin/byway` | один файл: обёртка на POSIX sh ([busybox ash](https://busybox.net/)) — замки, ловушки сигналов, пути — и программа на [ucode](https://ucode-lang.org/) после неё; собирает конфиг Xray-core, ставит и снимает правила перехвата, проверяет состояние, обновляется |
+| `/etc/init.d/byway` | служба [procd](https://openwrt.org/docs/techref/procd): запускает Xray-core и зовёт `byway plumb on/off` |
 | Xray-core | DNS-вход с подставными адресами, вход tproxy, маршрутизация, исходящие |
-| таблица nft `inet byway` | перехват трафика доверенных мостов |
+| таблица [nft](https://wiki.nftables.org/) `inet byway` | перехват трафика доверенных мостов |
 | `ip rule` + таблица маршрутизации 100 | доставка помеченных пакетов локальному сокету |
-| dnsmasq | пересылает все запросы на DNS-вход Xray-core |
+| [dnsmasq](https://thekelleys.org.uk/dnsmasq/doc.html) | пересылает все запросы на DNS-вход Xray-core |
 | cron | `byway watch` каждые 5 минут, `byway stat` раз в час, `byway pulse` раз в минуту |
 
 «Правила перехвата» здесь — всё, что ставит `byway plumb on`: таблица nft, `ip
@@ -54,10 +54,10 @@ routing → proxy | route-ИМЯ | direct | block
 ### DNS и подставные адреса
 
 dnsmasq пересылает всё на `dns_listen` (127.0.0.42). Там слушает
-`dokodemo-door` с тегом `dns-in`; первое правило маршрутизации отдаёт его
+[`dokodemo-door`](https://xtls.github.io/ru/config/inbounds/tunnel.html) с тегом `dns-in`; первое правило маршрутизации отдаёт его
 исходящему `dns-out`, а тот — встроенному DNS. Серверы встроенного DNS:
 
-- `fakedns` — для имён объединённого списка (свой `domains.lst`, готовые
+- [`fakedns`](https://xtls.github.io/ru/config/fakedns.html) — для имён объединённого списка (свой `domains.lst`, готовые
   списки `list preset`, списки направлений) и для `full:example.com`;
 - `dns_upstream`, затем `dns_upstream2` (`none` отключает) — для всего прочего;
 - `dns_bootstrap` — только чтобы разрешить имена самих `dns_upstream*`, если
@@ -95,7 +95,7 @@ dnsmasq пересылает всё на `dns_listen` (127.0.0.42). Там сл�
 не применяя. Наборы: `fakeip` (пул), `privnets` (`0/8`, `10/8`, `127/8`,
 `169.254/16`, `172.16/12`, `192.168/16`, `100.64/10`, `224/4`, `240/4`),
 `subnets` (объединённые подсети). Пул в `privnets` не входит, поэтому отсечка
-частного стоит до правил tproxy и ничего нужного не съедает.
+частного стоит до правил [tproxy](https://docs.kernel.org/networking/tproxy.html) и ничего нужного не съедает.
 
 Порядок в `prerouting` важен. Перехватывается только то, что пришло с мостов
 из `list interface`. Отсечка `privnets` стоит раньше короткого замыкания
@@ -150,7 +150,7 @@ byway не трогает и говорит о них. `pl_route_down` удал�
 `tproxy-in` — `dokodemo-door` с `followRedirect` и `sockopt.tproxy`. Sniffing
 с `destOverride` `fakedns`, `http`, `tls`, `quic` и `routeOnly: false`:
 назначение заменяется восстановленным именем, дальше маршрутизация работает с
-ним. Правила, первое совпавшее выигрывает, `domainStrategy: IPIfNonMatch`:
+ним. [Правила](https://xtls.github.io/ru/config/routing.html), первое совпавшее выигрывает, `domainStrategy: IPIfNonMatch`:
 
 | # | правило | куда |
 |---|---|---|
@@ -181,7 +181,7 @@ tunnel` `byway gen` разрешает имена серверов сам — п
 `byway health` проверяет цепочку целиком, что бы ни лежало в списках.
 
 При `conn_mode urltest` исходящих несколько (`proxy-0`, `proxy-1`, …), и
-правила ведут в балансировщик `auto` (`leastPing`). `observatory` замеряет
+правила ведут в балансировщик `auto` (`leastPing`). [`observatory`](https://xtls.github.io/ru/config/observatory.html) замеряет
 ключи запросом к `https://www.google.com/generate_204` раз в `probe_interval`:
 `3m` — умолчание в коде, в поставочном конфиге этой опции нет. Каждый ключ
 сперва разбирается и собирается отдельно (`ob_key` в `uc/outbound.uc`):
@@ -418,7 +418,7 @@ dnsmasq — после `dnsmasq --test` и только если он измен
 Служба вызывает `byway gen` при каждом старте. Не собралось, а прежний конфиг
 проходит `xray run -test`, — движок поднимается на прежнем.
 
-Память. Init-скрипт передаёт движку `GOMEMLIMIT` через `procd_set_param env`
+Память. Init-скрипт передаёт движку [`GOMEMLIMIT`](https://go.dev/doc/gc-guide#Memory_limit) через `procd_set_param env`
 (функция `xray_memlimit`): опция `xray_memlimit` не задана — 40 % от
 `MemTotal`, не меньше 32 МиБ; `0`/`off`/`no` — не задаётся; форма Go (`B`,
 `KiB`, `MiB`, `GiB`, `TiB`) — как есть; `MB`/`M` → `MiB`, `GB`/`G` → `GiB`;
@@ -451,7 +451,7 @@ TTL. Установщик зовёт `disable` перед `enable`, чтобы �
 `$XRAY run -c /etc/byway/config.json`,
 `stdout` и `stderr` в системный журнал (Xray-core пишет в stdout), pidfile
 `/var/run/byway.pid`, `respawn 3600 5 0`. Движок идёт от системного
-пользователя `byway` в клетке `procd-ujail` (`procd_add_jail byway`, права из
+пользователя `byway` в клетке [`procd-ujail`](https://openwrt.org/docs/guide-developer/procd-init-scripts) (`procd_add_jail byway`, права из
 `/var/run/byway-caps.json`: `CAP_NET_RAW` либо `CAP_NET_ADMIN` на ядре до 5.17,
 плюс `CAP_NET_BIND_SERVICE`, `no_new_privs`); в pid-файле — обёртка, движок её
 потомок. Конфиг читается группой (`640 root:byway`), журнал обращений лежит в
@@ -710,8 +710,8 @@ server=/use-application-dns.net/
 - Без `no-resolv` dnsmasq спрашивал бы и провайдера, брал первый ответ, и
   часть имён списка получала бы настоящий адрес.
 - `server=/use-application-dns.net/` — запись без адреса, «только локально»:
-  dnsmasq отвечает NXDOMAIN. Это канарейка Firefox: DoH, включённый им самим
-  (в России по умолчанию с 2022 года), он по этому ответу выключает и
+  dnsmasq отвечает NXDOMAIN. Это [канарейка Firefox](https://support.mozilla.org/ru/kb/kanareechnyj-domen-use-application-dnsnet): DoH, включённый им самим
+  (на ПК в России по умолчанию с 2022 года), он по этому ответу выключает и
   спрашивает роутер. DoH, включённый вручную, «Частный DNS» Android и профили
   DNS iOS канарейку не слушают.
 - Записи `/домен/адрес` из настроек dnsmasq действуют по-прежнему: это

@@ -20,7 +20,7 @@
 
 Что нужно знать о коде:
 
-- **Две части в одном файле.** Обёртка — POSIX sh под busybox ash (замки, ловушки сигналов, пути), без bash-измов: `[[ ]]`, массивы, `echo -e` не годятся; проверка — `sh -n`. Остальное — ucode в `src/uc/`, файл на тему (`keys.uc` — разбор ключей, `gen.uc` — конфиг Xray, `plumb.uc` — перехват, `watch.uc` — сторож и т. д.). Только модули `fs` и `uci`: на OpenWrt 22.03 других нет. Функции — верхнего уровня: вложенная функция, трогающая локальные переменные объемлющей, на ucode 22.03 и 23.05 роняет программу. Функция видит только то, что объявлено выше неё в порядке `src/uc/ORDER`, и ошибка всплывает лишь при вызове.
+- **Две части в одном файле.** Обёртка — POSIX sh под [busybox ash](https://busybox.net/) (замки, ловушки сигналов, пути), без bash-измов: `[[ ]]`, массивы, `echo -e` не годятся; проверка — `sh -n`. Остальное — [ucode](https://ucode-lang.org/) в `src/uc/`, файл на тему (`keys.uc` — разбор ключей, `gen.uc` — конфиг Xray, `plumb.uc` — перехват, `watch.uc` — сторож и т. д.). Только модули `fs` и `uci`: на OpenWrt 22.03 других нет. Функции — верхнего уровня: вложенная функция, трогающая локальные переменные объемлющей, на ucode 22.03 и 23.05 роняет программу. Функция видит только то, что объявлено выше неё в порядке `src/uc/ORDER`, и ошибка всплывает лишь при вызове.
 - **Код — в `src/`**: shell — каталог на область (`core`, `config`, `lists`, `plumb`, `service`, `diag`, `update`, `data`, `ui`), ucode — `src/uc/`. Файл `byway` собирается командой `sh src/build.sh` в порядке `src/ORDER` и `src/uc/ORDER` — правьте `src/`, а не `byway`, и коммитьте оба.
 - **Всё, что видит человек, переводится.** Русская строка в коде — ключ,
   английский перевод лежит отдельно:
@@ -65,9 +65,9 @@ way. Typos and text fixes can go straight to a pull request.
 
 What to know about the code:
 
-- **Two parts in one file.** The wrapper is POSIX sh under busybox ash
+- **Two parts in one file.** The wrapper is POSIX sh under [busybox ash](https://busybox.net/)
   (locks, signal traps, paths), no bashisms: `[[ ]]`, arrays, `echo -e` will
-  not do; check with `sh -n`. The rest is ucode in `src/uc/`, a file per topic
+  not do; check with `sh -n`. The rest is [ucode](https://ucode-lang.org/) in `src/uc/`, a file per topic
   (`keys.uc` — key parsing, `gen.uc` — the Xray config, `plumb.uc` —
   interception, `watch.uc` — the watchdog, and so on). Only the `fs` and `uci`
   modules: OpenWrt 22.03 has no others. Functions stay at the top level: a

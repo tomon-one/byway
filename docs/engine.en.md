@@ -18,8 +18,8 @@ usually two sources:
 
 | source | path | installed and updated by |
 |---|---|---|
-| XTLS release on GitHub | `/usr/local/bin/xray-VERSION` | the byway installer, then `byway engine` |
-| OpenWrt packages (`xray-core`) | `/usr/bin/xray` | `apk` or `opkg` |
+| [XTLS release on GitHub](https://github.com/XTLS/Xray-core/releases) | `/usr/local/bin/xray-VERSION` | the byway installer, then `byway engine` |
+| [OpenWrt packages](https://github.com/openwrt/packages/tree/master/net/xray-core) (`xray-core`) | `/usr/bin/xray` | `apk` or `opkg` |
 
 The version number in the file name lets two engines sit side by side and
 lets you switch between them with one option.
@@ -277,7 +277,7 @@ is closed, with `open` it goes to the internet directly.
 
 ## Engine built with Go 1.27
 
-Xray-core releases since 26.9.8 are built with Go 1.27 and `x/net` older than v0.60.0. The Go 1.27 HTTP/2
+Xray-core releases since 26.9.8 are built with [Go](https://go.dev/) 1.27 and [`x/net`](https://pkg.go.dev/golang.org/x/net) older than v0.60.0. The Go 1.27 HTTP/2
 client stopped coalescing dials, so XHTTP opens a TCP connection for every
 waiting request, and `xmux.maxConnections` does not limit them. While the
 server answers, this means a few extra connections. When the handshake with
@@ -299,7 +299,7 @@ The sign is `go1.27` in `xray version`, a build without the
 The `-tags http2legacy` tag brings back the previous HTTP/2 client. It is set
 at build time, so the ready-made engine from GitHub cannot be fixed with it:
 the same version has to be built by hand. You need a computer with Linux,
-macOS or WSL, `git` and Go 1.27 (an older Go works too: `GOTOOLCHAIN`
+macOS or [WSL](https://learn.microsoft.com/en-us/windows/wsl/), `git` and [Go 1.27](https://go.dev/doc/install) (an older Go works too: [`GOTOOLCHAIN`](https://go.dev/doc/toolchain)
 downloads the right version itself).
 
 ```sh
@@ -317,7 +317,7 @@ scp -O xray.gz root@192.168.1.1:/tmp/
 `arm` with `GOARM=7`, `x86_64` → `amd64`, `mips` → `mips`, `mipsel` →
 `mipsle`; for MIPS without an FPU add `GOMIPS=softfloat`. The Go version is
 the one `xray version` shows for the release engine. The flags are the same as
-in the XTLS release build (`.github/workflows/release.yml`): without
+in the XTLS release build ([`.github/workflows/release.yml`](https://github.com/XTLS/Xray-core/blob/main/.github/workflows/release.yml)): without
 `-tags http2legacy` this command produces a file byte-identical to the release
 engine, so the build is easy to verify.
 
@@ -467,7 +467,7 @@ On a router with about 40 MB for your own files, one engine takes almost half
 of it, and a second one does not fit next to it. There every replacement goes
 through memory, with a minute without the tunnel. If the engine does not
 install from the packages either and less than 15 MB is free, the installer
-says so: no setting fixes this, it takes a router with more flash or extroot.
+says so: no setting fixes this, it takes a router with more flash or [extroot](https://openwrt.org/docs/guide-user/additional-software/extroot_configuration).
 
 With extroot (the root filesystem on a USB drive) `/usr/local/bin` ends up on
 the drive, there is room for two engines, and the swap goes side by side.
@@ -478,7 +478,7 @@ directories. A symlink named `xray*` in a system directory does work:
 `byway set xray_bin /usr/local/bin/xray-usb`. The stick has to be
 mounted by the time the service starts, or there is no engine.
 
-A firmware upgrade (sysupgrade) keeps byway's files but not the engine: 35 MB
+A firmware upgrade ([sysupgrade](https://openwrt.org/docs/guide-user/installation/generic.sysupgrade)) keeps byway's files but not the engine: 35 MB
 are not added to the keep list, because sysupgrade packs it in memory. After
 the upgrade the service installs the engine itself (see [No
 engine](#no-engine)). With less than 25 MB free on flash that fails, and the
@@ -497,7 +497,7 @@ reached ~100 MB, and the Linux kernel killed it for lack of memory (OOM). The
 service brought it back, but every time all connections dropped — from the
 outside it looked like "the tunnel drops now and then".
 
-So the service starts Xray with the `GOMEMLIMIT` variable. It is a soft
+So the service starts Xray with the [`GOMEMLIMIT`](https://go.dev/doc/gc-guide#Memory_limit) variable. It is a soft
 limit: near it, Go collects garbage more often and returns memory to the
 system. It does not cut live data; if there is more than the limit, Go simply
 collects more often (using at most half the CPU time). It will not be worse

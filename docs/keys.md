@@ -29,13 +29,13 @@ JSON.
 
 | вид | схема | что нужно |
 |---|---|---|
-| VLESS | `vless://` | — |
-| Trojan | `trojan://` | — |
-| VMess | `vmess://` | — |
-| Shadowsocks | `ss://` | — |
-| SOCKS5 | `socks://` | — |
-| Hysteria2 | `hysteria2://`, `hy2://` | Xray-core 26.3.27 и новее |
-| WireGuard | `wireguard://`, `wg://` | — |
+| [VLESS](https://xtls.github.io/ru/config/outbounds/vless.html) | `vless://` | — |
+| [Trojan](https://xtls.github.io/ru/config/outbounds/trojan.html) | `trojan://` | — |
+| [VMess](https://xtls.github.io/ru/config/outbounds/vmess.html) | `vmess://` | — |
+| [Shadowsocks](https://xtls.github.io/ru/config/outbounds/shadowsocks.html) | `ss://` | — |
+| [SOCKS5](https://xtls.github.io/ru/config/outbounds/socks.html) | `socks://` | — |
+| [Hysteria2](https://xtls.github.io/ru/config/outbounds/hysteria.html) | `hysteria2://`, `hy2://` | Xray-core 26.3.27 и новее |
+| [WireGuard](https://xtls.github.io/ru/config/outbounds/wireguard.html) | `wireguard://`, `wg://` | — |
 
 В busybox на OpenWrt base64 обычно нет; byway раскодирует base64 сам,
 отдельный пакет не нужен.
@@ -135,7 +135,8 @@ wireguard://AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA%3D@example.com:51820?pub
 wg://example.com:51820?pk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA%3D&peer_pk=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB%3D&local_address=10.7.0.2%2F32&keepalive=25#Name
 ```
 
-Первая форма (как у v2rayN) — закрытый ключ до `@`. Вторая (как у Hiddify) —
+Первая форма (как у [v2rayN](https://github.com/2dust/v2rayN)) — закрытый ключ до `@`. Вторая
+(как у [Hiddify](https://github.com/hiddify/hiddify-app)) —
 всё в параметрах. Разбираются обе.
 
 | поле | имена в ссылке | обязательно | форма |
@@ -202,12 +203,12 @@ wg://example.com:51820?pk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA%3D&peer_pk
 
 | `type` | что попадает в конфиг | ядро до 1.8.24 |
 |---|---|---|
-| `tcp`, `raw` | `network: tcp`; с `headerType=http` — маскировка под HTTP с `path` и `host` | — |
-| `ws` | путь и Host | Host пишется старой формой, в заголовках |
-| `grpc` | `serviceName`, `multiMode` при `mode=multi`, `authority` | — |
-| `httpupgrade` | путь и Host | предупреждение |
-| `xhttp` | путь, Host, `mode`, `extra` | отказ |
-| `kcp` | `header` и `seed` пишутся на ядре старше 26.1.31; на 26.1.31 и новее — нет | предупреждение |
+| [`tcp`, `raw`](https://xtls.github.io/ru/config/transports/raw.html) | `network: tcp`; с `headerType=http` — маскировка под HTTP с `path` и `host` | — |
+| [`ws`](https://xtls.github.io/ru/config/transports/websocket.html) | путь и Host | Host пишется старой формой, в заголовках |
+| [`grpc`](https://xtls.github.io/ru/config/transports/grpc.html) | `serviceName`, `multiMode` при `mode=multi`, `authority` | — |
+| [`httpupgrade`](https://xtls.github.io/ru/config/transports/httpupgrade.html) | путь и Host | предупреждение |
+| [`xhttp`](https://xtls.github.io/ru/config/transports/xhttp.html) | путь, Host, `mode`, `extra` | отказ |
+| [`kcp`](https://xtls.github.io/ru/config/transports/mkcp.html) | `header` и `seed` пишутся на ядре старше 26.1.31; на 26.1.31 и новее — нет | предупреждение |
 | `hysteria` | версия 2, пароль, salamander | — |
 
 Прочие значения `type`, кроме h2, http и quic (о них ниже), отвергаются:
@@ -266,7 +267,7 @@ byway set allow_insecure on
 
 `sni` → `serverName`, `fp` → `fingerprint` (по умолчанию `chrome`), `pbk` →
 `publicKey`, `sid` → `shortId`. `spx` → `spiderX` и `pqv` → `mldsa65Verify`
-пишутся, только если есть в ссылке.
+пишутся, только если есть в ссылке. Описание протокола — [XTLS/REALITY](https://github.com/XTLS/REALITY).
 
 ### none
 
@@ -283,7 +284,7 @@ byway объясняет: нужен ключ с `security=tls` или `reality`
 ### Шифрование VLESS
 
 `encryption=mlkem768x25519plus.…` — постквантовое шифрование VLESS, нужно ядро
-25.8.29 и новее. byway проверяет только форму: префикс `mlkem768x25519plus.` и
+25.8.29 и новее ([документация Xray](https://xtls.github.io/ru/config/outbounds/vless.html)). byway проверяет только форму: префикс `mlkem768x25519plus.` и
 допустимые знаки. Части значения разбирает ядро. Любое другое значение, кроме
 `none`, — отказ; `encryption` не у vless — тоже отказ.
 
@@ -337,7 +338,7 @@ ws.
 
 ## Мультиплексирование
 
-Mux сводит много соединений клиентов в несколько соединений к серверу. Число
+[Mux](https://xtls.github.io/ru/config/outbound.html#muxobject) сводит много соединений клиентов в несколько соединений к серверу. Число
 потоков на соединение задаёт «Mux» на вкладке «Сеть» (`mux_concurrency`). В
 поставке — 8, `0` выключает. Допустимо от 0 до 999; пустое значение — 0,
 негодное — тоже 0, с предупреждением.
@@ -381,8 +382,8 @@ Mux включается для tcp/raw, ws, httpupgrade и kcp. Не включ
 направление.
 
 **Несколько, автоматически.** Каждый ключ становится отдельным подключением
-(`proxy-0`, `proxy-1`, …). `observatory` ядра проверяет каждое запросом к
-`https://www.google.com/generate_204`, балансировщик со стратегией `leastPing`
+(`proxy-0`, `proxy-1`, …). [`observatory`](https://xtls.github.io/ru/config/observatory.html) ядра проверяет каждое запросом к
+`https://www.google.com/generate_204`, балансировщик со стратегией [`leastPing`](https://xtls.github.io/ru/config/routing.html)
 ведёт трафик через ключ с наименьшей задержкой. Интервал — «Интервал проверки
 ключей» на вкладке «Дополнительное» (`probe_interval`), по умолчанию `3m`;
 формат — число и `s`, `m` или `h`. Ключ, которому byway отказал при разборе

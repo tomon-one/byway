@@ -5,7 +5,7 @@ visible.</sub>
 
 # byway
 
-**Split tunnelling for an OpenWrt router.** Part of your traffic goes through
+**Split tunnelling for an [OpenWrt](https://openwrt.org/) router.** Part of your traffic goes through
 your VPN, the rest goes direct. The engine is
 [Xray-core](https://github.com/XTLS/Xray-core).
 
@@ -29,6 +29,9 @@ your VPN, the rest goes direct. The engine is
 > | fully verified | Cudy WR3000S v1 (MT7981, aarch64), OpenWrt 25.12.5 |
 > | verified on a test bench | install and removal on 22.03–25.12, with opkg and with apk; install on aarch64 and mipsel |
 > | never verified at all | IPv6 (written, but has never seen live traffic), behaviour under load, everyday use on any CPU other than MT7981 |
+>
+> **Version 0.4 is waiting for a debugging audit.** The release is expected
+> within the next two weeks (as of 19 October 2026).
 >
 > **The code was written by an AI** — Claude, to a human's tasks and with a
 > human's corrections. That is said up front rather than in a footnote:
@@ -79,13 +82,13 @@ else's rule sets you have to learn separately. There are lists as plain files, a
 key as a link, and five tabs in the web UI.
 
 If you want the full toolbox, there are
-[PassWall](https://github.com/xiaorouji/openwrt-passwall) and
+[PassWall](https://github.com/Openwrt-Passwall/openwrt-passwall) and
 [OpenClash](https://github.com/vernesong/OpenClash): they do more and weigh
 accordingly.
 
 **What it is, technically.** Neither a package nor a binary: one program file —
-a POSIX sh wrapper and the main part in ucode, the language OpenWrt has had
-since 22.03 — plus a LuCI panel. Xray-core carries the traffic, while byway decides
+a POSIX sh wrapper and the main part in [ucode](https://ucode-lang.org/), the language OpenWrt has had
+since 22.03 — plus a [LuCI](https://openwrt.org/docs/guide-user/luci/start) panel. Xray-core carries the traffic, while byway decides
 what goes where, builds the engine's config, installs the firewall rules and
 makes sure they stay in place. byway itself encrypts nothing and sends no
 traffic anywhere. It goes online only for lists and updates, and once every
@@ -104,8 +107,11 @@ off, see [Updating](#updating)).
 | **`unzip`** | the installer fetches it when the engine comes from GitHub |
 | **Flash space** | byway itself is under a megabyte; the Xray-core engine takes ~18 MB on a compressing file system and 35–38 MB without compression, and a GitHub download needs 25 MB free |
 
-**Why 22.03 is a boundary and not a preference.** From 22.03 the firewall is
-firewall4 on nftables, and byway stands entirely on it. On 21.02 and older it is
+Whether a router is supported — and how much flash and memory it has — is in
+the [OpenWrt Table of Hardware](https://openwrt.org/toh/start).
+
+**Why 22.03 is a boundary and not a preference.** From [22.03](https://openwrt.org/releases/22.03/notes-22.03.0) the firewall is
+firewall4 on [nftables](https://wiki.nftables.org/), and byway stands entirely on it. On 21.02 and older it is
 firewall3 with iptables — a different mechanism, a mark-based rule will not go
 in, and neither guests nor zones with an `input REJECT` policy would get the
 tunnel. On such a system the installer **refuses to run** and explains why: a
@@ -116,7 +122,7 @@ OpenWrt packages from 22.03 on, and byway installs it from GitHub on any
 release. For [podkop](https://github.com/itdoginfo/podkop) the bound is one
 release higher only because sing-box appears in the packages from 23.05.
 
-The package manager is detected automatically: `apk` from 25.12, `opkg` on 24.10
+The package manager is detected automatically: [`apk`](https://openwrt.org/docs/guide-user/additional-software/apk) from 25.12, [`opkg`](https://openwrt.org/docs/guide-user/additional-software/opkg) on 24.10
 and older.
 
 **Why a GitHub download needs 25 MB.** Eighteen for the engine itself, the rest
@@ -149,7 +155,7 @@ Worth knowing before installing, not after.
   really does not depend on the engine, but sing-box supports neither the
   `xhttp` nor the `kcp` transport, keeps no access log for byway to count usage
   from, and splits its configs into two incompatible dialects. In return it
-  offers QUIC-based protocols, which are the first thing throttled in Russia.
+  offers QUIC-based protocols, which are the first thing throttled in some regions of Russia.
   The trade does not pay off; decided 2026-09-07. In detail, with numbers and
   with what would change the decision:
   [why Xray-core only](docs/why-not-sing-box.en.md).
@@ -159,8 +165,8 @@ Worth knowing before installing, not after.
   real address. But byway recognises the traffic to take precisely by the
   placeholder — a made-up address it hands out itself (see [How it
   works](#how-it-works)). The exception is Firefox that turned DoH on by
-  itself (the default in Russia since 2022): while interception is up, dnsmasq
-  answers NXDOMAIN for `use-application-dns.net`, and Firefox takes this
+  itself (the default on desktop in Russia since 2022, [Mozilla help](https://support.mozilla.org/en-US/kb/firefox-dns-over-https)): while interception is up, dnsmasq
+  answers NXDOMAIN for [`use-application-dns.net`](https://support.mozilla.org/en-US/kb/canary-domain-use-application-dnsnet), and Firefox takes this
   network signal to turn DoH off. DoH turned on in Firefox by hand, Android
   Private DNS and iOS DNS profiles ignore the signal. The router cannot tell
   such devices apart, so `byway doctor` in "By lists" mode always reminds you
@@ -236,7 +242,7 @@ not touch the network otherwise:
 - it is one readable file: `wget -O - …` without `| sh` shows all of it;
 - it names every step it takes and does nothing silently;
 - the release archive is checked against the signature (`SHA256SUMS.sig`, the
-  key is built into the installer); no `usign` or no signature means refusal,
+  key is built into the installer); no [`usign`](https://openwrt.org/docs/guide-user/security/keygen) or no signature means refusal,
   the bypass is `BYWAY_NO_VERIFY=1`;
 - all of it is one `{ … }` group, which the shell parses in full before running
   it: a download cut short during the one-line install gives a syntax error,
@@ -255,7 +261,7 @@ without asking.
 
 1. **Language** — first, before any checks. Only the chosen language's
    dictionary is installed; the other can be added later with `byway lang`.
-2. **The `procd-ujail` package** — only if the firmware lacks it, yes by
+2. **The [`procd-ujail`](https://openwrt.org/docs/guide-developer/procd-init-scripts) package** — only if the firmware lacks it, yes by
    default. Without it the Xray core runs as root: this is unsafe, a bug in the
    core would give access to the whole router. With it, the core runs as a
    separate `byway` user with two narrow permissions.
@@ -331,12 +337,12 @@ cure for every fault.
 
 - **By domains and subnets.** Lists are plain files, one entry per line; an
   ordinary entry covers subdomains. For finer control byway understands
-  Xray-core's entry forms: `full:` (that name only), `keyword:` (a match on a
+  [Xray-core's entry forms](https://xtls.github.io/en/config/routing.html): `full:` (that name only), `keyword:` (a match on a
   fragment), `regexp:`. `geosite:` and `ext:` are **not yet** accepted: they
   need a geodata file of a dozen megabytes, and the router's flash is only
   about forty. If it matters to you more than the free space —
   [say so](https://github.com/tomon-one/byway/issues), it is not hard to add.
-  Non-Latin domains go in punycode (a Latin form like `xn--…`; any online
+  Non-Latin domains go in [punycode](https://en.wikipedia.org/wiki/Punycode) (a Latin form like `xn--…`; any online
   punycode converter produces it). A line that cannot be parsed is shown at
   build time and left out of the list.
 - **Both address families.** IPv4 and IPv6: their own rule sets, their own
@@ -352,7 +358,7 @@ cure for every fault.
 - **Ready-made lists** are chosen in the web UI and refreshed with a button or
   on a schedule — the interval is written as `12h`, `2h37m`, `1d` or as a
   number of minutes, no more often than every 30 minutes; by default only by
-  the button. The byway and itdoginfo-subnets lists also bring subnets, for
+  the button. The [byway](https://github.com/tomon-one/byway-lists) and [itdoginfo-subnets](https://github.com/itdoginfo/allow-domains) lists also bring subnets, for
   services that work by address rather than by name. They do not conflict with
   your own lists: entries are merged.
 
@@ -380,13 +386,13 @@ cure for every fault.
 
 - **Keys:** `vless`, `vmess`, `trojan`, `shadowsocks`, `socks`, `hysteria2`
   (`hy2://`), `wireguard` (`wireguard://` and `wg://`). **Transports:**
-  `tcp/raw`, `ws` (WebSocket), `grpc`, `httpupgrade`, `xhttp`, `kcp` (Xray-core
+  `tcp/raw`, `ws` (WebSocket), `grpc`, `httpupgrade`, [`xhttp`](https://xtls.github.io/en/config/transports/xhttp.html), [`kcp`](https://xtls.github.io/en/config/transports/mkcp.html) (Xray-core
   since 26.1.31 dropped the `header` and `seed` parameters from `kcp`: on such
   an engine byway does not write them to the config and warns that a server
   with mKCP masking will not answer — the replacement is finalmask; on an older
   engine the fields are written as in the link), `hysteria` (with `salamander` obfuscation). **Security:** `tls`
   (including certificate checks by fingerprint — `pcs=`, for hysteria2
-  `pinSHA256=` — or by name — `vcn=`), `reality`; VLESS encryption
+  `pinSHA256=` — or by name — `vcn=`), [`reality`](https://github.com/XTLS/REALITY); VLESS encryption
   `mlkem768x25519plus`. Each kind needs its own Xray-core version: hysteria2
   and certificate checks by fingerprint or name — 26.3.27 or newer, salamander
   — 26.7.11, VLESS encryption — 25.8.29. On an older version byway refuses
@@ -402,7 +408,7 @@ cure for every fault.
 - **Your own outbound config** — for what byway does not parse from a link.
   byway adds only the tag to it; multiplexing and the mark for redirecting the
   router's own traffic (`sockopt.mark`) you write in yourself.
-- **Multiplexing** — several client streams inside one connection to the VPN.
+- **[Multiplexing](https://xtls.github.io/en/config/outbound.html#muxobject)** — several client streams inside one connection to the VPN.
   On by default (eight streams) on every transport except those that multiplex
   themselves: `xhttp` has its own `xmux` for that, `grpc` has `multiMode`, and
   `hysteria` has its own QUIC streams, and a second layer on top only gets in
@@ -690,7 +696,8 @@ there is a field on the "Maintenance" tab too.
 ⚠️ **The router's time zone may not be yours.** Stock firmware keeps time in
 UTC, and then 04:00 on the router is 07:00 in Moscow and 14:00 in Vladivostok —
 a service restart in the middle of the day. The router's time zone is shown in
-LuCI: *System → System Properties*. Once auto-update is on, `byway doctor`
+LuCI: *System → System Properties* ([OpenWrt
+wiki](https://openwrt.org/docs/guide-user/base-system/system_configuration)). Once auto-update is on, `byway doctor`
 warns in its "Updates" section if the clock runs on UTC.
 
 Auto-update installs a release no sooner than three days after the router
@@ -704,7 +711,7 @@ worked before the update is gone, byway puts the whole previous version back
 A manual `byway update` checks the tunnel the same way and rolls back by
 itself on failure; to go back by hand — `byway update --rollback`.
 
-**After a firmware upgrade** byway's settings, lists, service and web UI are
+**After a [firmware upgrade](https://openwrt.org/docs/guide-user/installation/generic.sysupgrade)** byway's settings, lists, service and web UI are
 kept, but the Xray-core engine is not: its 35 MB are left out of the list of
 files kept across upgrades. When the service finds no engine at start, it
 installs one itself, in the background: the version that was there (the
@@ -728,7 +735,7 @@ packages. The choices:
 
 - **the one verified with byway** — the default; byway is fully verified on it;
 - **the newest one, pre-releases included** — whatever XTLS (the team that
-  makes Xray-core) released last;
+  makes Xray-core) released last ([releases on GitHub](https://github.com/XTLS/Xray-core/releases));
 - **the newest stable one** — the last one without the pre-release mark;
 - **none** — if you will point at an engine path yourself later.
 
@@ -885,7 +892,7 @@ traffic and real flash limits.
 | 24.10.8 | install, engine from GitHub, with opkg; removal and `--purge` |
 | 25.12.5 | install with apk; settings import, clearing, list downloads |
 
-**The engine in the OpenWrt packages depends on the release:** 22.03 — 1.8.3,
+**The engine in the [OpenWrt packages](https://github.com/openwrt/packages/tree/master/net/xray-core) depends on the release:** 22.03 — 1.8.3,
 23.05 — 24.12.31, 24.10 — 25.1.30, 25.12 — 26.3.27. From GitHub any version
 installs on any release; the packaged engine is used on MIPS without a
 floating-point unit, with little flash, when the GitHub one did not download

@@ -242,13 +242,13 @@ grep 'tproxy-in -> ' /var/run/byway/access.log | tail -20
 Проверка с устройства, где есть консоль: `nslookup example.com`. Адрес из
 `198.18.0.0/15` — устройство пользуется резолвером роутера, настоящий — у
 него свой DNS. Где его искать: на Android — «Приватный DNS» (название зависит
-от прошивки), выключить или поставить «Автоматически»; в браузере — DNS через
-HTTPS (Firefox — «DNS через HTTPS», Chrome — «Использовать безопасный DNS»);
+от прошивки; [справка Android](https://support.google.com/android/answer/9654714?hl=ru)), выключить или поставить «Автоматически»; в браузере — DNS через
+HTTPS ([Firefox](https://support.mozilla.org/ru/kb/dns-cherez-https-v-firefox) — «DNS через HTTPS», [Chrome](https://support.google.com/chrome/answer/10468685?hl=ru&co=GENIE.Platform%3DDesktop) — «Использовать безопасный DNS»);
 на iOS и macOS — профили DNS и приложения со своим резолвером.
 
-Firefox, который включил DoH сам, а не по настройке человека (в России так по
-умолчанию с 2022 года), идёт через byway: пока перехват стоит, dnsmasq
-отвечает NXDOMAIN на `use-application-dns.net`, и Firefox по этому сигналу
+Firefox, который включил DoH сам, а не по настройке человека (на ПК в России так по
+умолчанию с 2022 года, [справка Mozilla](https://support.mozilla.org/ru/kb/dns-cherez-https-v-firefox)), идёт через byway: пока перехват стоит, dnsmasq
+отвечает NXDOMAIN на [`use-application-dns.net`](https://support.mozilla.org/ru/kb/kanareechnyj-domen-use-application-dnsnet), и Firefox по этому сигналу
 DoH выключает. Проверка с ПК: `nslookup use-application-dns.net` — ответ
 `NXDOMAIN`. DoH, включённый в Firefox вручную, «Приватный DNS» Android и
 профили DNS iOS сигнал не слушают.
@@ -338,7 +338,7 @@ byway set block_quic on
 Память. Ядро убивает процесс, которому не хватило памяти, procd через 5
 секунд поднимает движок заново, снаружи это обрыв на несколько секунд.
 Следы — `dmesg | grep -i killed`, текущее потребление — строка `память` в
-`byway status`. Движок запускается с мягким пределом памяти (`GOMEMLIMIT`):
+`byway status`. Движок запускается с мягким пределом памяти ([`GOMEMLIMIT`](https://go.dev/doc/gc-guide#Memory_limit)):
 по умолчанию 40 % памяти роутера, не меньше 32 МиБ. Свой предел:
 
 ```sh
@@ -506,12 +506,12 @@ byway занимает таблицу nft `inet byway` (при запрете «
 и пул `198.18.0.0/15`. dnsmasq он направляет на свой резолвер файлом
 `byway-dns.conf` в каталоге добавок (`no-resolv`: прочие вышестоящие серверы
 выключены); общие серверы, заданные в настройках dnsmasq, он не трогает и о
-них предупреждает. Служба того же рода (podkop, passwall, OpenClash и
+них предупреждает. Служба того же рода ([podkop](https://github.com/itdoginfo/podkop), [passwall](https://github.com/Openwrt-Passwall/openwrt-passwall), [OpenClash](https://github.com/vernesong/OpenClash) и
 подобные) делает то же со своими значениями. Две такие службы рядом — это не
 замедление, а трафик, который уходит не туда.
 
-`byway doctor` поимённо знает podkop, passwall, passwall2, openclash, nikki,
-homeproxy и shadowsocks-libev. Для установленной он проверяет, работает ли
+`byway doctor` поимённо знает podkop, passwall, [passwall2](https://github.com/Openwrt-Passwall/openwrt-passwall2), openclash,
+[nikki](https://github.com/nikkinikki-org/OpenWrt-nikki), [homeproxy](https://github.com/immortalwrt/homeproxy) и shadowsocks-libev. Для установленной он проверяет, работает ли
 она, стоит ли в автозапуске и есть ли её след в ядре — таблица nft с её
 именем или правило на таблицу 100 при остановленном byway. Работающую
 называет неисправностью и даёт команду остановить и снять с автозапуска.
@@ -519,7 +519,7 @@ homeproxy и shadowsocks-libev. Для установленной он пров�
 направлен ли dnsmasq на byway, маршрут `local default` в таблице 100 и
 лишние `ip rule` на неё.
 
-pbr doctor называет, если он включён; zapret и свои скрипты — нет. Смотреть руками:
+[pbr](https://openwrt.org/docs/guide-user/network/routing/pbr) doctor называет, если он включён; [zapret](https://github.com/bol-van/zapret) и свои скрипты — нет. Смотреть руками:
 `nft list tables`, `ip rule show`, `ip route show table 100`,
 `cat /tmp/dnsmasq*.d/byway-dns.conf`, `uci get dhcp.@dnsmasq[0].server`,
 `uci show firewall | grep mark`.
@@ -531,7 +531,7 @@ pbr doctor называет, если он включён; zapret и свои с
 Если рядом zapret, один домен не должен лежать в двух списках сразу: сессия
 разъедется на два выхода. Хостлист zapret в
 `/opt/zapret/ipset/zapret-hosts-user.txt` `byway presets` сверяет с готовыми
-и своим списками и называет пересечения. Хостлисты zapret2
+и своим списками и называет пересечения. Хостлисты [zapret2](https://github.com/bol-van/zapret2)
 (`/opt/zapret2/ipset/`) byway не сверяет — смотреть руками.
 
 ---
@@ -543,7 +543,8 @@ pbr doctor называет, если он включён; zapret и свои с
 идти; для новых установок это умолчание. В режиме «по спискам» это
 домены списка (dnsmasq отвечает на них NXDOMAIN на запрос любого типа) и
 подсети, в режиме «Всё через VPN» — весь выход наружу из сетей списка
-интерфейсов. Вход в роутер (LuCI, ssh) остаётся.
+интерфейсов. Вход в роутер (LuCI, ssh) остаётся. Если вход пропал, на крайний случай есть
+[режим failsafe](https://openwrt.org/docs/guide-user/troubleshooting/failsafe_and_factory_reset) (нужен физический доступ к роутеру, описание на английском).
 
 `byway status` пишет тогда `ВНИМАНИЕ … доступ к списку ЗАКРЫТ` или `ВНИМАНИЕ …
 трафик перечисленных сетей мимо VPN ЗАКРЫТ`, панель — на вкладке «Основное». Третий вариант —

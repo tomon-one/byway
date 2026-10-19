@@ -17,8 +17,8 @@
 
 | источник | путь | кто ставит и обновляет |
 |---|---|---|
-| выпуск XTLS на GitHub | `/usr/local/bin/xray-ВЕРСИЯ` | установщик byway, затем `byway engine` |
-| пакеты OpenWrt (`xray-core`) | `/usr/bin/xray` | `apk` или `opkg` |
+| [выпуск XTLS на GitHub](https://github.com/XTLS/Xray-core/releases) | `/usr/local/bin/xray-ВЕРСИЯ` | установщик byway, затем `byway engine` |
+| [пакеты OpenWrt](https://github.com/openwrt/packages/tree/master/net/xray-core) (`xray-core`) | `/usr/bin/xray` | `apk` или `opkg` |
 
 Номер версии в имени файла нужен, чтобы два ядра могли лежать рядом и между
 ними можно было переключиться одной опцией.
@@ -256,7 +256,7 @@ byway gen && /etc/init.d/byway restart
 
 ## Ядро на Go 1.27
 
-Выпуски Xray-core с 26.9.8 собраны на Go 1.27 и `x/net` старше v0.60.0. В Go 1.27 клиент HTTP/2
+Выпуски Xray-core с 26.9.8 собраны на [Go](https://go.dev/) 1.27 и [`x/net`](https://pkg.go.dev/golang.org/x/net) старше v0.60.0. В Go 1.27 клиент HTTP/2
 перестал объединять наборы номера, и XHTTP открывает своё TCP-соединение на
 каждый ждущий запрос: `xmux.maxConnections` их не ограничивает. Пока сервер
 отвечает, это несколько лишних соединений. Когда рукопожатие с сервером
@@ -277,8 +277,8 @@ byway gen && /etc/init.d/byway restart
 
 Тег `-tags http2legacy` возвращает прежний клиент HTTP/2. Задаётся он при
 сборке, поэтому готовое ядро с GitHub им не исправить: ту же версию нужно
-собрать самому. Нужен компьютер с Linux, macOS или WSL, `git` и Go 1.27
-(подойдёт и Go постарше: `GOTOOLCHAIN` скачает нужную версию сам).
+собрать самому. Нужен компьютер с Linux, macOS или [WSL](https://learn.microsoft.com/ru-ru/windows/wsl/), `git` и [Go 1.27](https://go.dev/doc/install)
+(подойдёт и Go постарше: [`GOTOOLCHAIN`](https://go.dev/doc/toolchain) скачает нужную версию сам).
 
 ```sh
 git clone --depth 1 --branch v26.9.30 https://github.com/XTLS/Xray-core.git
@@ -295,7 +295,7 @@ scp -O xray.gz root@192.168.1.1:/tmp/
 и `GOARM=7`, `x86_64` → `amd64`, `mips` → `mips`, `mipsel` → `mipsle`; для
 MIPS без FPU добавить `GOMIPS=softfloat`. Номер Go — тот, что пишет
 `xray version` у ядра из выпуска. Флаги те же, что в сборке выпусков XTLS
-(`.github/workflows/release.yml`): без `-tags http2legacy` эта команда даёт
+([`.github/workflows/release.yml`](https://github.com/XTLS/Xray-core/blob/main/.github/workflows/release.yml)): без `-tags http2legacy` эта команда даёт
 файл, побайтно равный ядру из выпуска, так что сборку легко сверить.
 
 Второй способ — без тега, но с исправленным `x/net`: перед `go build`
@@ -435,7 +435,7 @@ byway, — вернуться на версию, на которой работ�
 и второе рядом не встаёт. Там каждая замена идёт через память, с минутой без
 туннеля. Если ядро не встало и из пакетов, а свободно меньше 15 МБ, установщик
 так и говорит: настройкой это не исправить, нужен роутер с большим флешем или
-extroot.
+[extroot](https://openwrt.org/docs/guide-user/additional-software/extroot_configuration).
 
 С extroot (корень на USB-накопителе) `/usr/local/bin` оказывается на
 накопителе, места хватает на два ядра, и замена идёт рядом. Положить ядро на
@@ -445,7 +445,7 @@ extroot.
 `byway set xray_bin /usr/local/bin/xray-usb`. Флешка должна быть
 смонтирована к старту службы, иначе ядра нет.
 
-Обновление прошивки (sysupgrade) сохраняет файлы byway, но не ядро: 35 МБ в
+Обновление прошивки ([sysupgrade](https://openwrt.org/docs/guide-user/installation/generic.sysupgrade)) сохраняет файлы byway, но не ядро: 35 МБ в
 список сохраняемого не кладутся, sysupgrade упаковывает его в память. После
 обновления служба ставит ядро сама (см. [Ядра нет](#ядра-нет)). Если на
 флеше меньше 25 МБ свободных, это не выйдет, и ядро ставится строкой
@@ -464,7 +464,7 @@ Xray написан на Go. Без ограничения сборщик мус
 поднимала его заново, но соединения каждый раз рвались — снаружи это
 выглядело как «туннель моментами отваливается».
 
-Поэтому служба запускает Xray с переменной `GOMEMLIMIT`. Это мягкий предел: у
+Поэтому служба запускает Xray с переменной [`GOMEMLIMIT`](https://go.dev/doc/gc-guide#Memory_limit). Это мягкий предел: у
 порога Go чаще собирает мусор и возвращает память системе. Живые данные он не
 режет; если их больше предела, Go просто чаще собирает мусор (не более
 половины процессорного времени). Хуже, чем OOM, не будет.

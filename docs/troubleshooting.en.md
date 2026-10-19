@@ -256,13 +256,13 @@ router cannot see this.
 Check from the device, if it has a console: `nslookup example.com`. An
 address from `198.18.0.0/15` means the device uses the router's resolver; a
 real one means it has its own DNS. Where to look: Android, "Private DNS"
-(the name varies by vendor), set it to Off or Automatic; browsers, DNS over
-HTTPS (Firefox "DNS over HTTPS", Chrome "Use secure DNS"); iOS and macOS, DNS
+(the name varies by vendor; [Android help](https://support.google.com/android/answer/9654714?hl=en)), set it to Off or Automatic; browsers, DNS over
+HTTPS ([Firefox](https://support.mozilla.org/en-US/kb/firefox-dns-over-https) "DNS over HTTPS", [Chrome](https://support.google.com/chrome/answer/10468685?hl=en&co=GENIE.Platform%3DDesktop) "Use secure DNS"); iOS and macOS, DNS
 profiles and apps that set their own resolver.
 
 Firefox that turned DoH on by itself rather than by the user's setting (the
-default in Russia since 2022) goes through byway: while interception is up,
-dnsmasq answers NXDOMAIN for `use-application-dns.net`, and Firefox takes this
+default on desktop in Russia since 2022, [Mozilla help](https://support.mozilla.org/en-US/kb/firefox-dns-over-https)) goes through byway: while interception is up,
+dnsmasq answers NXDOMAIN for [`use-application-dns.net`](https://support.mozilla.org/en-US/kb/canary-domain-use-application-dnsnet), and Firefox takes this
 signal to turn DoH off. Check from a PC: `nslookup use-application-dns.net`
 answers `NXDOMAIN`. DoH turned on in Firefox by hand, Android Private DNS and
 iOS DNS profiles ignore the signal.
@@ -353,7 +353,7 @@ Start with the state log: what changed and when.
 Memory. The kernel kills a process that ran out of memory, procd brings the
 engine back after 5 seconds, and from the outside it is a drop of a few
 seconds. Traces: `dmesg | grep -i killed`; current use: the `memory` line of
-`byway status`. The engine runs under a soft memory limit (`GOMEMLIMIT`): 40 %
+`byway status`. The engine runs under a soft memory limit ([`GOMEMLIMIT`](https://go.dev/doc/gc-guide#Memory_limit)): 40 %
 of the router's memory by default, at least 32 MiB. Your own limit:
 
 ```sh
@@ -531,12 +531,12 @@ mark `0x400000` (`self_mark`), routing table 100, ports 1602–1603 and the
 pool `198.18.0.0/15`. It points dnsmasq at its own resolver with a
 `byway-dns.conf` file in the drop-in directory (`no-resolv`: other upstream
 servers are off); general servers set in the dnsmasq settings it leaves
-alone and warns about. A service of the same kind (podkop, passwall,
-OpenClash and the like) does the same with its own values. Two of them side
+alone and warns about. A service of the same kind ([podkop](https://github.com/itdoginfo/podkop), [passwall](https://github.com/Openwrt-Passwall/openwrt-passwall),
+[OpenClash](https://github.com/vernesong/OpenClash) and the like) does the same with its own values. Two of them side
 by side do not mean slowness, they mean traffic going the wrong way.
 
-`byway doctor` knows podkop, passwall, passwall2, openclash, nikki,
-homeproxy and shadowsocks-libev by name. For an installed one it checks
+`byway doctor` knows podkop, passwall, [passwall2](https://github.com/Openwrt-Passwall/openwrt-passwall2), openclash,
+[nikki](https://github.com/nikkinikki-org/OpenWrt-nikki), [homeproxy](https://github.com/immortalwrt/homeproxy) and shadowsocks-libev by name. For an installed one it checks
 whether it runs, whether it is in autostart and whether it leaves a trace in
 the kernel: an nft table with its name, or a rule for table 100 while byway
 is stopped. A running one is reported as a fault, with the command to stop
@@ -544,7 +544,7 @@ and disable it. doctor also checks for extra firewall rules with byway's
 mark, taken ports, whether dnsmasq points at byway, the `local default`
 route in table 100 and extra `ip rule` entries for it.
 
-doctor names pbr when it is enabled; zapret and your own scripts it does not. Check by
+doctor names [pbr](https://openwrt.org/docs/guide-user/network/routing/pbr) when it is enabled; [zapret](https://github.com/bol-van/zapret) and your own scripts it does not. Check by
 hand: `nft list tables`, `ip rule show`, `ip route show table 100`,
 `cat /tmp/dnsmasq*.d/byway-dns.conf`, `uci get dhcp.@dnsmasq[0].server`,
 `uci show firewall | grep mark`.
@@ -557,7 +557,7 @@ number cannot.
 If zapret runs alongside, one domain must not sit on both lists: the session
 splits across two exits. `byway presets` compares the zapret hostlist at
 `/opt/zapret/ipset/zapret-hosts-user.txt` with the ready-made and your own
-lists and names the overlaps. byway does not check zapret2 hostlists
+lists and names the overlaps. byway does not check [zapret2](https://github.com/bol-van/zapret2) hostlists
 (`/opt/zapret2/ipset/`); compare those by hand.
 
 ---
@@ -569,7 +569,8 @@ The setting "If the VPN does not come up" (Overview tab, `on_failure`) set to
 it is the default for new installs. In list mode that is the
 list's domains (dnsmasq answers NXDOMAIN to a query of any type for them) and
 subnets; in "Everything through the VPN" mode, all outbound traffic from the
-listed networks. Access to the router (LuCI, ssh) stays.
+listed networks. Access to the router (LuCI, ssh) stays. If access is lost anyway, the last resort is
+[failsafe mode](https://openwrt.org/docs/guide-user/troubleshooting/failsafe_and_factory_reset) (needs physical access to the router).
 
 `byway status` then shows `WARNING … the list is CLOSED` or `WARNING …
 Traffic of the listed networks outside the VPN is BLOCKED`, and the web UI shows it on the Overview

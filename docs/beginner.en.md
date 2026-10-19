@@ -19,10 +19,14 @@ through it.
 
 ## What you need
 
-- **A router with OpenWrt 22.03 or newer.** The version is shown in LuCI (the
+- **A router with OpenWrt 22.03 or newer.** The version is shown in [LuCI](glossary.en.md#luci) (the
   router's web interface): *Status → Overview*, the *Firmware Version* line.
   On 21.02 and older byway will not install — the installer refuses and says
-  why.
+  why. Whether your model is supported is in the
+  [OpenWrt Table of Hardware](https://openwrt.org/toh/start). The firmware for
+  it is built by the [Firmware Selector](https://firmware-selector.openwrt.org/);
+  the first installation is described in the
+  [OpenWrt guide](https://openwrt.org/docs/guide-quick-start/start).
 - **A key from a VPN service** — a link like `vless://…`, `trojan://…`,
   `ss://…` and the like, or a [subscription](glossary.en.md#subscription)
   address (`https://…`). It comes in an email, in your account with the
@@ -38,7 +42,8 @@ through it.
    ssh root@192.168.1.1
    ```
 
-   The password is the same as for logging in to LuCI.
+   The password is the same as for logging in to LuCI. More on logging in — on
+   the [OpenWrt wiki](https://openwrt.org/docs/guide-quick-start/sshadministration).
 
 2. Paste the install line and press Enter:
 
@@ -113,7 +118,8 @@ reasons.
 - The device has "Private DNS" (Android) or [DoH](glossary.en.md#doh) in the
   browser turned on. Such a device learns site addresses not from the router,
   and byway does not see that the site is on the list. Turn that setting off
-  on the device. More in [when it does not work](troubleshooting.en.md).
+  on the device ([Android](https://support.google.com/android/answer/9654714?hl=en), [Firefox](https://support.mozilla.org/en-US/kb/firefox-dns-over-https),
+  [Chrome](https://support.google.com/chrome/answer/10468685?hl=en&co=GENIE.Platform%3DDesktop)). More in [when it does not work](troubleshooting.en.md).
 
 **Sites from the list stopped opening altogether.** If the VPN on the router
 did not come up, byway by default closes the sites on the lists so they do not
