@@ -18,7 +18,7 @@ usually two sources:
 
 | source | path | installed and updated by |
 |---|---|---|
-| [XTLS release on GitHub](https://github.com/XTLS/Xray-core/releases) | `/usr/local/bin/xray-VERSION` | the byway installer, then `byway engine` |
+| [XTLS release on GitHub](https://github.com/XTLS/Xray-core/releases) | `/usr/local/bin/xray-VERSION` | the byway installer, then `byway core` |
 | [OpenWrt packages](https://github.com/openwrt/packages/tree/master/net/xray-core) (`xray-core`) | `/usr/bin/xray` | `apk` or `opkg` |
 
 The version number in the file name lets two engines sit side by side and
@@ -51,11 +51,11 @@ yet. A number can be typed by hand, or one of these picked:
 
 - **the one verified with byway** — the default. byway is verified on it end
   to end, with the tunnel up and real traffic. Currently `26.10.17`;
-  `byway engine tested` installs the same.
+  `byway core tested` installs the same.
 - **the newest one, pre-releases included** — the first release in the XTLS
-  list (`byway engine newest`).
+  list (`byway core newest`).
 - **the newest stable one** — what GitHub returns as `releases/latest`
-  (`byway engine stable`).
+  (`byway core stable`).
 - **none** — the path to your own engine is set later.
 
 **"Stable" lags behind for Xray-core.** XTLS marks everything newer than
@@ -85,22 +85,22 @@ XTLS builds MIPS binaries only for processors with a floating-point unit
 (FPU). Most inexpensive MIPS routers do not have one, and the GitHub build
 does not run there. The sign is a `mips*` architecture with no word `fpu` in
 `/proc/cpuinfo`. The installer checks this before downloading and offers only
-the engine from the OpenWrt packages. On such a CPU `byway engine` refuses at
+the engine from the OpenWrt packages. On such a CPU `byway core` refuses at
 once and prints the command `apk update && apk add xray-core` (`opkg update && opkg install xray-core` on opkg). The
 engine version there is whatever your branch packages.
 
 ---
 
-## `byway engine`: checking and replacing
+## `byway core`: checking and replacing
 
 ```sh
-byway engine              # is there an update; below it — file, XTLS versions, space and memory
-byway engine --check      # only the answer: is there an update
-byway engine 26.9.9       # install this version (newer or older than the current one)
-byway engine tested       # the one verified with byway
-byway engine newest       # the newest one, pre-releases included
-byway engine stable       # the newest stable one
-byway engine restore      # no engine: version from xray_bin or tested
+byway core              # is there an update; below it — file, XTLS versions, space and memory
+byway core --check      # only the answer: is there an update
+byway core 26.9.9       # install this version (newer or older than the current one)
+byway core tested       # the one verified with byway
+byway core newest       # the newest one, pre-releases included
+byway core stable       # the newest stable one
+byway core restore      # no engine: version from xray_bin or tested
 ```
 
 Without an argument and with `--check`, nothing changes. The first line says
@@ -108,8 +108,8 @@ whether a newer version than the installed one exists; if the installed one
 is not the verified one, the next line names the verified one. Without
 `--check` it goes on with the file path, the newest and stable versions at
 XTLS, free flash and available memory. The "Check for a core update" button
-on the "Maintenance" tab of the web UI calls `byway engine --check`, the
-"Install the tested core" button runs `byway engine tested` in the background
+on the "Maintenance" tab of the web UI calls `byway core --check`, the
+"Install the tested core" button runs `byway core tested` in the background
 (`byway job engine`), with progress on the page. Another version — the
 "Another version" field there (or the console); your own engine as a file —
 console only.
@@ -215,20 +215,20 @@ engine is replaced without a check.
 ### No engine
 
 This happens after a firmware upgrade (the engine is not on the keep list)
-and after the `xray-core` package is removed. `byway engine VERSION` (and
+and after the `xray-core` package is removed. `byway core VERSION` (and
 `tested`, `newest`, `stable`) then installs rather than replaces: there is
 nothing to roll back to, so there is no archive of the previous version and
 no wait for the tunnel. It needs 25 MB free on flash, as the installer does. The
 engine is unpacked to `/usr/local/bin/xray-VERSION`, checked by running it,
 its path goes into `xray_bin`, and an enabled service is restarted.
 
-`byway engine restore` picks the version itself: the number from the file
+`byway core restore` picks the version itself: the number from the file
 name in `xray_bin` if it is `/usr/local/bin/xray-VERSION` (settings survive a
 firmware upgrade), otherwise the tested one. With the engine in place it does
 nothing.
 
 By hand this is rarely needed. When the service finds neither the engine nor
-a runnable `/usr/local/bin/xray-*` next to it at start, it runs `byway engine
+a runnable `/usr/local/bin/xray-*` next to it at start, it runs `byway core
 restore` in the background, once the default route is up (waiting up to two
 minutes), 10 seconds after it, once per boot (the marker
 `/tmp/byway-engine-restore`). If a runnable file is there, it names the
@@ -245,11 +245,11 @@ to the system log (`logread -e byway`).
 ## Rolling back and switching by hand
 
 A rollback is the same replacement with an older number:
-`byway engine 26.3.27`. After a successful swap the previous GitHub engine is
+`byway core 26.3.27`. After a successful swap the previous GitHub engine is
 deleted, so going back to it means downloading it again.
 
 If the engine you want is already there (`/usr/local/bin/xray-26.3.27`, and it
-runs), `byway engine 26.3.27` switches to it without a download: the config is
+runs), `byway core 26.3.27` switches to it without a download: the config is
 checked with the new binary, the service restarts, the tunnel is awaited for up
 to two and a half minutes, and if it does not come up the previous engine is
 put back. Both files stay.
@@ -268,7 +268,7 @@ differ.
 
 If the engine comes from a package and there is no room for a second one:
 remove the package (`apk del xray-core` or `opkg remove xray-core`) and
-install an engine with `byway engine VERSION` or `tested` (see [No
+install an engine with `byway core VERSION` or `tested` (see [No
 engine](#no-engine)). While there is no engine there is no tunnel either: the
 interception is taken down; with `on_failure=closed` what went through the VPN
 is closed, with `open` it goes to the internet directly.
@@ -288,7 +288,7 @@ of connections to one address is a reason to block it. Details:
 is in `golang.org/x/net` v0.60.0
 ([golang/go#81646](https://github.com/golang/go/issues/81646)); Xray includes
 it since release 26.10.17 (`x/net` v0.61.0). The simplest way is to install
-that or a newer one: `byway engine 26.10.17`. The build below is only needed
+that or a newer one: `byway core 26.10.17`. The build below is only needed
 to stay on versions 26.9.8–26.10.10.
 
 Only xhttp keys are affected. With such an engine `byway doctor` warns
@@ -329,7 +329,7 @@ byte, so build without changes first, verify, then raise `x/net`.
 On the router:
 
 ```sh
-byway engine /tmp/xray.gz
+byway core /tmp/xray.gz
 ```
 
 byway prints the engine's sha256 (compare it with `sha256sum xray` on the
@@ -341,7 +341,7 @@ spot, or after a refusal before the swap starts, it stays. The custom build is s
 
 What to know about a custom build:
 
-- `byway engine VERSION` and `tested` install the XTLS release engine, that is,
+- `byway core VERSION` and `tested` install the XTLS release engine, that is,
   the bug comes back; the same command returns you to the official engine of
   the same version.
 - After a firmware upgrade byway restores the tested version from GitHub; the
@@ -373,7 +373,7 @@ the config differently or refuses up front:
 | 26.9.8 and newer | for the direct outbound, name resolution (`UseIP`) goes into `sockopt`, not `settings`: the engine declared the old field deprecated |
 
 A refusal is a message naming the required version and suggesting
-`byway engine tested`; the working config is not changed. The refusals over
+`byway core tested`; the working config is not changed. The refusals over
 `allowInsecure` and over a key without TLS name a command for your own server
 with a self-signed certificate instead:
 
@@ -424,12 +424,12 @@ changed. `byway gen` then prints `the engine rejected the config, the draft is
 left in /tmp/byway-config.new.json:`, the last lines of the engine's answer
 and, when the reason is known, what to do about it. After "Save & Apply" in
 the web UI or `/etc/init.d/byway reload`, the system log shows the same: the config
-did not build, the previous one keeps working. `byway engine` does not keep
+did not build, the previous one keeps working. `byway core` does not keep
 such an engine: the new one is removed, the previous one stays.
 
 A running Xray is not restarted by a failed build and keeps working on the
 previous config. It is worse when the engine was updated around
-`byway engine`, for example with `apk upgrade xray-core`. On the next service
+`byway core`, for example with `apk upgrade xray-core`. On the next service
 start (router reboot, `restart`) the new engine checks the previous config.
 If it accepts it, the service comes up on it. If not, the service does not
 start and the interception is taken down. With `on_failure=closed` (the
@@ -440,7 +440,7 @@ goes to the internet directly.
 is the key (no TLS, `allowInsecure`, a removed transport), rolling back the
 engine only buys time: the key has to change on the server. If the engine
 changed what byway generates, go back to the version that worked:
-`byway engine NUMBER`. For an engine from a package, roll back the package or
+`byway core NUMBER`. For an engine from a package, roll back the package or
 remove it and install the engine with the installer.
 
 And [report it](https://github.com/tomon-one/byway/issues): this is fixed in
@@ -457,7 +457,7 @@ the release archive sits in memory, not on flash.
 
 The installer needs 25 MB free on `/overlay`, otherwise the engine comes from
 the OpenWrt packages. An install with no previous engine
-(`byway engine` after a firmware upgrade, `restore`) needs the same 25 MB. A
+(`byway core` after a firmware upgrade, `restore`) needs the same 25 MB. A
 side-by-side swap needs the uncompressed engine size plus 5 MB, about 40 MB:
 how much ubifs will compress cannot be known in advance, so byway counts
 uncompressed. A swap through
@@ -530,5 +530,5 @@ reads it from the running process's environment, not from the settings: the
 
 Replacing the engine needs memory of its own, beyond the limit: 40 MB
 available before it starts, and in a swap through memory, the engine size
-plus 20 MB after the service stops. `byway engine` without an argument shows
+plus 20 MB after the service stops. `byway core` without an argument shows
 how much is available now.

@@ -327,7 +327,7 @@ cannot be parsed, the engine is treated as recent.
 
 When it refuses, byway names the installed version. For VLESS encryption,
 hysteria2, salamander and pcs/vcn it also prints the update command,
-`byway engine tested`; for xhttp it suggests updating Xray-core or using a ws
+`byway core tested`; for xhttp it suggests updating Xray-core or using a ws
 key.
 
 ## Suspicious links

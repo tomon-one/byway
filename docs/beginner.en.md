@@ -139,7 +139,7 @@ checks the router and writes how to fix each fault it finds.
 
 *Maintenance → Updates* → "Check for an update", then "Install the update".
 Settings and lists are kept; the tunnel drops for a few seconds. After the
-update — Ctrl+Shift+R in the browser.
+update, reload the page (F5).
 
 ## Removing
 

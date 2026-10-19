@@ -95,7 +95,7 @@ return view.extend({
 		o.default = 'ru';
 
 		o = s.taboption('main', form.Value, 'xray_bin', _('Путь к ядру Xray'),
-			_('Путь вписывает byway engine при замене ядра. Пусто — ядро из пакета.'));
+			_('Путь вписывает byway core при замене ядра. Пусто — ядро из пакета.'));
 		o.placeholder = '/usr/bin/xray';
 
 		o = s.taboption('main', form.Value, 'xray_memlimit', _('Предел памяти ядра'),

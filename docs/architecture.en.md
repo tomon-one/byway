@@ -250,7 +250,7 @@ reach a single listed domain. There are two.
 The first is the `local-in` inbound on `127.0.0.1:1603` (`local_proxy_port`),
 an HTTP proxy in Xray-core. It works without any kernel rules. byway sends its
 own downloads through it (`nt_get`): version check, `byway update`,
-`byway engine`, ready-made lists, the dictionary on `byway lang en`. If that
+`byway core`, ready-made lists, the dictionary on `byway lang en`. If that
 fails — directly, then directly with `curl --resolve` to GitHub addresses
 from DoH (`nt_gh_resolve`, `nt_doh_a`: a query to `https://8.8.8.8`, then
 `https://1.1.1.1`, by address, not by name). The third attempt is for a
@@ -408,7 +408,7 @@ does, and the list would leak directly during the wait.
 
 A stop followed by a start (restart, reload with a new config, an update,
 `BYWAY_KEEP_DNS`) and an engine replacement (`BYWAY_KEEP_BLOCK` from
-`byway engine`, through RAM included) first call `plumb close` under `closed`
+`byway core`, through RAM included) first call `plumb close` under `closed`
 and remove interception with `--keep-block`: there is no window in which the
 list's subnets go direct.
 
@@ -502,7 +502,7 @@ port nobody listens on.
 With `closed`, run `byway plumb close`. No engine binary: print a hint and
 exit; if a runnable `/usr/local/bin/xray-*` sits next to it, the hint names
 it, otherwise the service sets the marker `/tmp/byway-engine-restore` and
-in the background, once the default route is up (waiting up to two minutes), 10 s after it runs `byway engine restore` (output to syslog),
+in the background, once the default route is up (waiting up to two minutes), 10 s after it runs `byway core restore` (output to syslog),
 once per boot. Then `byway gen`, the procd instance, and in `service_started`
 up to three `byway plumb on` attempts 10 s apart. That loop runs in the
 background, because with waiting it takes up to a minute and the panel drops
@@ -584,7 +584,7 @@ in order:
 1. With `enabled 1`, the engine file fails `x_ok`, there is no runnable
    `/usr/local/bin/xray-*` next to it, and the marker
    `/tmp/byway-engine-restore` is over 15 minutes old or missing: the marker
-   is refreshed, `byway engine restore` runs in the background, output to
+   is refreshed, `byway core restore` runs in the background, output to
    syslog. Flash needs 25 MB free; with less it refuses before downloading.
 2. No engine while `enabled 1` and no "removed by hand" marker: `pl_block_on`
    (only acts with `closed`). Misses are counted in `/tmp/byway-nopid`. On the
@@ -685,7 +685,7 @@ init script, panel and dictionaries. The outcome goes to
 
 ### Replacing the engine
 
-`byway engine VERSION|tested|newest|stable|restore`; without an argument it
+`byway core VERSION|tested|newest|stable|restore`; without an argument it
 shows what is installed and what is available. `tested` is the constant
 `XRAY_TESTED` (also in `install.sh`), `restore` is the number from the file
 name in `xray_bin` (`/usr/local/bin/xray-VERSION`), otherwise `XRAY_TESTED`;
@@ -711,17 +711,17 @@ the config check are skipped, and on the side-by-side path the service restart
 too; without a key the engine is replaced through RAM as well. Lock:
 `/var/run/byway-engine.lock`.
 
-`byway engine VERSION` when `/usr/local/bin/xray-VERSION` is already there and
+`byway core VERSION` when `/usr/local/bin/xray-VERSION` is already there and
 runs is a switch without a download: the config is checked with the new
 binary, `xray_bin` changes, the service restarts, and the tunnel is awaited for
 up to two and a half minutes; if it does not come up, back to the old one. Both
 files stay.
 
-`byway engine /tmp/FILE` installs your own binary: a `.gz` with the binary or
+`byway core /tmp/FILE` installs your own binary: a `.gz` with the binary or
 the release `.zip`, from `/tmp` only, `unzip` required. The file is placed as
 `/usr/local/bin/xray-local-DATE`, the `.dgst` is not checked (the sha256 is
 printed), then the same choice between side-by-side and through RAM, with
-rollback. `byway engine --check` only reports whether an engine update exists
+rollback. `byway core --check` only reports whether an engine update exists
 and changes nothing.
 
 No previous engine (not found or does not run) — `en_fresh`: 25 MB free flash
@@ -797,7 +797,7 @@ left over from an interrupted run and is removed. With a live PID, wait up to
 |---|---|---|
 | `/var/run/byway-gen.lock` | `byway gen` | exit with error |
 | `/var/run/byway-plumb.lock` | `byway plumb on/off/close` | `return 1`, so `byway watch` carries on |
-| `/var/run/byway-engine.lock` | `byway engine` | exit with error |
+| `/var/run/byway-engine.lock` | `byway core` | exit with error |
 
 Locks live in `/var/run`, not `/tmp`: on OpenWrt that is `/tmp/run`, owned by
 root with mode 755. In `/tmp` (1777) any process, dnsmasq under its own user
@@ -850,7 +850,7 @@ Everything under `/tmp` and `/var/run` lives in RAM and is gone after a
 reboot. `install.sh` adds `/etc/byway/`, the init script, the
 `/etc/rc.d/S21byway` and `K10byway` links, the byway files and the panel
 files to `/etc/sysupgrade.conf`. The engine is not on that list (35 MB): after
-a sysupgrade the service installs it itself with `byway engine restore` (see
+a sysupgrade the service installs it itself with `byway core restore` (see
 [The procd service](#the-procd-service)).
 
 ## Where to look

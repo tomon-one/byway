@@ -1294,6 +1294,12 @@ if [ "$PANEL" = 1 ]; then
         cp "$SRC/luci/acl.json" /usr/share/rpcd/acl.d/luci-app-byway.json && chmod 644 /usr/share/rpcd/acl.d/luci-app-byway.json
     # Кэш меню LuCI надо сбросить, иначе раздел не появится до перезагрузки.
     for c in /tmp/luci-indexcache*; do [ -e "$c" ] && : > "$c"; done
+    # Файлы панели браузер берёт по адресу с ?v=, а в нём LuCI держит время
+    # изменения базы пакетов (pkgs_update_time). Панель ставится мимо apk и
+    # opkg: без touch адрес прежний, и браузер показал бы старую из кэша.
+    for _db in /lib/apk/db/installed /usr/lib/opkg/status; do
+        [ -f "$_db" ] && touch "$_db"
+    done
     /etc/init.d/rpcd restart >/dev/null 2>&1 || true
     say "панель LuCI: Сервисы → Byway"
 fi

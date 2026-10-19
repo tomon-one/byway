@@ -316,7 +316,7 @@ byway спрашивает версию у самого ядра (`xray version`
 
 При отказе byway называет установленную версию. Для шифрования VLESS,
 hysteria2, salamander и pcs/vcn он печатает и команду обновления
-`byway engine tested`, для xhttp советует обновить Xray-core или взять ключ на
+`byway core tested`, для xhttp советует обновить Xray-core или взять ключ на
 ws.
 
 ## Подозрительные ссылки

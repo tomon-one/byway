@@ -136,10 +136,10 @@ Run `byway health` and follow the first `fail` line.
 the settings and a missing autostart right away. Then `/etc/init.d/byway
 restart`: on failure the service prints the reason. With no engine it names a
 file found next to it, `/usr/local/bin/xray-*`, and if there is none, installs
-the engine itself in the background (`byway engine restore`). That is what the
+the engine itself in the background (`byway core restore`). That is what the
 first minutes after a firmware upgrade look like; progress is in `logread -e
 byway`, the line `no core — installing Xray …`. If it fails, the watchdog
-retries every 15 minutes; by hand — `byway engine restore`. If the config did not
+retries every 15 minutes; by hand — `byway core restore`. If the config did not
 build, `byway gen` shows the engine's answer and, for known causes, what to
 do; the draft stays in `/tmp/byway-config.new.json`. If the new config fails
 but the engine accepts the previous one, the service starts on the previous
@@ -391,11 +391,11 @@ The line. If the connection to the ISP drops, the tunnel drops with it:
 ## Stopped working after an update
 
 `byway update` leaves settings and lists alone, rebuilds the config and
-restarts the service. If the web UI behaves oddly afterwards, clear the
-browser cache: LuCI does not tell the browser that the UI files changed. The
-web UI warns about it with the line "The byway panel was updated to …, but the
-browser shows the previous one (…) from its cache", but only until its shared
-module is re-fetched. Ctrl+Shift+R (Ctrl+F5) on each tab of the UI, or F12 →
+restarts the service. If the web UI behaves oddly afterwards, reload the page
+(F5): since 0.4 byway changes the tag LuCI uses to decide whether to fetch the
+files again, on install, update and rollback. If the UI is still old (it says
+"The byway panel was updated to …, but the browser shows the previous one (…)
+from its cache"), press Ctrl+Shift+R (Ctrl+F5) on each tab of the UI, or F12 →
 Network → "Disable cache" → F5. A manual `byway update` makes a copy of the whole previous
 version (`/etc/byway/prev.tgz`), waits up to two and a half minutes for the
 tunnel and rolls back by itself on failure; to go back by hand —
@@ -447,7 +447,7 @@ For your own server with a self-signed certificate on an engine below 26.3.27
 commit byway && /etc/init.d/byway reload` lifts byway's refusal; the option
 does not override a recent engine.
 
-`byway engine` checks the archive against the release checksum, tests the
+`byway core` checks the archive against the release checksum, tests the
 config with the new engine and waits up to two and a half minutes for the
 tunnel, and, if the connection through the server worked before the
 replacement, for that too; if it does not come up, the previous engine is
@@ -457,17 +457,17 @@ side and through memory (see [engine](engine.en.md#without-a-key)). If a package
 engine, go back to the version that worked:
 
 ```sh
-byway engine              # what is installed and what XTLS has
-byway engine 26.9.9       # a specific version; tested: the one tested with byway
+byway core              # what is installed and what XTLS has
+byway core 26.9.9       # a specific version; tested: the one tested with byway
 ```
 
 If the flash has no room for a second engine and the current one came from a
-package, `byway engine` refuses: remove the package with the package manager
-first, after which `byway engine tested` installs the engine as onto empty
+package, `byway core` refuses: remove the package with the package manager
+first, after which `byway core tested` installs the engine as onto empty
 space.
 
 A replacement needs at least 40 MB of free memory. On MIPS without a
-floating-point unit GitHub builds do not run, and `byway engine` refuses:
+floating-point unit GitHub builds do not run, and `byway core` refuses:
 there the engine changes only through the OpenWrt package.
 
 ---

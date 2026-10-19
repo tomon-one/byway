@@ -29,7 +29,8 @@ function m_yes(t) {
 
 // Вывод команды byway с отступом.
 function m_out(...a) {
-	for (let l in pl_lines(run([ m_self(), ...a ], true).out)) print('    ', l, '\n');
+	// BW_WRAP -- ширина для подсказок doctor: 78 минус отступ меню.
+	for (let l in pl_lines(run([ 'env', 'BW_WRAP=74', m_self(), ...a ], true).out)) print('    ', l, '\n');
 }
 
 function m_uci(...kv) {
@@ -265,6 +266,31 @@ function m_indent(lines, empty) {
 	for (let l in lines) print('    ', l, '\n');
 }
 
+// Строка журнала движка -- в одну строку экрана: местное время, уровень цветом,
+// сообщение без второго (UTC) времени Xray; длинное обрезается с «…».
+function m_xlog(l) {
+	let m = match(l, /^\S+ \S+ +\S+ (\d+:\d+):\d+ \d+ \S+ [^:]+: (.*)$/);
+	if (!m) return l;
+	let t = replace(m[2], /^\d{4}\/\d\d\/\d\d [0-9:.]+ /, '');
+	let lv = match(t, /^\[(\w+)\] (.*)$/), c = '';
+	if (lv) {
+		t = lv[2];
+		c = lv[1] == 'Error' ? '\033[31m' : (lv[1] == 'Warning' ? '\033[33m' : '\033[2m');
+	}
+	// Частая запись: DoH к 8.8.8.8 не ответил (идёт напрямую, туннель не задет).
+	let d = match(t, /^app\/dns: failed to retrieve response for (\S+?)\.? > /);
+	if (d) t = _f('DNS: нет ответа для %s', d[1]);
+	// 74 -- ширина под отступ меню; время и уровень -- 15 знаков.
+	let W = 59, n = 0, i = 0, cut = 0;
+	for (; i < length(t); i++) {
+		if ((ord(t, i) & 0xC0) == 0x80) continue;
+		if (++n == W) cut = i;
+		if (n > W) break;
+	}
+	if (i < length(t)) t = substr(t, 0, cut) + '…';
+	return sprintf('%s  %s%-7s\033[0m %s', m[1], c, lv ? lc(lv[1]) : '', t);
+}
+
 function m_logs() {
 	while (true) {
 		m_head('Журнал и статистика');
@@ -285,7 +311,8 @@ function m_logs() {
 			m_pause();
 		} else if (r == '3') {
 			print('\n');
-			m_indent(slice(pl_lines(run([ 'logread', '-e', 'xray' ]).out), -30), _t('пусто\n'));
+			let L = map(slice(pl_lines(run([ 'logread', '-e', 'xray' ]).out), -15), m_xlog);
+			m_indent(L, _t('пусто\n'));
 			m_pause();
 		} else if (r == '0' || r === '') {
 			return;

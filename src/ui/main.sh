@@ -3,9 +3,11 @@
 # Команды для человека (сводка, справка, ключ, списки) -- в ucode (uc/cli.uc);
 # самого byway они зовут как отдельный процесс (BW_SELF).
 cli_uc() {
+    # BW_TTY -- вывод в терминал: экраны просмотра чистят экран (uc/cli.uc).
+    _ctty=; [ -t 1 ] && _ctty=1
     BW_SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0") \
     BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_PRESETS=$PRESETS_DIR \
-    BW_BADLIST=$BADLIST bw_uc "$@"
+    BW_BADLIST=$BADLIST BW_TTY=$_ctty bw_uc "$@"
 }
 
 # Потолок журнала обращений. Без него потеря cron-задач растит журнал в

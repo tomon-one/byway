@@ -7,8 +7,10 @@ const C_OK = '\033[1;32m', C_WARN = '\033[1;33m', C_BAD = '\033[1;31m', C_DIM = 
 
 
 // Строка «команда — описание» с переносом описания по словам.
-function c_help(cmd, txt) {
+// opt -- уточнение (флаги, вторая форма) серым после описания.
+function c_help(cmd, txt, opt) {
 	let W = 78, I = 24, line;
+	if (opt) txt += '  ' + C_DIM + opt + C_0;
 	// Длинная команда -- своей строкой, описание под ней с отступом.
 	if (c_len(cmd) > I - 3) { print('  ', C_B, cmd, C_0, '\n'); line = sprintf('%' + I + 's', ''); }
 	else line = '  ' + C_B + cmd + C_0 + sprintf('%' + (I - 2 - c_len(cmd)) + 's', '');
@@ -20,6 +22,9 @@ function c_help(cmd, txt) {
 	}
 	print(line, '\n');
 }
+// Экран для просмотра (help, list, keys, set) -- с чистого листа, только в
+// терминале (BW_TTY от cli_uc); действия (add, key, on) печатают под командой.
+function c_cls() { if (getenv('BW_TTY') == '1') print('\033[H\033[2J'); }
 function c_group(t) { print('\n', C_B, t, C_0, '\n'); }
 
 // Ключа нет -- по способу подключения, как в панели.
@@ -71,8 +76,73 @@ function c_health(text) {
 // bw_uc hfmt: строки health со входа -- для человека (byway health в терминале).
 function cmd_hfmt() { c_health(fs.stdin.read('all')); }
 
+// Каирн (знак на тропе) и имя: сверху сводки и help, чтобы не терялись среди команд.
+// В терминале с 256 цветами -- полублоками, как logo.svg: буква карты -- цвет
+// пикселя, две строки карты -- одна строка экрана. Иначе -- ASCII той же формы.
+const CAIRN_PIX = [
+	'..........HO........',
+	'.........HOOOo......',
+	'..........ooo.......',
+	'......LLLL..........',
+	'.....LMMMMMD........',
+	'......DDDDD.........',
+	'.......LLLLLLLL.....',
+	'.....LMMMMMMMMMMD...',
+	'......DDDDDDDDDD....',
+	'..LLLLLLLLLLLLL.....',
+	'LMMMMMMMMMMMMMMMMD..',
+	'LMMMMMMMMMMMMMMMMMD.',
+	'.DMMMMMMMMMMMMMMMD..',
+	'...DDDDDDDDDDDD.....',
+];
+const CAIRN_PAL = { L: 253, M: 247, D: 240, H: 229, O: 214, o: 166 };
+const CAIRN_ASC = [
+	"          (__)'",
+	"      .-'''''-.",
+	"     (_.:::::._)'",
+	"        .-'''''''-.",
+	"       (_.:::::::._)'",
+	"   .-''''''''''''''-.",
+	"  (_.::::::::::::::._)'",
+];
+const LOGO_WORD = [
+	'',
+	'  _',
+	" | |__  _   ___      ____ _ _   _",
+	" | '_ \\| | | \\ \\ /\\ / / _` | | | |",
+	' | |_) | |_| |\\ V  V / (_| | |_| |',
+	' |_.__/ \\__, | \\_/\\_/ \\__,_|\\__, |',
+	'        |___/               |___/',
+];
+
+function c_cairn_pix(y) {
+	let top = CAIRN_PIX[y * 2], bot = CAIRN_PIX[y * 2 + 1], s = '';
+	for (let x = 0; x < length(top); x++) {
+		let t = CAIRN_PAL[substr(top, x, 1)], b = CAIRN_PAL[substr(bot, x, 1)];
+		if (t == null && b == null) s += C_0 + ' ';
+		else if (b == null) s += sprintf('\033[0;38;5;%dm▀', t);
+		else if (t == null) s += sprintf('\033[0;38;5;%dm▄', b);
+		else if (t == b) s += sprintf('\033[0;38;5;%dm█', t);
+		else s += sprintf('\033[0;38;5;%d;48;5;%dm▀', t, b);
+	}
+	return s + C_0 + ' ';
+}
+
+function c_logo() {
+	let pix = getenv('BW_TTY') == '1' && match(getenv('TERM') ?? '', /256color|truecolor|direct/);
+	for (let y = 0; y < length(LOGO_WORD); y++) {
+		let a = CAIRN_ASC[y];
+		let cairn = pix ? c_cairn_pix(y)
+		                : (y == 0 ? C_WARN : C_B) + a + C_0 + substr('                       ', 0, 23 - length(a));
+		print(cairn, C_B, LOGO_WORD[y], C_0, '\n');
+	}
+}
+
 // ── byway без доводов ─────────────────────────────────────────────────────
 function cmd_home() {
+	// В терминале -- с чистого экрана: сводка не смешивается с прежним выводом.
+	c_cls();
+	c_logo();
 	print(C_B, 'byway ', getenv('BW_VERSION'), C_0, _t(' — раздельное туннелирование через VPN\n\n'));
 	if (c_nokey()) {
 		print(_t('  С чего начать:\n'));
@@ -97,50 +167,56 @@ function cmd_home() {
 	c_help('list', _t('что пускается через VPN'));
 	c_help('set', _t('все настройки'));
 	c_help('menu', _t('всё то же пунктами меню'));
-	print('\n', _t('  Все команды: byway help'), '\n');
 	// В терминале -- сразу в меню по Enter: новичку не нужно помнить команды.
 	// Из скрипта и ssh 'byway' (не терминал) -- ничего не спрашивается.
-	if (getenv('BW_INTERACTIVE') == '1') {
-		print('\n', C_B, _t('  Enter — открыть меню, Ctrl+C — выйти'), C_0, ' ');
-		fs.stdout?.flush();
-		let l = fs.stdin.read('line');
-		if (l != null && trim(l) === '') sys([ m_self(), 'menu' ]);
-	}
+	if (getenv('BW_INTERACTIVE') != '1') { print('\n', _t('  Подробнее: byway help'), '\n'); return; }
+	print('\n  ', C_B, 'Enter', C_0, _t(' — открыть меню'), '\n');
+	print('  ', _t('или команда: '), C_B, 'list', C_0, ', ', C_B, 'help', C_0, _t(' — подробнее'), '\n');
+	print('  ', C_B, 'q', C_0, _t(' — выйти'), '\n\n  › ');
+	fs.stdout?.flush();
+	let l = fs.stdin.read('line');
+	// Enter -- меню; набранное -- команда (с «byway» и без него); q -- выход.
+	let w = filter(split(trim(l ?? ''), /[ \t]+/), (x) => x != '');
+	if (w[0] == 'byway') shift(w);
+	if (l != null && !length(w)) sys([ m_self(), 'menu' ]);
+	else if (length(w) && w[0] != 'q') sys([ m_self(), ...w ]);
 }
 
 // ── byway help ────────────────────────────────────────────────────────────
 // Команды -- по предметам (ключ, списки, состояние); служебные -- только в
 // `byway help all` (владелец 2026-10-18: «максимально просто»).
 function cmd_help(all) {
+	c_cls();
+	c_logo();
 	print(C_B, 'byway ', getenv('BW_VERSION'), C_0, _t(' — раздельное туннелирование через VPN\n'));
+	c_group(_t('Состояние'));
+	c_help('byway', _t('сводка: служба, VPN, трафик, DNS'));
+	c_help('status', _t('подробно, что работает'));
+	c_help('doctor', _t('что не так и как исправить'), _t('--fix — починить'));
+	c_help('on | off', _t('включить, выключить'));
 	c_group(_t('Ключ'));
-	c_help("key 'ССЫЛКА'", _t('вписать ключ (проверяется до записи) и применить; ссылку — в одинарных кавычках'));
-	c_help('key', _t('какой ключ стоит и работает ли'));
-	c_help('keys', _t('список ключей, активный отмечен'));
-	c_help('key use N', _t('сделать активным ключ номер N'));
-	c_help('key sub АДРЕС', _t('взять ключи из подписки'));
-	c_help('probe [--all]', _t('проверить ключ, не трогая работающий туннель; --all — все ключи'));
+	c_help("key 'ССЫЛКА'", _t('вписать ключ и применить'), _t('в одинарных кавычках'));
+	c_help('key', _t('какой ключ стоит'));
+	c_help('keys', _t('все ключи'), _t('выбрать: key use N'));
+	c_help('key sub АДРЕС', _t('ключи из подписки'));
+	c_help('probe', _t('проверить ключ, не трогая туннель'), _t('--all — все'));
 	c_group(_t('Списки'));
-	c_help('list', _t('что пускается через VPN: режим, свои списки, готовые'));
-	c_help('add САЙТ|ПОДСЕТЬ …', _t('добавить в свои списки и применить; сразу несколько, через пробел; «-» — читать список со ввода до Ctrl+D'));
-	c_help('del САЙТ|ПОДСЕТЬ …', _t('убрать из своих списков и применить'));
-	c_help('list ready', _t('готовые списки; подключить: list ready on ИМЯ'));
+	c_help('list', _t('что идёт через VPN'));
+	c_help('add САЙТ …', _t('добавить сайты или подсети'), _t('несколько через пробел'));
+	c_help('del САЙТ …', _t('убрать'));
+	c_help('list ready', _t('готовые списки'), _t('вкл.: list ready on ИМЯ'));
 	c_help('mode lists|all', _t('по спискам или всё через VPN'));
-	c_help('top [N]', _t('чем на самом деле пользуются'));
-	c_group(_t('Работа'));
-	c_help('(без команды)', _t('проверка: служба, VPN, трафик, DNS, и что делать'));
-	c_help('on | off', _t('включить или выключить byway'));
-	c_help('status', _t('что сейчас работает, подробно'));
-	c_help('doctor [--fix]', _t('проверка окружения: что не так и как исправить; --fix — починить, что чинится само'));
-	c_help('set [ИМЯ ЗНАЧЕНИЕ]', _t('все настройки и их значения; изменить одну и применить'));
-	c_help('menu', _t('всё то же пунктами меню'));
+	c_help('top', _t('чем пользуются на самом деле'));
+	c_group(_t('Настройки'));
+	c_help('set', _t('все настройки'), _t('изменить: set ИМЯ ЗНАЧЕНИЕ'));
+	c_help('menu', _t('то же пунктами меню'));
+	c_help('lang ru|en', _t('язык'));
 	c_group(_t('Обслуживание'));
-	c_help('update [--check|--rollback]', _t('новая версия byway: --check — только проверить, --rollback — вернуть прежнюю'));
-	c_help('core [tested|ВЕРСИЯ]', _t('ядро Xray-core: без довода — есть ли обновление; tested — поставить проверенное'));
-	c_help('lang ru|en', _t('язык вывода и панели'));
-	c_help('export [файл] [--with-key]', _t('выгрузить настройки; по умолчанию без ключа'));
-	c_help('import ФАЙЛ [--no-key]', _t('принять настройки из выгрузки; --no-key — ключ не трогать'));
-	c_help('report [файл]', _t('отчёт для обращения, без ключа от VPN'));
+	c_help('update', _t('новая версия byway'), _t('--check, --rollback'));
+	c_help('core', _t('ядро Xray-core'), _t('tested, ВЕРСИЯ'));
+	c_help('export [ФАЙЛ]', _t('настройки в файл, без ключа'), _t('--with-key'));
+	c_help('import ФАЙЛ', _t('настройки из файла'), _t('--no-key'));
+	c_help('report', _t('отчёт для обращения, без ключа'));
 	if (all != 'all') { print('\n', _t('  Служебные команды: byway help all'), '\n'); return; }
 	c_group(_t('Служебные'));
 	c_help('health', _t('проверка строками для скриптов и панели; в терминале — как byway без доводов'));
@@ -364,6 +440,7 @@ function c_show_val(name, kind) {
 function cmd_set(name, ...rest) {
 	let S = c_sets();
 	if (!name) {
+		c_cls();
 		print(C_B, _t('Настройки'), C_0, _t(' — изменить: byway set ИМЯ ЗНАЧЕНИЕ; вернуть умолчание: byway set ИМЯ default\n\n'));
 		for (let s in S) {
 			print('  ', C_B, c_pad(s[0], 18), C_0, ' ', c_pad(c_show_val(s[0], s[1]), 22), ' ', C_DIM, s[3], C_0, '\n');
@@ -416,6 +493,7 @@ function c_keyshort(k) {
 
 // byway keys: список с номерами, активный отмечен.
 function cmd_keys() {
+	c_cls();
 	let L = c_keylist(), cur = u('node_url');
 	if (!length(L) && cur !== '') L = [ cur ];
 	if (!length(L)) { print(_t("  ключей нет — вписать: byway key 'ССЫЛКА' или из подписки: byway key sub АДРЕС"), '\n'); return; }
@@ -483,6 +561,7 @@ function c_presets() {
 function c_ready(act, names) {
 	let P = c_presets();
 	if (!act) {
+		c_cls();
 		for (let n in PS_NAMES)
 			print('  ', index(P, n) >= 0 ? C_OK + '●' + C_0 : ' ', ' ', C_B, c_pad(n, 20), C_0, ' ', C_DIM, ps_about(n), C_0, '\n');
 		print('\n', _t('  ● — подключён. Подключить: byway list ready on ИМЯ; убрать: byway list ready off ИМЯ\n'));
@@ -507,6 +586,7 @@ function cmd_list(what, ...rest) {
 	}
 	if (what == 'ready') return c_ready(rest[0], slice(rest, 1));
 	if (what) dief('byway list [domains|subnets|ready] — не %s', what);
+	c_cls();
 	let all = u('list_mode') == 'all';
 	print('  ', _t('Режим: '), C_B, all ? _t('всё через VPN') : _t('по спискам'), C_0, C_DIM, _t('  (сменить: byway mode lists|all)'), C_0, '\n\n');
 	print('  ', c_pad(_t('свои сайты'), 22), lj_count(c_file('domains')), C_DIM, _t('   byway list domains'), C_0, '\n');

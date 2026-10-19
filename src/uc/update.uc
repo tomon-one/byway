@@ -296,6 +296,10 @@ function up_restore() {
 	up_rmrf(r);
 	if (bad) { warnf('откат лёг не целиком -- копия в %s', UP_PREVSET); return false; }
 	fs.writefile(UP_BINSUM, split(run([ 'md5sum', '/usr/local/bin/byway' ]).out, ' ')[0] + '\n');
+	// Панель вернулась прежняя: новое время базы пакетов даёт LuCI новый ?v=,
+	// иначе браузер держит из кэша откаченную (install.sh, pkgs_update_time).
+	for (let db in [ '/lib/apk/db/installed', '/usr/lib/opkg/status' ])
+		if (fs.stat(db)) run([ 'touch', db ]);
 	for (let a in [ [ '/etc/init.d/byway', 'disable' ], [ '/etc/init.d/byway', 'enable' ],
 	                [ '/etc/init.d/rpcd', 'reload' ], [ '/etc/init.d/byway', 'restart' ] ])
 		run(a);

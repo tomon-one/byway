@@ -11,5 +11,8 @@ diag_uc() {
 }
 
 cmd_doctor() {
-    diag_uc doctor "$@"
+    # В терминале -- подсказки по словам в 78 знаков (uc/doctor.uc): stty в
+    # busybox OpenWrt не собран, ширину экрана не узнать.
+    _dw=; [ -t 1 ] && _dw=78
+    BW_WRAP=${BW_WRAP:-$_dw} diag_uc doctor "$@"
 }

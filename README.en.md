@@ -436,7 +436,7 @@ understands and why byway refuses — [keys and connection](docs/keys.en.md).
   auto-restore" setting on the "Advanced" tab; an engine that comes back while
   the block is in place is picked up even then: byway brings interception up,
   and the block is lifted. A missing engine (after a firmware upgrade) the
-  watchdog installs again every 15 minutes — `byway engine restore`. Every
+  watchdog installs again every 15 minutes — `byway core restore`. Every
   minute `byway pulse` checks one thing only — whether the engine is alive: a
   fall and a return are noticed within one or two minutes rather than five.
 - **Failure behaviour** is a choice — see [How it works](#how-it-works).
@@ -460,10 +460,10 @@ work](docs/troubleshooting.en.md).
   and import, the environment check and the report, checking for and
   installing byway updates, replacing the engine with the tested one or with a
   version by number. Console only, for
-  example: your own engine as a file (`byway engine /tmp/FILE.gz`), the key
+  example: your own engine as a file (`byway core /tmp/FILE.gz`), the key
   check (`byway probe`), `xray_memlimit`, `xray_root`, `allow_insecure`,
   `self_mark`, experimental IPv6 (`fakeip6_pool`), `byway update --rollback`,
-  `byway engine restore`.
+  `byway core restore`.
 - **A console menu** — `byway menu`, the same actions.
 - **Export and import.** Settings and lists as one piece of text:
   `byway export` and `byway import`. The export leaves the key out by default
@@ -560,16 +560,14 @@ a failure — [how byway works](docs/architecture.en.md).
 | **Maintenance** | four sub-tabs: status (full state, environment check, report for a support request, log), updates (byway and the Xray core — the tested one or a version by number, in the background, progress on the page; auto-update), moving settings, statistics |
 | **Advanced** | language and values you change once in a lifetime; the "Addresses and ports" sub-tab holds the pool, resolver address, ports and mark |
 
-> ⚠️ **Clear the browser cache after updating byway.** LuCI appends the
-> version of **LuCI itself** to a module's URL, not the file's, so after a
-> byway update the browser does not know the file changed and keeps showing
-> the old tab. The web UI notices this and warns: "The byway panel was updated
-> to …, but the browser shows the previous one (…) from its cache". The check
-> lives in a module shared by all tabs, and once it is re-fetched on one tab
-> the warning goes away on the others too, although their files may still be
-> old. Ctrl+Shift+R (Ctrl+F5) re-fetches **only the modules of the open page**
-> — you would have to do it on every tab of the web UI. More reliable: F12 →
-> Network → "Disable cache" → F5, without closing the tools.
+> **After a byway update, reload the web UI page (F5).** LuCI adds a tag to a
+> module's URL that changes together with the package database; byway is
+> installed outside the package manager and since 0.4 updates that tag itself
+> on install, update and rollback, so the browser fetches the new files. If
+> the UI still stays old, it warns: "The byway panel was updated to …, but the
+> browser shows the previous one (…) from its cache". Then press Ctrl+Shift+R
+> (Ctrl+F5) on each tab of the web UI, or F12 → Network → "Disable cache" →
+> F5.
 
 ---
 
@@ -603,7 +601,7 @@ a failure — [how byway works](docs/architecture.en.md).
 | `byway top [N]` | which list entries are actually used; needs statistics collection on (`show_usage`) |
 | `byway stat` | collect statistics now, without waiting for the schedule; also only with `show_usage` |
 | `byway update [--check\|--force\|--rollback\|--no-verify]` | whether a new byway version exists, and installing it; `--force` installs the latest GitHub release even if it is not newer than the installed one; `--rollback` returns the previous version from the copy; `--no-verify` skips the release signature check (when there is nothing to check with) |
-| `byway core [--check\|VERSION\|tested\|newest\|stable\|restore\|/tmp/FILE]` | whether an Xray-core update exists, and replacing the engine; `--check` only finds out; `VERSION` of an engine already next to it switches without a download; `restore` installs a missing engine; `/tmp/FILE` is your own build (a `.gz` with the binary or the release `.zip`) |
+| `byway core [--check\|VERSION\|tested\|newest\|stable\|restore\|/tmp/FILE]` | whether an Xray-core update exists, and replacing the engine; `--check` only finds out; `VERSION` of an engine already next to it switches without a download; `restore` installs a missing engine; `/tmp/FILE` is your own build (a `.gz` with the binary or the release `.zip`); the old name `byway engine` still works |
 | `byway job update\|engine [VERSION]\|probe [LINK\|--all]\|log` | internal, for the panel: an update, a core replacement or a key check in the background; `log` — progress, code 3 — still running |
 | `byway lang ru\|en` | output and web UI language |
 | `byway report [file]` | a report for a bug thread: state and diagnostics, no key |
@@ -679,7 +677,7 @@ or `option update_check '0'`.
 **Refreshing the ready-made lists** (`lists_update`) goes to GitHub at regular
 intervals, and the ISP can notice that regularity. It is **off** by default,
 and you set the interval yourself. The version check, the list refresh,
-`byway update` and `byway engine` go through byway's proxy inbound: into the
+`byway update` and `byway core` go through byway's proxy inbound: into the
 tunnel if GitHub is in your lists (the ready-made byway list has it) or the
 mode is "Everything through the VPN", direct otherwise. If the proxy does not
 answer, the request is repeated direct, and if that fails too — direct to
@@ -719,7 +717,7 @@ number in the file name in `xray_bin`), otherwise the tested one — and
 restarts. If that fails, the watchdog retries every 15 minutes; progress and
 errors are in `logread -e byway`. Until there is an engine, there is no
 tunnel, and with "Block" what went through the VPN is closed. By hand —
-`byway engine restore`.
+`byway core restore`.
 
 ---
 
@@ -743,7 +741,7 @@ A version number can also be typed by hand instead of picking from the list.
 
 If Xray-core is already installed (from the OpenWrt packages, for example), the
 installer takes it and does not ask about the version. To replace it later —
-`byway engine`, below.
+`byway core`, below.
 
 ⚠️ **"Newest" and "stable" are different things for Xray-core, and the gap is
 wider than it looks.** XTLS marks everything newer than `26.3.27` as a
@@ -759,24 +757,24 @@ help: the release has no builds without this requirement (soft-float). The
 OpenWrt packages have the same Xray-core built soft-float, and it works. The
 installer recognises such a CPU **before** downloading and takes the engine
 from there straight away, without spending 35 MB of traffic and flash.
-Verified on `mipsel_24kc`. `byway engine` refuses on such a CPU; the engine is
+Verified on `mipsel_24kc`. `byway core` refuses on such a CPU; the engine is
 updated as a package — `apk upgrade xray-core` or `opkg upgrade xray-core`.
 
 **It is worth keeping the engine fresh.** Xray-core moves fast: transports get
 fixed and added. The version is changed with one command:
 
 ```sh
-byway engine              # is there an engine update; below it — file, XTLS versions, space
-byway engine --check      # only the answer: is there an update
-byway engine 26.9.9       # install this version
-byway engine tested       # the version byway is fully verified on
-byway engine newest       # the newest one, pre-releases included
-byway engine stable       # the newest stable one
-byway engine restore      # no engine: version from xray_bin or tested
+byway core              # is there an engine update; below it — file, XTLS versions, space
+byway core --check      # only the answer: is there an update
+byway core 26.9.9       # install this version
+byway core tested       # the version byway is fully verified on
+byway core newest       # the newest one, pre-releases included
+byway core stable       # the newest stable one
+byway core restore      # no engine: version from xray_bin or tested
 ```
 
 If the engine of the version you want is already next to the current one in
-`/usr/local/bin/xray-VERSION`, `byway engine VERSION` switches to it without a
+`/usr/local/bin/xray-VERSION`, `byway core VERSION` switches to it without a
 download: config check, restart, waiting for the tunnel and a return on
 failure; both files stay.
 
@@ -800,7 +798,7 @@ one is not in `/usr/local/bin/xray-*` (a package or a path of your own), the
 replacement through memory does not start: byway does not delete a file it did
 not install. In that case stop the service (`/etc/init.d/byway stop` — a
 running engine keeps its flash space even after the file is deleted), remove
-the package and install an engine with `byway engine tested` (or a version
+the package and install an engine with `byway core tested` (or a version
 number): with no previous engine it is simply installed, the path is recorded
 and the service starts. That needs 25 MB free on flash — as at installation. Until there is an
 engine, there is no tunnel.
@@ -810,13 +808,13 @@ engine, there is no tunnel.
 In the web UI, the "Xray core" block on the "Maintenance" tab: "Check for a
 core update" answers whether a newer version than the installed one exists,
 "Install the tested core" installs the version tested with byway in the
-background, with progress on the page. Another version — the "Another version" field there, or `byway engine
+background, with progress on the page. Another version — the "Another version" field there, or `byway core
 VERSION`; your own engine as a file — console only.
 
 **If the config stopped building after an engine update.** byway verifies
 every build with the engine itself, so an incompatibility does not pass
 silently. The new config does not replace the previous one, the tunnel keeps
-running on the old one until the service restarts, and `byway engine` keeps
+running on the old one until the service restarts, and `byway core` keeps
 the previous engine. If the engine was updated as a package and does not
 accept the old config, the service does not start after a restart and removes
 interception. That already happened with the `h2` and `quic` transports: the
@@ -831,7 +829,7 @@ the engine. On an engine below these versions byway refuses both cases
 itself; for your own server with a self-signed certificate,
 `byway set allow_insecure on` lifts the refusal (console only, details
 in [keys](docs/keys.en.md)). If the engine was updated around
-`byway engine` (as a package, for example), `byway engine NUMBER` can go back
+`byway core` (as a package, for example), `byway core NUMBER` can go back
 to the version that worked if there is room on flash for a second engine; if
 there is not, see above for an engine from a package.
 

@@ -218,7 +218,6 @@ dnsmasq не направлен на byway	dnsmasq does not point at byway
 Принять?	Import?
 пересобрать конфиг из настроек и списков	rebuild the config from the settings and the lists
 разобрать ключ и проверить конфиг, без соединений	parse a key and verify the config, no connections made
-принять настройки из выгрузки; --no-key — ключ не трогать	import settings from an export; --no-key — leave the key alone
 очистить журнал состояния, статистику или то и другое	clear the state log, the statistics, or both
 версия	version
 рядом включён %s	%s is also enabled
@@ -438,7 +437,7 @@ VPN для программ на роутере (router_via_vpn) включён,
 правила не легли в ядро — %s	rules did not reach the kernel - %s
 и домены, и подсети закрывают только IPv4: клиент, получивший AAAA, предпочтёт его и уйдёт напрямую. Выключить IPv6 на WAN -- либо помнить, что подсети сервиса его не покрывают	both domains and subnets cover IPv4 only: a client that got an AAAA record will prefer it and go direct. Turn IPv6 off on the WAN - or remember that the service subnets do not cover it
 dnsmasq отвечает по пину сам, подставного адреса не будет — эти домены в туннель не пойдут, и запрет «не пускать мимо VPN» их тоже не закроет	dnsmasq answers from the pin itself, so there will be no fake address - those domains will not enter the tunnel, and the "no traffic outside the VPN" block will not cover them either
-маршрут решает DNS: устройство с «Приватным DNS», DoH в браузере или чужим резолвером в настройках уйдёт напрямую, и byway этого не увидит. Лечится либо выключением шифрованного DNS на устройствах, либо перехватом 53-го порта в firewall, либо добавлением к доменам ПОДСЕТЕЙ сервиса: подсеть работает по адресу, а значит и для того, кто спросил адрес не у роутера. Третий способ проще двух первых, но покрывает ТОЛЬКО IPv4: клиент, получивший AAAA, уйдёт мимо подсетей	DNS decides the route: a device with Private DNS, DoH in the browser or a third-party resolver in its settings goes direct, and byway will not see it. Fix it either by turning encrypted DNS off on the devices, or by intercepting port 53 in the firewall, or by adding the service SUBNETS next to the domains: a subnet works by address, and therefore also for a client that asked another resolver for that address. The third way is simpler than the first two, but covers IPv4 ONLY: a client that got an AAAA record will bypass the subnets
+маршрут решает DNS: устройство с «Приватным DNS», DoH в браузере или чужим резолвером в настройках уйдёт напрямую, и byway этого не увидит. Шифрованный DNS («Приватный DNS», DoH) выключается только на самом устройстве: перехват 53-го порта его не берёт. Чужой резолвер без шифрования ловит перехват 53-го порта в firewall. Для всех трёх случаев годятся ПОДСЕТИ сервиса рядом с доменами: подсеть работает по адресу, а значит и для того, кто спросил адрес не у роутера. Но подсети покрывают ТОЛЬКО IPv4: клиент, получивший AAAA, уйдёт мимо них	the route is decided by DNS: a device with Private DNS, DoH in the browser or a foreign resolver in its settings goes direct, and byway does not see it. Encrypted DNS (Private DNS, DoH) can only be turned off on the device itself: intercepting port 53 does not catch it. A foreign resolver without encryption is caught by intercepting port 53 in the firewall. For all three cases the service's SUBNETS next to the domains work: a subnet works by address, so also for whoever asked for the address elsewhere. But subnets cover ONLY IPv4: a client that got an AAAA record goes around them
 VPN для программ на роутере работает по доменам списка: наполнить список либо подключить готовый	the redirect works by the domains of the list: fill the list in or enable a preset
 ОТКАТ НЕ УДАЛСЯ: на диске %s, копия в %s\n	ROLLBACK FAILED: %s is on disk, the copy is in %s\n
 часы роутера идут по UTC (timezone=%s) — окно обновления придётся на %s:00 UTC	the router clock runs on UTC (timezone=%s) - the update window will fall on %s:00 UTC
@@ -764,18 +763,8 @@ byway выключен	byway is off
 вписать ключ и применить	set the key and apply
 добавить сайты или подсети в свои списки	add sites or subnets to your lists
 всё то же пунктами меню	all the same as a menu
-  Все команды: byway help	  All commands: byway help
  — раздельное туннелирование через VPN\n	 — split tunnelling through a VPN\n
-вписать ключ (проверяется до записи) и применить; ссылку — в одинарных кавычках	set the key (checked before it is saved) and apply; the link goes in single quotes
-включить или выключить byway	turn byway on or off
-добавить в свои списки и применить; сразу несколько, через пробел; «-» — читать список со ввода до Ctrl+D	add to your lists and apply; several at once, space-separated; «-» — read a list from input until Ctrl+D
-убрать из своих списков и применить	remove from your lists and apply
-чем на самом деле пользуются	what is actually used
-что сейчас работает, подробно	what is running now, in detail
-отчёт для обращения, без ключа от VPN	a report for a support request, without the VPN key
 Обслуживание	Maintenance
-язык вывода и панели	language of the output and the panel
-выгрузить настройки; по умолчанию без ключа	export settings; without the key by default
 собранный конфиг без секретов: счётчики и правила	the built config without secrets: counts and rules
 правила перехвата, не применяя их	the interception rules, without applying them
 включить или снять перехват (nft, маршрут, DNS)	set up or remove interception (nft, route, DNS)
@@ -811,21 +800,7 @@ byway выключен: интернет идёт напрямую, без VPN; 
   3. Проверить: byway — все четыре строки зелёные.\n	  3. Check: byway — all four lines green.\n
 что пускается через VPN	what goes through the VPN
 все настройки	all settings
-  Enter — открыть меню, Ctrl+C — выйти	  Enter — open the menu, Ctrl+C — quit
-какой ключ стоит и работает ли	which key is set and whether it works
-список ключей, активный отмечен	the list of keys, the active one marked
-сделать активным ключ номер N	make key number N active
-взять ключи из подписки	take keys from a subscription
-проверить ключ, не трогая работающий туннель; --all — все ключи	check the key without touching the running tunnel; --all — every key
-что пускается через VPN: режим, свои списки, готовые	what goes through the VPN: mode, your lists, ready-made ones
-готовые списки; подключить: list ready on ИМЯ	ready-made lists; connect one: list ready on NAME
 по спискам или всё через VPN	by lists or everything through the VPN
-Работа	Operation
-проверка: служба, VPN, трафик, DNS, и что делать	check: service, VPN, traffic, DNS, and what to do
-проверка окружения: что не так и как исправить; --fix — починить, что чинится само	environment check: what is wrong and how to fix it; --fix — fix what can be fixed automatically
-все настройки и их значения; изменить одну и применить	all settings and their values; change one and apply
-новая версия byway: --check — только проверить, --rollback — вернуть прежнюю	a new byway version: --check — only check, --rollback — return to the previous one
-ядро Xray-core: без довода — есть ли обновление; tested — поставить проверенное	the Xray-core engine: without an argument — whether there is an update; tested — install the tested one
   Служебные команды: byway help all	  Internal commands: byway help all
 Служебные	Internal
 проверка строками для скриптов и панели; в терминале — как byway без доводов	the check as lines for scripts and the panel; in a terminal — like byway without arguments
@@ -908,3 +883,37 @@ crond запущен	crond started
   ключ не задан — вписать: byway key 'ССЫЛКА'	  no key set — set one: byway key 'LINK'
 режим: всё через VPN	mode: everything through the VPN
 режим: по спискам	mode: by lists
+Состояние	Status
+сводка: служба, VPN, трафик, DNS	summary: service, VPN, traffic, DNS
+подробно, что работает	what is running, in detail
+что не так и как исправить	what is wrong and how to fix it
+--fix — починить	--fix — repair
+включить, выключить	turn on, turn off
+в одинарных кавычках	in single quotes
+какой ключ стоит	which key is set
+все ключи	all keys
+выбрать: key use N	pick one: key use N
+ключи из подписки	keys from a subscription
+проверить ключ, не трогая туннель	check the key without touching the tunnel
+--all — все	--all — all of them
+что идёт через VPN	what goes through the VPN
+добавить сайты или подсети	add sites or subnets
+несколько через пробел	several, space-separated
+убрать	remove
+вкл.: list ready on ИМЯ	turn on: list ready on NAME
+чем пользуются на самом деле	what is actually used
+изменить: set ИМЯ ЗНАЧЕНИЕ	change: set NAME VALUE
+то же пунктами меню	the same as a menu
+язык	language
+новая версия byway	a new byway version
+ядро Xray-core	the Xray-core engine
+tested, ВЕРСИЯ	tested, VERSION
+настройки в файл, без ключа	settings to a file, without the key
+настройки из файла	settings from a file
+отчёт для обращения, без ключа	a report for a support request, without the key
+  Подробнее: byway help	  More: byway help
+ — открыть меню	 — open the menu
+или команда: 	or a command: 
+ — подробнее	 — more
+ — выйти	 — quit
+DNS: нет ответа для %s	DNS: no answer for %s

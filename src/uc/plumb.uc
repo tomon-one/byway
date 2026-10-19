@@ -65,7 +65,11 @@ function pl_head2(s) {
 function pl_words(s) { return filter(split(s, /[ \t\n]+/), (w) => w !== ''); }
 function pl_uci_get(p) { return rtrim(run([ 'uci', '-q', 'get', p ]).out, '\n'); }
 function pl_quiet(argv) { return run(argv).code; }
-function pl_dns_restart() { run([ '/etc/init.d/dnsmasq', 'restart' ]); }
+// Перезапуск dnsmasq -- без HUP и INT: оборванный между stop и start (закрыли
+// ssh, Ctrl+C) он оставлял dnsmasq лежать, а с ним DNS и DHCP всего дома
+// (2026-10-18). Игнор сигнала наследуется через exec; вывод -- в никуда: труба
+// к умершему родителю убила бы перезапуск через SIGPIPE.
+function pl_dns_restart() { run([ 'sh', '-c', 'trap "" HUP INT PIPE; exec /etc/init.d/dnsmasq restart >/dev/null 2>&1' ]); }
 function pl_has_table(t) { return run([ 'nft', 'list', 'table', 'inet', t ]).code == 0; }
 
 // Действующая метка (eff_mark): как печатает ip rule show -- строчными, без

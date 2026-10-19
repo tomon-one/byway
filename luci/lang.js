@@ -268,7 +268,7 @@ var DICT = {
 		"Язык": "Language",
 		"Язык панели и вывода команды byway в консоли. Английский словарь byway скачивает с GitHub при переключении.": "Language of the panel and of the byway console output. byway downloads the English dictionary from GitHub when switching.",
 		"Путь к ядру Xray": "Xray core path",
-		"Путь вписывает byway engine при замене ядра. Пусто — ядро из пакета.": "The path is set by byway engine when it replaces the core. Empty means the packaged core.",
+		"Путь вписывает byway core при замене ядра. Пусто — ядро из пакета.": "The path is set by byway core when it replaces the core. Empty means the packaged core.",
 		"Предел памяти ядра": "Core memory limit",
 		"Мягкий предел для Xray-core: при нём ядро чаще убирает мусор, а не растёт, пока система его не убьёт. Пусто — 40 % памяти роутера; 0 — без предела; можно 96 (мегабайты) или 128MiB.": "A soft limit for Xray-core: with it the core collects garbage more often instead of growing until the system kills it. Empty — 40% of the router's memory; 0 — no limit; 96 (megabytes) or 128MiB also work.",
 		"40 % памяти": "40% of memory",

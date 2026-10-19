@@ -91,6 +91,11 @@ do_() {
     fi
 }
 
+# Рестарт dnsmasq -- глухой к HUP: ssh может оборваться ровно в эти секунды
+# без DNS, и init-скрипт, убитый на полпути, оставил бы dnsmasq лежать (так
+# же pl_dns_restart в plumb.uc).
+dns_restart_() { do_ sh -c 'trap "" HUP INT PIPE; exec /etc/init.d/dnsmasq restart'; }
+
 [ "$DRY" = "1" ] && warn "СУХОЙ ПРОГОН: ничего не меняется"
 
 # Пакетный менеджер -- ради ОДНОГО совета: чем снять движок из прошивки.
@@ -214,7 +219,7 @@ else
     fi
     if [ "$_ours" = 1 ] && [ "$_inuci" = 1 ]; then
         do_ uci commit dhcp
-        do_ /etc/init.d/dnsmasq restart
+        dns_restart_
     fi
     do_ nft delete table inet byway
     do_ nft delete table inet byway_block
@@ -241,7 +246,7 @@ else
         _bseen="$_bseen$_bc "
         [ -f "$_bc" ] && { do_ rm -f "$_bc"; _bcr=1; }
     done
-    [ "$_bcr" = 1 ] && do_ /etc/init.d/dnsmasq restart
+    [ "$_bcr" = 1 ] && dns_restart_
     # Правил с меткой может накопиться несколько: ip rule add при каждом
     # подъёме добавляет новое, не заменяя прежнее. Ищем СВОЁ -- по метке, а
     # не по одной таблице: 100 с fwmark занимают и openclash, и passwall,
@@ -290,7 +295,7 @@ done
 if [ "$DRY" != "1" ] && [ -n "$_dnsf" ]; then
     warn "dnsmasq всё ещё смотрит в byway — исправляется"
     do_ rm -f "$_dnsf"
-    do_ /etc/init.d/dnsmasq restart
+    dns_restart_
 fi
 if [ "$DRY" != "1" ] && [ "$_ours" = 1 ] && [ "${_lst#* $_own }" != "$_lst" ]; then
     warn "dnsmasq всё ещё смотрит в byway — исправляется"
@@ -300,7 +305,7 @@ if [ "$DRY" != "1" ] && [ "$_ours" = 1 ] && [ "${_lst#* $_own }" != "$_lst" ]; t
     # Убираем ТОЛЬКО свой адрес и канарейку, чужие записи остаются на месте.
     dns_strip_own "$_own"
     do_ uci commit dhcp
-    do_ /etc/init.d/dnsmasq restart
+    dns_restart_
 fi
 say "DNS роутера больше не идёт через byway"
 
