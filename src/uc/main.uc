@@ -10,7 +10,7 @@ function cmd_xlat(fmt, ...args) {
 }
 
 const CMDS = {
-	version: function () { print('byway ', getenv('BW_VERSION'), '\n'); },
+	version: function () { print('byway ', getenv('BW_VERSION'), '\n', _t('Собрано задолго до рассвета'), '\n'); },
 	xlat: cmd_xlat,
 	parse: cmd_parse,
 	check: cmd_check,

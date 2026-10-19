@@ -983,3 +983,5 @@ live router exactly once.
 ## License
 
 [GPL-2.0](LICENSE) — the same one OpenWrt itself lives under.
+
+<sub>Built long before daylight</sub>
