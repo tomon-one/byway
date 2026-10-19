@@ -143,7 +143,8 @@ function cmd_home() {
 	// В терминале -- с чистого экрана: сводка не смешивается с прежним выводом.
 	c_cls();
 	c_logo();
-	print(C_B, 'byway ', getenv('BW_VERSION'), C_0, _t(' — раздельное туннелирование через VPN\n\n'));
+	print(C_B, 'byway ', getenv('BW_VERSION'), C_0, _t(' — раздельное туннелирование через VPN\n'));
+	print(C_DIM, _t('Собрано задолго до рассвета'), C_0, '\n\n');
 	if (c_nokey()) {
 		print(_t('  С чего начать:\n'));
 		print(_t('  1. Вписать ключ — ссылку от сервиса VPN, в одинарных кавычках:\n'), "       byway key 'vless://…'\n");
@@ -189,6 +190,7 @@ function cmd_help(all) {
 	c_cls();
 	c_logo();
 	print(C_B, 'byway ', getenv('BW_VERSION'), C_0, _t(' — раздельное туннелирование через VPN\n'));
+	print(C_DIM, _t('Собрано задолго до рассвета'), C_0, '\n');
 	c_group(_t('Состояние'));
 	c_help('byway', _t('сводка: служба, VPN, трафик, DNS'));
 	c_help('status', _t('подробно, что работает'));

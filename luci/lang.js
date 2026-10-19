@@ -92,6 +92,7 @@ var DICT = {
 		"Что делать, если VPN на самом роутере не запустился. «Пустить напрямую» — интернет работает, но то, что шло через VPN, идёт без него, и заблокированное не откроется. «Не пускать» — это закрыто, пока VPN не заработает: в режиме «По спискам» — сайты из списков, в режиме «Всё через VPN» — весь интернет. Доступ к роутеру остаётся в обоих случаях. Если недоступен только сервер VPN, а на роутере всё работает, выбор ни на что не влияет: трафик и так ждёт сервер и мимо VPN не идёт.": "What to do if the VPN on the router itself did not start. “Go direct” — the internet works, but what went through the VPN goes without it, and blocked sites will not open. “Block” — that is closed until the VPN works: in “By lists” mode, the sites on the lists; in “Everything through the VPN” mode, the whole internet. Access to the router stays either way. If only the VPN server is unreachable while everything on the router works, the choice changes nothing: traffic waits for the server anyway and does not go around the VPN.",
 		"Пустить напрямую": "Go direct",
 		"Не пускать": "Block",
+		"Собрано задолго до рассвета": "Built long before daylight",
 		"Настройки не приняты — работают прежние.": "Settings rejected — the previous ones stay in effect.",
 		"Сеть": "Network",
 		"Интерфейсы": "Interfaces",

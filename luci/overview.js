@@ -796,6 +796,15 @@ return view.extend({
 		o.default = 'closed';
 		o.rmempty = false;
 
-		return m.render();
+		/* Подпись проекта внизу, мелко: заголовка вверху нет намеренно. */
+		return m.render().then(function (node) {
+			var sig = E('div', { 'style': 'margin-top:2em; font-size:85%; opacity:.6' }, [ '' ]);
+			node.appendChild(sig);
+			fs.exec(bwui.BYWAY, [ 'version' ]).then(function (r) {
+				var v = ((r.stdout || '').split(' ')[1] || '').trim();
+				sig.textContent = 'byway ' + v + ' · ' + _('Собрано задолго до рассвета');
+			}).catch(function () { sig.textContent = _('Собрано задолго до рассвета'); });
+			return node;
+		});
 	}
 });

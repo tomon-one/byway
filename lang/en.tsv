@@ -752,7 +752,6 @@ dns_route=%s не понят — DNS идёт напрямую; допустим
 Служба не запущена. Включить и запустить: byway on. Не помогло — byway doctor назовёт причину.	The service is not running. Enable and start it: byway on. If that does not help, byway doctor names the cause.
 Резолвер byway не отвечает, и сайты из списков не откроются. Перезапустить: /etc/init.d/byway restart; не помогло — byway doctor.	The byway resolver does not answer, and listed sites will not open. Restart: /etc/init.d/byway restart; if that does not help — byway doctor.
 нет данных	no data
- — раздельное туннелирование через VPN\n\n	 — split tunnelling through a VPN\n\n
   С чего начать:\n	  Getting started:\n
   2. Добавить сайты, которые должны идти через VPN:\n       byway add youtube.com instagram.com\n	  2. Add the sites that should go through the VPN:\n       byway add youtube.com instagram.com\n
   Подробно, по шагам: https://github.com/tomon-one/byway/blob/main/docs/beginner.md\n	  Step by step: https://github.com/tomon-one/byway/blob/main/docs/beginner.en.md\n
@@ -917,3 +916,4 @@ tested, ВЕРСИЯ	tested, VERSION
  — подробнее	 — more
  — выйти	 — quit
 DNS: нет ответа для %s	DNS: no answer for %s
+Собрано задолго до рассвета	Built long before daylight
