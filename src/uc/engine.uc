@@ -243,8 +243,14 @@ function en_ram() {
 	} else {
 		E.orb = E.d + '/old.zip';
 		en_stage(_f('загрузка прежней версии %s — для отката', E.ov));
-		if (en_fetch(E.ov, E.orb) != 0)
-			dief('архив прежней версии %s не получен — без копии для отката замена не начата', E.ov);
+		if (en_fetch(E.ov, E.orb) != 0) {
+			// Выпуск могли отозвать (26.10.17, 2026-10-21): копия -- сам файл, как у своей сборки.
+			fs.unlink(E.orb);
+			E.orb = E.d + '/old.gz';
+			sayf('архив прежней версии %s не получен — копия для отката сжимается в память', E.ov);
+			if (run([ 'sh', '-c', 'gzip -c "$1" > "$2"', 'sh', E.old, E.orb ]).code != 0 || !fs.stat(E.orb)?.size)
+				dief('копию прежней версии %s для отката не сделать — замена не начата', E.ov);
+		}
 	}
 	fs.writefile(E.d + '/ram.json', sprintf('%J', E));
 	fs.writefile(EN_RAMF, '');

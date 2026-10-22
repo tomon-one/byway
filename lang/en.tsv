@@ -520,7 +520,8 @@ GitHub не ответил — номер свежей версии неизве
 места на второе ядро нет, а прежнее (%s) — из пакета; снять пакет вручную и поставить заново: byway core %s	no space for a second engine, and the current one (%s) comes from a package; remove the package manually and install again: byway core %s
 места на второе ядро нет (свободно %s МБ) — замена через память	no space for a second engine (%s MB free) — replacing via memory
 загрузка прежней версии %s — для отката	downloading the current version %s — for rollback
-архив прежней версии %s не получен — без копии для отката замена не начата	the archive of the current version %s was not obtained — without a rollback copy the replacement is not started
+архив прежней версии %s не получен — копия для отката сжимается в память	the archive of the current version %s was not obtained — a rollback copy is being compressed into memory
+копию прежней версии %s для отката не сделать — замена не начата	cannot make a rollback copy of the current version %s — replacement not started
 остановка службы: туннель пропадёт примерно на минуту	stopping the service: the tunnel drops for about a minute
 памяти после остановки мало: %s МБ	too little memory after stopping: %s MB
 новое ядро не распаковалось или не запускается	the new engine did not unpack or does not run
