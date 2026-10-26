@@ -52,8 +52,7 @@ trojan://PASSWORD@example.com:443?type=ws&security=tls&sni=example.com&path=/t#N
 Before the `@`: the user ID for vless, the password for trojan (fully
 percent-decoded). Parameters are listed under "Link parameters". `flow` and
 `encryption` exist only for vless. A `flow` on a trojan link is dropped with the
-warning "Xray-core does not support flow=… for trojan — skipped", and mux
-stays on.
+warning "Xray-core does not support flow=… for trojan — skipped".
 
 Without `security=` the security is `none` for vless and `tls` for trojan:
 trojan is meant to run over TLS, and clients often leave the parameter out.
@@ -70,7 +69,7 @@ After `vmess://` comes base64-encoded JSON. byway reads `add` and `port` (server
 address and port), `id`, `aid` (alterId, default 0; anything but a number is
 refused with "vmess aid is not a number"), `net` (transport, default tcp),
 `type` (`http` for tcp, header type for kcp; `none` means no header), `host`
-(Host header, defaults to the address), `path` (default `/`), `tls` (the value
+(Host header, defaults to `sni`, then to the address), `path` (default `/`), `tls` (the value
 `tls` turns TLS on), `sni` (defaults to `host`, then to the address), `scy`
 (VMess encryption: `auto`, `aes-128-gcm`, `chacha20-poly1305`; anything else,
 `none` and `zero` included, is not supported by Xray-core and becomes `auto` with a
@@ -120,8 +119,8 @@ hy2://PASSWORD@example.com:8443/?sni=example.com&obfs=salamander&obfs-password=O
 hy2://PASSWORD@example.com:8443/?sni=example.com&insecure=1&pinSHA256=e3b0c442…b855#Name
 ```
 
-Before the `@`: the password, fully percent-decoded. `sni` defaults to the
-server address, `alpn` to `h3`. `obfs=salamander` turns on obfuscation and
+Before the `@`: the password, fully percent-decoded. `sni` defaults to
+`host`, else the server address, `alpn` to `h3`. `obfs=salamander` turns on obfuscation and
 requires `obfs-password`; any other `obfs` is rejected, since Xray-core has no
 other. For `insecure` and `pinSHA256` see "Security".
 
@@ -202,8 +201,8 @@ refusal, but it is worth checking whether the server needs it.
 
 Parameter values are fully percent-decoded: `path=%2F%3Fed%3D2048` (the way
 v2rayN writes early data) goes into the config as `/?ed=2048`. A quote, a
-backslash or a control character after decoding means a refusal (see
-"Suspicious links"). The exception is `extra`: only `%2F %3A %2C %20 %3D %26`
+backslash or a control character after decoding means a refusal (except a quote and a backslash in a password,
+user name and obfs-password; see "Suspicious links"). The exception is `extra`: only `%2F %3A %2C %20 %3D %26`
 and the braces and quotes `%7B %7D %22 %5B %5D` are decoded in it. A lone `%`
 not followed by two hex digits stays `%`: the password `100%` is not damaged.
 
@@ -347,6 +346,9 @@ refuses if it contains a quote `"`, a backslash `\` or a control character
 (newline, tab). Control characters are caught separately: `%0A` becomes a real
 newline, and some format checks look only at the first line. The refusal names
 the field. An honest link never contains these characters.
+The exception is the password, user name and obfs-password: they are escaped for
+JSON, and a quote and a backslash are legitimate in them; a control character is
+rejected everywhere.
 
 Fields that go into the config without quotes, or have a fixed format, are
 matched against a pattern: the port (1–65535), the vmess `aid`, wireguard keys
@@ -360,10 +362,12 @@ number of streams per connection is the "Mux" setting on the Network tab
 (`mux_concurrency`). It ships as 8; `0` turns it off. Values from 0 to 999 are
 accepted; an empty value means 0, an invalid one also means 0, with a warning.
 
-Mux is used for tcp/raw, ws, httpupgrade and kcp. It is not used for xhttp (it
-has its own xmux), grpc (its own multiMode), hysteria2 (its own QUIC streams),
-keys with a `flow` (Vision splits the stream itself) or wireguard (it has no
-stream). byway reports each of these cases during the build. A second layer on
+Mux is used only for vless and vmess on tcp/raw, ws, httpupgrade and kcp. It is
+not used for trojan, shadowsocks and socks: mux is an Xray extension, and a
+server that is not Xray drops such connections; nor for hysteria2 (its own QUIC
+streams) or wireguard (it has no stream). For vless and vmess it is not used
+with a `flow` (Vision splits the stream itself) or on xhttp (its own xmux) or
+grpc (its own multiMode); byway reports this during the build. A second layer on
 top of a transport's own multiplexing only gets in the way: xhttp with mux
 pushed all traffic into one connection and got slower. Mux is not added to a
 custom config.
@@ -424,14 +428,14 @@ refuses while parsing it or while building the transport and security
 on a 1.x engine) is skipped with the warning "key skipped: reason", and the
 rest go into the config. A key that only the engine rejects (for example vless
 without TLS to a public address) is skipped the same way: "key N was rejected
-by the core -- skipped: …", and the build repeats without it, up to six times.
+by the core -- skipped: …", and the build repeats without it while at least one key remains.
 If no key is usable, the build fails and the previous config keeps running.
 
 **Custom config.** For what byway cannot parse from a link: HTTP(S) proxies,
 MASQUE, XDRIVE, non-standard settings. The field takes a whole Xray-core
 outbound object: `protocol`, `settings`, and `streamSettings` if needed. byway
-adds only `"tag": "proxy"` as the last field: with a repeated key the engine
-takes the last one, so your own `tag` in the object breaks nothing. The name
+replaces the `tag` field with `"tag": "proxy"`, so your own `tag` in the object
+breaks nothing. The name
 shown in the "Connection" line is the "Connection name" field.
 
 Nothing else is added to a custom config:
@@ -444,9 +448,9 @@ Nothing else is added to a custom config:
 - Multiplexing. If you want mux, put it in the object.
 - Excluding the server address. In "everything through the VPN" mode the
   server address from a link bypasses the tunnel, otherwise the tunnel would
-  loop into itself. In a custom config the address sits inside the JSON, byway
-  does not know it and warns that the server address must not end up in the
-  lists.
+  loop into itself. From a custom config byway takes the address in `settings`
+  (address, vnext, servers, peers.endpoint) and lets it bypass the tunnel; if it
+  finds none, it warns that the server address must not end up in the lists.
 
 ## Per-key routes
 
@@ -486,8 +490,8 @@ byway gen && /etc/init.d/byway restart
 ## Checking a key without touching the tunnel
 
 Both commands work on a separate config in a temporary file and leave the
-running tunnel alone. Without an argument they take the key from the settings
-(`node_url`). Parser warnings are printed above the result line.
+running tunnel alone. Without an argument they take the key from the settings:
+in "Several, automatic" mode all keys (as with `--all`), otherwise `node_url`. Parser warnings are printed above the result line.
 
 **`byway check LINK`** parses the link and runs `xray run -test` on the built
 outbound. It makes no network connections.
@@ -518,8 +522,8 @@ the connection. No response gives `DOES NOT WORK (code …)` and up to two error
 lines from the engine log. If the engine rejected the config, the output says
 so and gives the reason. The port and the test URL can be changed with the
 `PROBE_PORT` and `PROBE_URL` variables. Without an argument `byway probe`
-takes the object from "Outbound config" in "Custom config" mode, otherwise
-`node_url`.
+takes the object from "Outbound config" in "Custom config" mode, all keys in
+"Several, automatic" mode (as with `--all`), otherwise `node_url`.
 
 **`byway probe --all`** checks every key in the "Keys" list (`node_urls`) in
 turn: a `key N NAME` line before each, and `N of M work` at the end. This is

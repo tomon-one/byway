@@ -121,7 +121,8 @@ dropped; the list's subnets (in `all`, all intercepted traffic) are dropped
 under `on_failure closed`.
 
 Chain `input` (priority `filter - 10`): `iif lo return`, the QUIC reject rule,
-then `drop` for tcp/udp to `tproxy_port`. It blocks direct connections to the
+then `drop` for tcp/udp to `tproxy_port` and the `tproxy-direct` port (usually
+1602 and 1604). It blocks direct connections to the
 inbound from the network. Intercepted traffic is not affected: tproxy does not rewrite the destination
 address or port, so such a packet reaches `input` with its original port.
 
@@ -139,8 +140,8 @@ because the packet arrives with destination `198.18.x.x`. And the firewall
 needs the `firewall.bywaytproxy` rule (src `*`, proto `all`, `mark M/M`,
 `ACCEPT`) that `install.sh` creates; without it a zone with `input REJECT`
 drops intercepted packets. Before loading its own table, `byway plumb on`
-creates the rule again if it is missing (`uci commit firewall` and a firewall
-reload) and rewrites it if `mark` changes. `byway doctor` warns when the rule
+creates the rule again if it is missing (the `bywaytproxy` block is appended as
+text to `/etc/config/firewall`, then `/etc/init.d/firewall reload`) and rewrites it if `mark` changes. `byway doctor` warns when the rule
 is missing.
 
 The ruleset is applied as one transaction and starts with `table inet byway` +
@@ -174,12 +175,14 @@ direct; private addresses in the destination go to `block`. The port is closed i
 Sniffing uses `destOverride` `fakedns`, `http`, `tls`, `quic` with `routeOnly:
 false`: the destination is replaced by the recovered name, and routing works
 with the name from then on. [Rules](https://xtls.github.io/en/config/routing.html), first match wins, `domainStrategy:
-IPIfNonMatch`:
+IPIfNonMatch` (`IPOnDemand` on cores before 26.5.9):
 
 | # | rule | goes to |
 |---|---|---|
 | 1 | `inboundTag: dns-in` | `dns-out` |
-| 2 | with `dns_route tunnel`: built-in DNS queries | `proxy` |
+| 2 | built-in DNS queries (`dns-query`) | `direct`, `proxy` with `dns_route tunnel` |
+| 2a | `inboundTag: tproxy-direct` + private and the pool | `block` |
+| 2b | `inboundTag: tproxy-direct` | `direct` |
 | 3 | routes: `/etc/byway/routes/NAME.lst` | `route-NAME` |
 | 4 | `lists`: listed domains and `full:example.com` | `proxy` |
 | 5 | `lists`: listed subnets | `proxy` |
@@ -232,8 +235,9 @@ in `privnets`. The lists take no part in routing; the last rule points to
   resolves its name, and that query follows the catch-all rule into a tunnel
   that is not up yet.
 
-For a key given as raw JSON (`conn_mode outbound`) byway does not know the
-server address and cannot exempt it; `byway gen` warns about this. In no mode
+For a key given as raw JSON (`conn_mode outbound`) byway takes the server
+address from the `settings` of that config and exempts it; if none is found,
+`byway gen` warns. In no mode
 should the server address end up in the lists.
 
 ### Why a service needs both a domain and a subnet
@@ -344,8 +348,8 @@ has a default IPv6 route, `byway doctor` warns about it.
 - `lists` intercepts `@fakeip6` and `@subnets6`, `all` intercepts all IPv6;
 - `ip -6 rule` to the same table 100 and `local ::/0 dev lo table 100`;
 - Xray-core: a second fakedns pool, `queryStrategy: UseIP`, `tproxy-in`
-  listens on `::`, the `block` rule adds `::1/128`, `fe80::/10` and the v6
-  pool;
+  listens on `::`, the v6 pool is added to the `block` rule (`::/128`,
+  `::1/128`, `fc00::/7` and `fe80::/10` are there even with IPv6 off);
 - the `output` chain marks `@fakeip6` and, with the engine not running as
   root, `@subnets6`; the fail-closed block adds a `blocked6` set.
 
@@ -377,16 +381,17 @@ rules, which is why it is part of `byway nftsig` (see reload).
 
 `byway plumb on` checks the engine before changing anything: `nslookup` of the
 first listed name against `dns_listen` must return a pool address (with an
-empty list, any answer will do). It makes 15 attempts one second apart, but
+empty list, `example.com`, also a pool address). It makes 15 attempts one second apart, but
 `nslookup` can hang on its own in each of them, so the wait can run past 15
 seconds; it gives up earlier if there is no Xray-core process for five checks
-in a row. If the probe fails, no rules are installed, dnsmasq goes back to the
-ISP resolvers (`pl_dns_down`), and `pl_block_on` runs. The same failure path runs
+in a row. If the probe fails, no rules are installed, `pl_block_on` runs, then
+dnsmasq goes back to the ISP resolvers (`pl_dns_down`): the block is in place
+before the listed sites could open around the VPN. The same failure path runs
 when the kernel rejects the rules (`nft -c`) or fails to load them (`nft -f`);
 on a load failure the route in table 100 and the previous `inet byway` table
 are removed as well. What happens next depends on `on_failure`.
 
-`open`: `pl_block_on` does nothing. The home has internet and no
+`open`: `pl_block_on` only lifts a block left over from `closed`. The home has internet and no
 tunnel. **The list does not stop working, it works around the VPN:** names
 resolve to real addresses, connections leave from your home address, and from
 the outside everything looks fine.
@@ -453,10 +458,11 @@ such pins.
    deprecation warnings are shown.
 5. List lines that look like neither a name nor a subnet are dropped
    (`/var/run/byway-bad-entries`); for an accepted config the count and the first
-   three are printed before the comparison with the working one, so also when
+   ten are printed before the comparison with the working one, so also when
    the config did not change.
 6. Identical to the working config (`cmp`): nothing changes. Otherwise free
-   space is checked and the draft is `mv`ed over the working config, mode 640
+   space is checked, the draft is copied to `/etc/byway/config.json.new`, the size
+   is verified and it is renamed over the working config, mode 640
    root:byway (600 with a root engine or without a `byway` group).
 
 The service runs `byway gen` on every start. If the build fails but the
@@ -643,8 +649,9 @@ reverse address-to-name table (`/var/run/byway/fakemap`) by asking the DNS inbou
 about listed names, at most 200 per run, with the resume point in `.pos`. The
 table is tied to the engine PID. From the log it takes `tproxy-in -> proxy`
 and `-> route-NAME` lines newer than the cut-off (`/var/run/byway/statmark`)
-and adds the counts to `/etc/byway/usage.tsv`; addresses without a name
-(subnets) are counted as `(по IP)`. Only the router's own traffic is not
+and adds the counts to `/etc/byway/usage.tsv`; addresses outside the pool
+(subnets) are counted as `(подсети)`, a pool address without a name as
+`(поддомены)` (`(по IP)` until the map is complete). Only the router's own traffic is not
 counted. The file is written to flash only when it changes. The log is
 trimmed to its last 50 lines by writing over it, not with `mv`: the engine
 keeps the file open with `O_APPEND`, and a replaced file would send writes
@@ -792,7 +799,12 @@ server=/use-application-dns.net/
 dnsmasq reads drop-in files only at startup: a new or changed file means a
 `restart`; an unchanged file the running dnsmasq has already read means a
 SIGHUP, a cache flush. If there is no drop-in directory, home DNS is not
-redirected, byway warns, and interception by subnet still works.
+redirected, byway warns, and interception by subnet still works. With less than
+256 KB free in `/tmp`, dnsmasq is not restarted when DNS is switched to byway
+or when the block is written, and its files are left alone: without space it
+will not come up. byway warns, the guard retries later, and the block is not
+lifted until space is freed. Handing the resolver back to the ISP (stop, engine
+failure) works even with `/tmp` full: removing the file needs no space.
 
 **byway does not change the dnsmasq settings.** The file lives in RAM and is
 gone after a reboot: the router comes up with the ISP's DNS and no tunnel

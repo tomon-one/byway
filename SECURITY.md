@@ -61,8 +61,9 @@ byway управляет с роутера от root файрволом и DNS �
 
 ## Что стоит знать заранее
 
-- **Ключ хранится в `/etc/config/byway`**, как и прочие настройки OpenWrt: его
-  может прочитать root и пользователь LuCI с доступом к настройкам byway.
+- **Ключ хранится в `/etc/config/byway_key`** (права `600`), отдельно от прочих
+  настроек byway: его может прочитать root и пользователь LuCI с группой прав
+  `luci-app-byway-key`; группе `luci-app-byway` он не виден.
   `byway export` пишет выгрузку без ключа, с ключом — `byway export
   --with-key` (до 0.3.0 выгрузка шла с ключом, без него — `--no-key`). Выгрузка и отчёт создаются сразу с правами `600`.
 - **Выпуски byway подписаны.** К каждому выпуску приложены `SHA256SUMS` и
@@ -80,7 +81,7 @@ byway управляет с роутера от root файрволом и DNS �
   Проверенная версия сверяется ещё и с суммой, вшитой в подписанный `byway`.
   Подписей XTLS не выпускает.
 - **Резервная копия OpenWrt и sysupgrade несут ключ:** в них входят
-  `/etc/config/byway` и `/etc/byway/config.json`. Архив «Система → Резервная
+  `/etc/config/byway_key` и `/etc/byway/config.json`. Архив «Система → Резервная
   копия» хранить как пароль.
 
 ---
@@ -147,8 +148,9 @@ These limitations are documented in the README and known:
 
 ## Worth knowing up front
 
-- **The key is stored in `/etc/config/byway`**, like other OpenWrt settings: it
-  is readable by root and by a LuCI user with access to byway's settings.
+- **The key is stored in `/etc/config/byway_key`** (mode `600`), separately from
+  the other byway settings: readable by root and by a LuCI user with the
+  `luci-app-byway-key` permission group; the `luci-app-byway` group does not see it.
   `byway export` writes an export without the key, with the key —
   `byway export --with-key` (before 0.3.0 the export included the key,
   without it — `--no-key`). Exports and reports are created with mode `600`
@@ -169,5 +171,5 @@ These limitations are documented in the README and known:
   sum comes from the mirror itself. The tested version is also checked against
   a sum built into the signed `byway`. XTLS publishes no signatures.
 - **An OpenWrt backup and sysupgrade carry the key:** they include
-  `/etc/config/byway` and `/etc/byway/config.json`. Treat the
+  `/etc/config/byway_key` and `/etc/byway/config.json`. Treat the
   "System → Backup" archive like a password.

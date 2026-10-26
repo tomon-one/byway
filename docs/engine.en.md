@@ -32,7 +32,8 @@ executable with an ELF header, and the first line of its `version` output
 must start with the word `Xray`. The name and the header are checked before
 anything is run: otherwise `xray_bin=/sbin/reboot` would reboot the router on
 every byway call. If a check fails, byway prints
-`the core path was rejected: …` and falls back to the default engine. A path
+`the core path was rejected: …` (if the file is missing or not executable,
+`the core is missing or not executable: …`) and falls back to the default engine. A path
 such as `/mnt/sda1/xray` is therefore not accepted, but a symlink
 `/usr/local/bin/xray-…` to that file is; for USB, see "Flash".
 
@@ -205,8 +206,9 @@ new engine's fault, and the engine must not be rolled back for it.
 
 ### Without a key
 
-The service is off (`enabled 0`) or there is no key (no `node_url`, no
-`node_urls`, no custom config) — there is nothing to check on the new engine.
+The service is off (`enabled 0`) or there is no key for the selected connection
+method (auto-select — `node_urls` is empty, custom config — `outbound_json` is
+empty, otherwise `node_url` is empty) — there is nothing to check on the new engine.
 In a side-by-side swap byway makes sure the new engine runs on this hardware,
 switches `xray_bin`, deletes the previous `/usr/local/bin/xray-*` and prints
 `the service is not running (disabled or no key) — the core was replaced
@@ -369,11 +371,13 @@ the config differently or refuses up front:
 | below 1.8.24 | `xhttp`: refused |
 | below 25.8.29 | VLESS encryption (`encryption=mlkem768x25519plus`): refused |
 | below 26.3.27 | `hysteria2`: refused |
+| below 26.5.9 | `IPOnDemand` routing, private addresses blocked by a routing rule; from 26.5.9 — `IPIfNonMatch` and `finalRules` on `direct` |
 | below 26.3.27 | certificate check by fingerprint or name (`pcs=`, `pinSHA256=`, `vcn=`): refused |
 | below 26.3.27 | `allowInsecure=1` (or `insecure=1`) without a fingerprint: refused; with `allow_insecure 1` in the settings, written to the config with a warning that the connection can be spoofed |
 | 26.3.27 and newer | `allowInsecure=1` without a fingerprint: refused, the engine does not allow turning off certificate checks. With a fingerprint, only the fingerprint is written |
 | below 26.7.11 | `obfs=salamander` on hysteria2: refused |
 | below 26.7.11 | vless and trojan without TLS or reality to a public address: refused, as by the engine from 26.7.11; `allow_insecure 1` lifts it. Private IPv4 addresses pass |
+| below 26.9.30 | hysteria2 port hopping (`mport`, a range in the port): a warning, the connection uses the main port only |
 | 26.9.8 and newer | for the direct outbound, name resolution (`UseIP`) goes into `sockopt`, not `settings`: the engine declared the old field deprecated |
 
 A refusal is a message naming the required version and suggesting

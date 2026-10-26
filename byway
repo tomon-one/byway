@@ -9118,8 +9118,9 @@ function c_sets() {
 		[ 'on_failure', 'e', 'open closed', _t('если VPN не поднялся: open — пустить напрямую, closed — не пускать') ],
 		[ 'interface', 'l', '^[A-Za-z0-9._-]+$', _t('сети роутера, которые пользуются VPN (br-lan — домашняя)') ],
 		[ 'mux_concurrency', 'r', '^[0-9]{1,3}$', _t('Mux: запросов в одном соединении, 0 — выключено') ],
-		[ 'dns_upstream', 'r', '^https://[^ ]+$', _t('DNS-сервер, шифрованный (DoH): https://…/dns-query') ],
-		[ 'dns_upstream2', 'r', '^(https://[^ ]+|none)$', _t('запасной DNS-сервер; none — без запасного') ],
+		// Мерка -- как у сборки (g_dns) и панели: https:// и tcp://.
+		[ 'dns_upstream', 'r', '^(https|tcp)://[A-Za-z0-9._:/?=&%+-]+$', _t('DNS-сервер, шифрованный (DoH): https://…/dns-query') ],
+		[ 'dns_upstream2', 'r', '^((https|tcp)://[A-Za-z0-9._:/?=&%+-]+|none)$', _t('запасной DNS-сервер; none — без запасного') ],
 		[ 'dns_bootstrap', 'r', '^[0-9a-z.:/]+$', _t('DNS для имени DoH-сервера, если тот вписан именем') ],
 		[ 'dns_route', 'e', 'direct tunnel', _t('путь к DNS-серверу: напрямую или через VPN') ],
 		[ 'block_quic', 'f', '', _t('отказ QUIC для сайтов через VPN') ],

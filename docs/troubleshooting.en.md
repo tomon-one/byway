@@ -149,7 +149,8 @@ do; the draft stays in `/var/run/byway-config.new.json`. If the new config fails
 but the engine accepts the previous one, the service starts on the previous
 one, and the latest settings changes do not take effect. The engine runs as the
 `byway` user in a `procd-ujail` cage; if it fails to start only there
-(`doctor`: the engine runs not as root and crashes in a loop), return to root:
+(the engine as the byway user crashes in a loop: `logread -e xray`, the PID
+changes in the state log), return to root:
 `byway set xray_root on`.
 
 `vpn fail`: the router cannot open a connection to the server. The server
@@ -545,7 +546,8 @@ intact; before, a full flash could zero the settings file together with the
 key. To free room: `df -h /overlay`, remove unneeded packages and files
 (`byway core` keeps only one engine), then repeat. If after a refusal you see
 `file … was damaged by lack of space, the copy is …/var/run/byway-…`, put the
-copy back with the command from the message.
+copy back once flash is freed: `cp /var/run/byway-PACKAGE.uci
+/etc/config/PACKAGE`.
 
 ---
 
@@ -553,7 +555,7 @@ copy back with the command from the message.
 
 byway takes the nft table `inet byway` (plus `inet byway_block` while "Block"
 is in effect), the mark `0x100000` (`mark`), the engine's own connection
-mark `0x400000` (`self_mark`), routing table 100, ports 1602–1603 and the
+mark `0x400000` (`self_mark`), routing table 100, ports 1602–1604 and the
 pool `198.18.0.0/15`. It points dnsmasq at its own resolver with a
 `byway-dns.conf` file in the drop-in directory (`no-resolv`: other upstream
 servers are off); general servers set in the dnsmasq settings it leaves

@@ -277,7 +277,9 @@ If it has no one to ask — run from a script, say — it takes the defaults and
 warns you that it did.
 
 **The installer does not touch your key or lists;** in the settings it writes
-only the chosen language and the engine path, if none was set. That is why
+only the chosen language and the engine path (if none was set, the file it
+points to is gone, or the engine was just downloaded), and moves keys of earlier
+versions to `/etc/config/byway_key`. That is why
 running it again is safe, and why updates install the same way. If byway is
 already configured (a key, a key list or your own outbound config), the engine
 config is rebuilt and the service, if enabled, restarted — the tunnel drops for
@@ -458,8 +460,9 @@ work](docs/troubleshooting.en.md).
 - **The LuCI web UI:** key, mode, lists, state and connection check, export
   and import, the environment check and the report, checking for and
   installing byway updates, replacing the engine with the tested one or with a
-  version by number; the key check, the memory limit and running the engine as
-  root, `allow_insecure`, `self_mark` and IPv6 are on the Advanced tab. Console
+  version by number, the key check; IPv6 is on the Network tab; the key check
+  interval, the memory limit and running the engine as root, `allow_insecure`,
+  `self_mark` and the IPv6 address pool are on the Advanced tab. Console
   only: your own engine as a file (`byway core /tmp/FILE.gz`),
   `byway update --rollback`, `byway core restore`.
 - **A console menu** — `byway menu`, the same actions.
@@ -498,7 +501,7 @@ Where things go:
 |---|---|
 | `byway` — one script, all the logic | `/usr/local/bin/byway`, link `/usr/bin/byway` |
 | the procd service | `/etc/init.d/byway` |
-| settings | `/etc/config/byway` |
+| settings | `/etc/config/byway`; keys and subscription — `/etc/config/byway_key` |
 | lists, engine config, logs | `/etc/byway/` |
 | removal | `/usr/local/bin/byway-uninstall`, link `/usr/bin/byway-uninstall` |
 | the web UI (installed if LuCI is present and you agreed in the installer) | `/www/luci-static/resources/byway/` and `.../view/byway/` |
@@ -883,7 +886,7 @@ them.
 ## Compatibility
 
 **On real hardware:** Cudy WR3000S v1 (MediaTek MT7981, aarch64), OpenWrt
-25.12.5. Developed and used daily: about 700 domains and 300 subnets,
+25.12.5 and 25.12.6. Developed and used daily: about 700 domains and 300 subnets,
 transports ws, xhttp, httpupgrade and tcp+reality. This is the only
 combination where byway is verified end to end — with a live tunnel, real
 traffic and real flash limits.
@@ -892,10 +895,11 @@ traffic and real flash limits.
 
 | version | what was verified |
 |---|---|
-| 22.03.7 | full install with opkg; engine 26.9.9 from GitHub |
+| 22.03.7 | full install with opkg; engine 26.10.21 from GitHub |
 | 23.05.6 | install; removal, dry run and `--purge` |
 | 24.10.8 | install, engine from GitHub, with opkg; removal and `--purge` |
-| 25.12.5 | install with apk; settings import, clearing, list downloads |
+| 25.12.5 | install with apk; settings import, clearing, list downloads; update from 0.3.0 and rollback |
+| 25.12.6 | install with apk; removal and `--purge` |
 
 **The engine in the [OpenWrt packages](https://github.com/openwrt/packages/tree/master/net/xray-core) depends on the release:** 22.03 — 1.8.3,
 23.05 — 24.12.31, 24.10 — 25.1.30, 25.12 — 26.3.27. From GitHub any version
@@ -983,7 +987,7 @@ running on the previous one.
 **It runs every day on a live router** — the one this README starts with.
 
 **What none of this means.** byway has seen one router model and one OpenWrt
-version, IPv6 was never tested at all, and full removal has been verified on a
+branch (25.12), IPv6 was never tested at all, and full removal has been verified on a
 live router exactly once.
 
 ---
