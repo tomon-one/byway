@@ -15,8 +15,11 @@ Unfamiliar words — in the [glossary](glossary.en.md); the path from scratch �
 
 ### `byway status`
 
-Plain `byway` prints the same, plus the list of commands. A snapshot of what
-is built, what is running and what is in the kernel.
+A snapshot of what is built, what is running and what is in the kernel. Plain
+`byway` prints something shorter: the four `byway health` checks as dots (●),
+the "Connection" line and the list of common commands (on a router with no key,
+"Where to start"); in a terminal `byway health` looks like those dots, while
+scripts and the panel read its `name<TAB>state<TAB>details` lines.
 
 | line | meaning |
 |---|---|
@@ -51,7 +54,7 @@ the Overview tab.
 |---|---|---|
 | `service` | whether the engine runs | no engine; the other lines then say `nothing to check` |
 | `vpn` | TCP connect time to the server, directly from the router; over 400 ms is `slow` | the server does not accept connections on that address and port |
-| `tunnel` | a request to `example.com` through the router's proxy inbound and the VPN | the server is reachable, but traffic does not pass through it |
+| `tunnel` | a request to `example.com` through the router's proxy inbound and the VPN; with the service running, also that interception is up | the server is reachable, but traffic does not pass through it; `no interception: home traffic bypasses the tunnel` means there are no interception rules (`byway plumb on`, `byway doctor`) |
 | `dns` | whether `example.com` gets an address from the placeholder pool | the byway resolver does not answer |
 
 byway always sends `example.com` through the VPN, whatever the lists say;
@@ -95,7 +98,7 @@ connection lines and with addresses and names replaced by `x.x.x.x`, `x::x`
 and `NAME`.
 
 `byway report FILE` creates the file with mode 600 from the start. Paths like
-`/tmp/byway-…` are refused, byway keeps its working files there.
+`/var/run/byway…` and `/tmp/byway-…` are refused, byway keeps its working files there.
 `/tmp/report.txt` works. In the web UI — "Maintenance → Collect a report",
 the text appears on the page.
 
@@ -120,11 +123,12 @@ when something changed. In the web UI: Maintenance → State log.
 `route` are the parts of the interception rules, `dns` is where dnsmasq
 points, `fakeip` is whether the resolver hands out placeholder addresses.
 Marks: `(start)` the first entry after a reboot or `byway clear log`,
-`(restart)` the engine restarted, `(healed)` someone removed the
+`(restart)` the engine process changed (a restart, or a crash and a respawn),
+`(down)` the engine vanished and did not come back, `(healed)` someone removed the
 rules and they were put back, `(failed)` putting them back failed, `(nodns)`
 there was no engine on two checks in a row (one to two minutes) and
-interception was removed; if `byway pulse` removed it, the log has a line with
-`pid=none` and no mark.
+interception was removed; if `byway pulse` removed it, the log has a `pid=none`
+line marked `(down)`.
 
 ---
 
@@ -141,7 +145,7 @@ first minutes after a firmware upgrade look like; progress is in `logread -e
 byway`, the line `no core — installing Xray …`. If it fails, the watchdog
 retries every 15 minutes; by hand — `byway core restore`. If the config did not
 build, `byway gen` shows the engine's answer and, for known causes, what to
-do; the draft stays in `/tmp/byway-config.new.json`. If the new config fails
+do; the draft stays in `/var/run/byway-config.new.json`. If the new config fails
 but the engine accepts the previous one, the service starts on the previous
 one, and the latest settings changes do not take effect. The engine runs as the
 `byway` user in a `procd-ujail` cage; if it fails to start only there
@@ -290,12 +294,14 @@ default), and the router as its clients' DNS.
 | in the interface list | clients' DNS | result |
 |---|---|---|
 | yes | router | the tunnel works |
-| no | router | list sites do not open: clients get a placeholder address, and their network has no interception |
+| no | router | list sites open directly, bypassing the VPN: byway turns the placeholder address back into the name and sends it without the tunnel |
 | no | own (`dhcp_option '6,…'`) | the network bypasses the VPN entirely, nothing breaks |
 | yes | own | only the list's subnets go through the VPN |
 
 `byway doctor` names the second row: `networks using the byway resolver but
-not intercepted`. In "Everything through the VPN" mode a network outside the
+not intercepted` (before, such a network could not open list sites at
+all; now the engine has a separate inbound for it on port `tproxy_port` plus 2,
+usually 1604). In "Everything through the VPN" mode a network outside the
 interface list bypasses both the tunnel and the "Block" setting, and doctor
 reports it as a fault.
 
@@ -508,7 +514,9 @@ subnets work for IPv4 only. If the router has IPv6 from the ISP, a device
 that got an IPv6 address for a site usually prefers it and goes direct.
 
 `byway doctor` sees the default IPv6 route and shows `IPv6 is up,
-interception is IPv4 only`. There are two ways out. Turn IPv6 off on the
+interception is IPv4 only`: list domains are not affected (the router gives
+them no AAAA record), what goes direct is whatever learned the address
+elsewhere. There are two ways out. Turn IPv6 off on the
 WAN: there will be no IPv6 route out, so nothing can leave around the
 tunnel. Or turn on experimental IPv6 interception, which has not been tested
 with real IPv6 traffic (see [What byway does not
@@ -519,7 +527,25 @@ byway set ipv6 on
 ```
 
 If IPv6 is on but the kernel has no rule for it, doctor suggests
-`byway plumb on`.
+`byway plumb on`. If the rule is there but dnsmasq's DNS-rebind protection is on
+(it is by default on OpenWrt), dnsmasq drops the placeholder IPv6 addresses:
+domains are not redirected over IPv6, and doctor warns about it. IPv6 subnets
+work. To turn the protection off use "Network → DHCP and DNS → Rebind
+protection" — your call, it guards against address spoofing inside the network.
+
+---
+
+## A setting was not saved: no room on the flash
+
+The router's flash is small, and byway checks the room before every write: the
+settings (`/etc/config/byway`, `byway_key`), your own lists, the engine config,
+rollback copies. When there is not enough, the write refuses in words ("no room
+on the flash: … the previous one is in place") and the previous file stays
+intact; before, a full flash could zero the settings file together with the
+key. To free room: `df -h /overlay`, remove unneeded packages and files
+(`byway core` keeps only one engine), then repeat. If after a refusal you see
+`file … was damaged by lack of space, the copy is …/var/run/byway-…`, put the
+copy back with the command from the message.
 
 ---
 
@@ -606,7 +632,7 @@ directory is in the `conf-dir=` line of `/var/etc/dnsmasq.conf.*`):
 
 ```sh
 nft delete table inet byway_block
-rm -f DIRECTORY/byway-block.conf /tmp/byway-blocked
+rm -f DIRECTORY/byway-block.conf /var/run/byway-blocked
 /etc/init.d/dnsmasq restart
 ```
 

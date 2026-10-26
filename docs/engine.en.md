@@ -50,7 +50,7 @@ The installer asks for a version only when there is no engine on the system
 yet. A number can be typed by hand, or one of these picked:
 
 - **the one verified with byway** — the default. byway is verified on it end
-  to end, with the tunnel up and real traffic. Currently `26.10.17`;
+  to end, with the tunnel up and real traffic. Currently `26.10.21`;
   `byway core tested` installs the same.
 - **the newest one, pre-releases included** — the first release in the XTLS
   list (`byway core newest`).
@@ -172,7 +172,10 @@ one is there:
    switching by hand").
 2. While the tunnel is still up, the archive of the previous version is
    downloaded — the way back. After the service stops, GitHub may become
-   unreachable. If it does not download, the replacement does not start.
+   unreachable. If it does not download (the release may have been withdrawn),
+   the previous engine is compressed from its own file into memory and the
+   replacement goes on with that copy. No room even for it — the replacement
+   does not start.
 3. The service stops: the tunnel drops for about a minute. With "Block" the
    block goes up for that time and holds until interception comes up.
 4. Memory is checked: the engine size plus 20 MB (about 55 MB). Too little —
@@ -231,7 +234,7 @@ By hand this is rarely needed. When the service finds neither the engine nor
 a runnable `/usr/local/bin/xray-*` next to it at start, it runs `byway core
 restore` in the background, once the default route is up (waiting up to two
 minutes), 10 seconds after it, once per boot (the marker
-`/tmp/byway-engine-restore`). If a runnable file is there, it names the
+`/var/run/byway-engine-restore`). If a runnable file is there, it names the
 command to point at it instead of installing. If the install fails,
 `byway watch` retries every 15 minutes. Progress is
 in `logread -e byway`.
@@ -258,13 +261,14 @@ A fallback, with no tunnel check and no rollback:
 
 ```sh
 byway set xray_bin /usr/local/bin/xray-26.3.27
-byway gen && /etc/init.d/byway restart
 ```
 
-`restart` is needed because `uci commit` from the console does not touch the
-service. "Save & Apply" in the web UI calls `reload`, which compares the running
-engine file with the one set in `xray_bin` and restarts the service if they
-differ.
+`byway set` rebuilds the config itself and calls `reload`, which compares the
+running engine file with the one set in `xray_bin` and restarts the service if
+they
+differ. "Save & Apply" in the web UI does the same. A bare `uci set` and
+`uci commit` do not touch the service: follow them with
+`/etc/init.d/byway reload`.
 
 If the engine comes from a package and there is no room for a second one:
 remove the package (`apk del xray-core` or `opkg remove xray-core`) and
@@ -287,8 +291,8 @@ of connections to one address is a reason to block it. Details:
 [XTLS/Xray-core#6797](https://github.com/XTLS/Xray-core/issues/6797). The fix
 is in `golang.org/x/net` v0.60.0
 ([golang/go#81646](https://github.com/golang/go/issues/81646)); Xray includes
-it since release 26.10.17 (`x/net` v0.61.0). The simplest way is to install
-that or a newer one: `byway core 26.10.17`. The build below is only needed
+it since release 26.10.21 (`x/net` v0.61.0; XTLS withdrew release 26.10.17).
+The simplest way is to install 26.10.21 or a newer one: `byway core 26.10.21`. The build below is only needed
 to stay on versions 26.9.8–26.10.10.
 
 Only xhttp keys are affected. With such an engine `byway doctor` warns
@@ -381,7 +385,8 @@ with a self-signed certificate instead:
 byway set allow_insecure on
 ```
 
-The option is console only. It does not override an engine from 26.3.27 on
+In the web UI it is on the Advanced tab ("Allow insecure keys"); in the
+console it is `byway set allow_insecure on`. It does not override an engine from 26.3.27 on
 (from 26.7.11 on for a key without TLS).
 
 If the version cannot be determined (the second word of `xray version` output
@@ -421,7 +426,7 @@ without touching the working config: `byway check 'LINK'`.
 byway writes every build to a temporary file first and checks it with the
 engine. If the engine rejects it, the working `/etc/byway/config.json` is not
 changed. `byway gen` then prints `the engine rejected the config, the draft is
-left in /tmp/byway-config.new.json:`, the last lines of the engine's answer
+left in /var/run/byway-config.new.json:`, the last lines of the engine's answer
 and, when the reason is known, what to do about it. After "Save & Apply" in
 the web UI or `/etc/init.d/byway reload`, the system log shows the same: the config
 did not build, the previous one keeps working. `byway core` does not keep

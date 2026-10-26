@@ -1,13 +1,9 @@
 # Сторож (раз в 5 минут) и pulse (раз в минуту) из cron -- в ucode
-# (uc/watch.uc). Здесь пути, которые знает только shell, и имена, которые
-# читают другие части (замена ядра, doctor).
+# (uc/watch.uc). Здесь путь журнала состояния -- его читают doctor и
+# report.
 
 # Журнал состояния: отвалы и перезапуски, только при изменении.
 WATCH_LOG=$LISTS/health.log
-
-# Метка «перехват сняли намеренно» (uc/plumb.uc, PL_DOWN): её ставит и замена
-# ядра своим номером процесса.
-PLUMB_DOWN=/tmp/byway-plumb-down
 
 watch_env() {
     BW_SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0") \

@@ -43,6 +43,19 @@ function setTitle() {
    исчезали только после «Применить». */
 
 var DIR = '/etc/byway/';
+/* Пакет UCI с ключами (Ф9, п1-12); без прав на него -- пусто. */
+var KP = 'byway_key';
+
+/* Удалённые направления: их списки стираются после сохранения. */
+var PENDING_RM = [];
+
+function dropRemoved() {
+	var gone = PENDING_RM.filter(function (n) { return !uci.get('byway', n); });
+	PENDING_RM = PENDING_RM.filter(function (n) { return gone.indexOf(n) < 0; });
+	return Promise.all(gone.map(function (n) {
+		return fs.remove(DIR + 'routes/' + n + '.lst').catch(function () {});
+	}));
+}
 
 /* Список направления с диска. Отдельной функцией, потому что его просят
    двое -- счётчик в таблице и поле в окне правки, -- и просят при каждой
@@ -53,22 +66,46 @@ function routeList(name) {
 
 /* Поле, за которым стоит файл, а не запись UCI. Читаем заранее в load,
    пишем в write -- дальше LuCI сам решает, когда что вызвать. */
+/* Файл, который rpcd не отдаёт (больше ~256 КБ), -- null из load: поле
+   только для чтения и запись отвергается. Прежде он приходил пустым, сверка
+   совпадала, и «Сохранить» стирала весь список (н1-13). */
+function readList(path) {
+	return fs.read(path).catch(function () {
+		return fs.stat(path).then(function () { return null; }, function () { return ''; });
+	});
+}
+
 function fileField(s, key, title, hint, content, path) {
-	var o = s.option(form.TextValue, key, title, hint);
+	var big = content === null;
+	var o = s.option(form.TextValue, key, title, big ?
+		_('Список больше, чем панель может показать, — правка консолью: byway add, byway del, byway list.') : hint);
 	o.rows = 18;
 	o.monospace = true;
-	o.cfgvalue = function () { return content; };
+	if (big) o.readonly = true;
+	o.cfgvalue = function () { return big ? '' : content; };
+	/* Файл сверяется с тем, что читали при открытии вкладки: правку,
+	   сделанную консолью или другой вкладкой за это время, панель затирала
+	   целиком (Ф9, п2-37). Изменился -- не пишем, говорим. */
+	var same = function () {
+		return readList(path).then(function (cur) {
+			if (big || cur === null || cur !== content)
+				throw new Error(_('Список изменён на роутере после открытия вкладки — правка не записана. Обновите страницу и повторите.'));
+		});
+	};
 	o.write = function (section_id, value) {
 		var v = value || '';
 		if (v.length && v.slice(-1) !== '\n') v += '\n';
-		return fs.write(path, v);
+		return same().then(function () { return fs.write(path, v); })
+			.then(function () { content = v; });
 	};
 	/* Пустое поле LuCI отдаёт не в write, а в remove -- значит «стереть
 	   список целиком» приходило сюда. Заглушка нужна только когда опция
 	   СКРЫТА зависимостью (режим «всё через VPN»): там стирать нечего.
 	   Видимое поле, очищенное человеком, обязано опустеть и на диске. */
 	o.remove = function (section_id) {
-		return this.isActive(section_id) ? fs.write(path, '') : Promise.resolve();
+		return this.isActive(section_id) ?
+			same().then(function () { return fs.write(path, ''); }).then(function () { content = ''; }) :
+			Promise.resolve();
 	};
 	o.depends('list_mode', 'lists');
 	return o;
@@ -80,15 +117,65 @@ function count(text) {
 		.length;
 }
 
+/* Правка одних файлов списков: сборка и reload -- задачами byway job
+   (прямой вызов rpcd убивает через 30 секунд, Ф9, п2-8). */
+function applyFiles() {
+	ui.showModal(_('Применение'), [
+		E('p', { 'class': 'spinning' }, _('Идёт пересборка и перезапуск'))
+	]);
+	return bwui.jobRun([ 'gen' ]).then(function (r) {
+		var out = r.out;
+		if (r.code !== 0) {
+			ui.hideModal();
+			ui.addNotification(null, [
+				E('p', {}, _('Не применилось — работает прежняя настройка.')),
+				bwui.pretty(out)
+			], 'error');
+			return;
+		}
+		/* Правка одного файла списка UCI не меняет, commit не происходит, и
+		   procd reload не зовёт: служба оставалась на прежнем конфиге при
+		   слове «Применено». Зовём сами; при неизменном конфиге reload ничего
+		   не трогает. */
+		return bwui.jobRun([ 'reload' ]).then(function (rl) {
+			if (rl.code !== 0) throw rl;
+			ui.hideModal();
+			/* Успешный gen тоже бывает не молчаливым: он предупреждает о
+			   пересечении с zapret, о подозрительно широкой подсети, о
+			   выключенном mux. */
+			var warns = out.split('\n').filter(function (l) {
+				return /\[!\]/.test(l) && !/ -- (ожидание|waiting)\s*$/.test(l);
+			}).join('\n');
+			if (warns.trim())
+				ui.addNotification(null, [
+					E('p', {}, _('Применено, но byway есть что сказать:')),
+					bwui.pretty(warns.trim())
+				], 'warning');
+			else
+				ui.addNotification(null, E('p', {}, _('Применено')), 'info');
+		}).catch(function () {
+			ui.hideModal();
+			ui.addNotification(null, E('p', {},
+				_('Конфиг собран, но служба не перезапущена — нажмите «Перезапустить» на вкладке «Основное»')), 'warning');
+		});
+	});
+}
+
 return view.extend({
 	load: function () {
 		/* Списки направлений здесь НЕ читаем: их просит routeList() при
 		   каждой отрисовке. Снимок, снятый один раз, устаревал в пределах
 		   одной сессии страницы и молча терял правки. */
-		return uci.load('byway').then(function () {
+		return Promise.all([ uci.load('byway'), L.resolveDefault(uci.load(KP), null) ]).then(function () {
+			var names = uci.sections('byway', 'route').map(function (r) { return r['.name']; });
 			return Promise.all([
-				fs.read(DIR + 'domains.lst').catch(function () { return ''; }),
-				fs.read(DIR + 'subnets.lst').catch(function () { return ''; })
+				readList(DIR + 'domains.lst'),
+				readList(DIR + 'subnets.lst'),
+				Promise.all(names.map(routeList)).then(function (t) {
+					var c = {};
+					names.forEach(function (n, i) { c[n] = count(t[i]); });
+					return c;
+				})
 			]);
 		});
 	},
@@ -113,8 +200,12 @@ return view.extend({
 		   понятной строкой — и она закрывает главную опасность режима. */
 		o = s.option(form.Flag, 'ru_direct', _('.ru, .su и .рф — напрямую'),
 			_('Российские сайты мимо VPN. Выключать почти всегда ошибка.'));
-		o.default = '1';
+		/* Без опции byway её не включает (Ф9, п3-32); поставка вписывает 1. */
+		o.default = '0';
 		o.rmempty = false;
+		/* Скрыта в режиме «по спискам» -- LuCI стирал её при сохранении, и
+		   при возврате к «всё через VPN» .ru шли в туннель (Ф9, п3-33). */
+		o.remove = keepHidden;
 		o.depends('list_mode', 'all');
 
 		o = s.option(form.DummyValue, '_allnote', _('Важно'));
@@ -187,21 +278,14 @@ return view.extend({
 						   консоли зовут его сами, а кнопка -- нет: до 2026-09-07 человек
 						   нажимал «Скачать сейчас», видел «готово» и получал прежнюю
 						   маршрутизацию. Найдено третьим аудитом. */
-						return fs.exec('/usr/local/bin/byway', [ 'presets' ])
-							.then(function (r) {
-								var t = ((r.stdout || '') + (r.stderr || ''))
-									.replace(/\[[0-9;]*m/g, '') ;
-								return fs.exec('/etc/init.d/byway', [ 'reload' ])
-									.then(function () {
-										show((t || _('готово')) + '\n' + _('применено'));
-									})
-									.catch(function () {
-										show((t || '') + '\n' + _('скачано, но не применено — нажмите «Перезапустить» на вкладке «Основное»'));
-									});
-							})
-							.catch(function () {
-								show(_('Загрузка идёт дольше, чем панель готова ждать. На роутере она продолжается — обновите страницу через минуту.'));
-							});
+						/* Задачей byway job (скачать и reload): прямой вызов rpcd
+						   обрывает через 30 секунд, посреди загрузки. */
+						return bwui.jobRun([ 'presets' ], function (t) {
+							show(t.trim() || _('Идёт загрузка…'));
+						}).then(function (r) {
+							show((r.out.trim() || _('готово')) +
+								(r.code === 0 ? '\n' + _('применено') : ''));
+						});
 					})
 				}, _('Скачать сейчас')),
 				out
@@ -209,14 +293,14 @@ return view.extend({
 		};
 
 		fileField(s, '_domains',
-			_('Домены (') + count(data[0]) + ')',
+			_('Домены (') + (data[0] === null ? '?' : count(data[0])) + ')',
 			_('По одному сайту на строку, без https:// и без пути: example.com. Сайт покрывает свои поддомены: example.com ловит и mail.example.com. Строки с // или # — комментарии. Русские домены — в пуникоде (xn--…). Для опытных: full: — только это имя, keyword: — часть имени, regexp: — регулярное выражение. Неправильные строки byway пропускает и называет при сборке.'),
-			data[0] || '', DIR + 'domains.lst');
+			data[0], DIR + 'domains.lst');
 
 		fileField(s, '_subnets',
-			_('Подсети (') + count(data[1]) + ')',
+			_('Подсети (') + (data[1] === null ? '?' : count(data[1])) + ')',
 			_('Диапазоны IP-адресов, по одному на строку, в виде 1.2.3.0/24; одиночный адрес тоже годится. Только IPv4. Нужны для сервисов, которые соединяются по адресам, а не по именам сайтов, — например Telegram. Слишком широкие диапазоны вредны: они уводят в VPN чужой трафик и замедляют его.'),
-			data[1] || '', DIR + 'subnets.lst');
+			data[1], DIR + 'subnets.lst');
 
 		/* ── Направления ───────────────────────────────────────────────
 		   «Этот список -- через этот ключ». Отдельная секция UCI на каждое, имя
@@ -225,12 +309,11 @@ return view.extend({
 		   Ключ здесь выбирается ПО МЕТКЕ, а не вписывается: сама ссылка
 		   лежит в node_urls на «Основном», и дублировать её значило бы
 		   держать один uuid в двух местах и расходиться при первой смене. */
-		var routeKeys = (L.toArray(uci.get('byway', 'main', 'node_urls')) || [])
+		var routeKeys = (L.toArray(uci.get(KP, 'main', 'node_urls')) || [])
 			.map(function (u) {
 				var h = u.indexOf('#');
 				if (h < 0) return null;
-				try { return decodeURIComponent(u.slice(h + 1)); }
-				catch (e) { return u.slice(h + 1); }
+				return bwui.pctd(u.slice(h + 1));
 			}).filter(function (x) { return x; });
 
 		/* GridSection, а не TypedSection: у второй кнопка удаления рисуется
@@ -260,10 +343,10 @@ return view.extend({
 			if (!confirm(_('Направление «%s» будет удалено вместе со своим списком. Продолжить?')
 					.replace('%s', section_id)))
 				return Promise.resolve();
-			var self = this, args = arguments;
-			return fs.remove(DIR + 'routes/' + section_id + '.lst')
-				.catch(function () { /* файла могло не быть -- это не отказ */ })
-				.then(function () { return removeRoute.apply(self, args); });
+			/* Файл -- после сохранения, когда секции и правда нет: удалённый
+			   сразу, он пропадал и при «Сбросить» (Ф9, п4-71). */
+			if (PENDING_RM.indexOf(section_id) < 0) PENDING_RM.push(section_id);
+			return removeRoute.apply(this, arguments);
 		};
 
 		var ro = rs.option(form.ListValue, 'label', _('Ключ'));
@@ -285,11 +368,11 @@ return view.extend({
 		   что было сохранено между заходом на вкладку и этим моментом.
 		   cfgvalue вправе вернуть обещание: form.js делает
 		   Promise.resolve(this.cfgvalue(...)).then(renderWidget). */
+		/* Ячейка таблицы обещание не ждёт: колонка была пустой всегда (Ф9,
+		   п3-36). Число -- из чтения при загрузке вкладки. */
 		ro = rs.option(form.DummyValue, '_rcount', _('Записей'));
 		ro.cfgvalue = function (section_id) {
-			return routeList(section_id).then(function (t) {
-				return String(count(t));
-			});
+			return String(data[2][section_id] != null ? data[2][section_id] : '—');
 		};
 
 		ro = rs.option(form.TextValue, '_rlist', _('Список'),
@@ -303,57 +386,28 @@ return view.extend({
 			if (v.length && v.slice(-1) !== '\n') v += '\n';
 			return fs.write(DIR + 'routes/' + section_id + '.lst', v);
 		};
-		ro.remove = function () { return Promise.resolve(); };
+		/* Пустое поле LuCI отдаёт в remove: очистить список направления было
+		   нельзя (Ф9, п4-70). Скрытое -- не трогаем. */
+		ro.remove = function (section_id) {
+			return this.isActive(section_id) ? fs.write(DIR + 'routes/' + section_id + '.lst', '') : Promise.resolve();
+		};
 
 		return m.render();
 	},
 
-	handleSaveApply: function (ev) {
-		/* Правка UCI (направления) -- LuCI перезагрузит страницу, итог покажет
-		   render (bwui.markApplied). Правку одних файлов списков UCI не видит:
-		   её применяем здесь же. */
-		bwui.markApplied();
-		return this.super('handleSaveApply', [ ev ]).then(function () {
-			ui.showModal(_('Применение'), [
-				E('p', { 'class': 'spinning' }, _('Идёт пересборка и перезапуск'))
-			]);
-			return fs.exec('/usr/local/bin/byway', [ 'gen' ]).then(function (r) {
-				var out = ((r.stdout || '') + (r.stderr || ''))
-					.replace(/\x1b\[[0-9;]*m/g, '');
-				if (r.code !== 0) {
-					ui.hideModal();
-					ui.addNotification(null, [
-						E('p', {}, _('Не применилось — работает прежняя настройка.')),
-						bwui.pretty(out)
-					], 'error');
-					return;
-				}
-				/* Правка одного файла списка UCI не меняет, commit не
-				   происходит, и procd reload не зовёт: служба оставалась на
-				   прежнем конфиге при слове «Применено». Зовём сами; при
-				   неизменном конфиге reload ничего не трогает. */
-				return fs.exec('/etc/init.d/byway', [ 'reload' ]).then(function () {
-				ui.hideModal();
-				/* Успешный gen тоже бывает не молчаливым: он предупреждает
-				   о пересечении с zapret, о подозрительно широкой подсети, о
-				   выключенном mux. Раньше весь его вывод выбрасывался при
-				   коде 0, и человек не видел этих слов НИКОГДА. */
-				var warns = out.split('\n').filter(function (l) {
-					return /\[!\]/.test(l) && !/ -- (ожидание|waiting)\s*$/.test(l);
-				}).join('\n');
-				if (warns.trim())
-					ui.addNotification(null, [
-						E('p', {}, _('Применено, но byway есть что сказать:')),
-						bwui.pretty(warns.trim())
-					], 'warning');
-				else
-					ui.addNotification(null, E('p', {}, _('Применено')), 'info');
-				}).catch(function () {
-					ui.hideModal();
-					ui.addNotification(null, E('p', {},
-						_('Конфиг собран, но служба не перезапущена — нажмите «Перезапустить» на вкладке «Основное»')), 'warning');
-				});
-			});
+	handleSaveApply: function (ev, mode) {
+		/* Правка UCI (направления) -- применяет LuCI: procd reload сам
+		   собирает конфиг, итог покажет render (bwui.markApplied). Своя сборка
+		   рядом шла параллельно с ним и давала двойной перезапуск (Ф9, п4-73).
+		   Правку одних файлов списков UCI не видит: её применяем сами. */
+		return this.handleSave(ev).then(function () {
+			return uci.changes();
+		}).then(function (ch) {
+			if (ch && ch.byway && ch.byway.length) {
+				bwui.markApplied();
+				return dropRemoved().then(function () { ui.changes.apply(mode == '0'); });
+			}
+			return dropRemoved().then(applyFiles);
 		});
 	}
 });

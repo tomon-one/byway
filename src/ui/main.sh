@@ -36,6 +36,8 @@ case "${1:-}" in
   lang)   shift; cmd_lang "$@" ;;
   # Служебная: перевод сообщения службы (init-скрипт), формат и доводы printf.
   xlat)   shift; bw_uc xlat "$@" ;;
+  # Служебная: перенос ключей в byway_key (установщик после обновления).
+  keymove) bw_uc keymove ;;
   clear)  shift; cmd_clear "$@" ;;
   import) shift; cmd_import "$@" ;;
   version|--version|-v) bw_uc version ;;

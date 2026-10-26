@@ -8,7 +8,17 @@ const C_OK = '\033[1;32m', C_WARN = '\033[1;33m', C_BAD = '\033[1;31m', C_DIM = 
 
 // Строка «команда — описание» с переносом описания по словам.
 // opt -- уточнение (флаги, вторая форма) серым после описания.
+// Подстановки в записи команды (ССЫЛКА, САЙТ, …) -- на языке интерфейса:
+// кириллица в английской справке выглядела недосказанной (Ф9, п3-24, п3-44).
+// Ключи словаря -- явными _t: lang-sync сверяет словарь с кодом по ним.
+function c_ph(cmd) {
+	let T = { 'ССЫЛКА': _t('ССЫЛКА'), 'САЙТ': _t('САЙТ'), 'АДРЕС': _t('АДРЕС'), 'ФАЙЛ': _t('ФАЙЛ'),
+	          'ВЕРСИЯ': _t('ВЕРСИЯ'), 'ИМЯ': _t('ИМЯ'), 'ЗНАЧЕНИЕ': _t('ЗНАЧЕНИЕ') };
+	return replace(cmd, /ССЫЛКА|САЙТ|АДРЕС|ФАЙЛ|ВЕРСИЯ|ИМЯ|ЗНАЧЕНИЕ/g, (m) => T[m]);
+}
+
 function c_help(cmd, txt, opt) {
+	cmd = c_ph(cmd);
 	let W = 78, I = 24, line;
 	if (opt) txt += '  ' + C_DIM + opt + C_0;
 	// Длинная команда -- своей строкой, описание под ней с отступом.
@@ -27,12 +37,15 @@ function c_help(cmd, txt, opt) {
 function c_cls() { if (getenv('BW_TTY') == '1') print('\033[H\033[2J'); }
 function c_group(t) { print('\n', C_B, t, C_0, '\n'); }
 
-// Ключа нет -- по способу подключения, как в панели.
-// В режимах нескольких ключей byway работает и на одиночном ключе, если
-// список пуст: «нет ключа» -- только когда пусто и там, и там.
+// Ключа нет -- по способу подключения, как у сборки (outbound.uc) и
+// update.uc (up_idle): автовыбор берёт только список, остальные -- node_url.
+// Прежде «есть ключ» считалось по любому из двух, и в автовыборе с пустым
+// списком блок «С чего начать» пропадал, хотя сборка отказывала (Ф9, п4-52).
 function c_nokey() {
-	if ((u('conn_mode') || 'key') == 'outbound') return trim(u('outbound_json')) === '';
-	return trim(u('node_url')) === '' && trim(u('node_urls')) === '';
+	let m = u('conn_mode') || 'key';
+	if (m == 'outbound') return trim(u('outbound_json')) === '';
+	if (m == 'urltest') return !length(ul('node_urls'));
+	return trim(u('node_url')) === '';
 }
 
 // ── проверка для человека ────────────────────────────────────────────────
@@ -50,8 +63,16 @@ function c_advice(seen) {
 	if (c_fail(seen, 'service'))
 		return [ _t('Служба не запущена. Включить и запустить: byway on. Не помогло — byway doctor назовёт причину.') ];
 	let out = [];
-	if (c_fail(seen, 'vpn'))
+	// В автовыборе проба одного ключа проверяет node_url, а не ключи в
+	// работе: совет -- проверить все и обновить подписку (Ф9, п3-11).
+	if (u('conn_mode') == 'urltest' && (c_fail(seen, 'vpn') || c_fail(seen, 'tunnel')))
+		push(out, _t('Ни один ключ автовыбора не даёт связи. Проверить все: byway probe --all; обновить ключи из подписки: byway key sub АДРЕС.'));
+	else if (c_fail(seen, 'vpn'))
 		push(out, _t("Связи с сервером VPN нет: ключ вставлен не целиком, устарел, или сервер выключен либо заблокирован. Проверить ключ: byway probe; если «НЕ РАБОТАЕТ», возьмите свежий ключ у сервиса VPN и впишите: byway key 'ССЫЛКА'."));
+	// «Перехвата нет» -- не ключ, а правила: совет про ключ уводил не туда
+	// (Ф9, прогон 5).
+	else if (c_fail(seen, 'tunnel') && seen.tunnel.note == _t('перехвата нет: трафик дома идёт мимо туннеля'))
+		push(out, _t('Правил перехвата нет, трафик дома идёт мимо туннеля. Поднять: byway plumb on; не помогло — /etc/init.d/byway restart и byway doctor.'));
 	else if (c_fail(seen, 'tunnel'))
 		push(out, _t("Сервер отвечает, но трафик через него не идёт. Чаще всего ключ устарел или в нём ошибка: byway probe, при неудаче — новый ключ: byway key 'ССЫЛКА'."));
 	if (c_fail(seen, 'dns') && !length(out))
@@ -65,10 +86,14 @@ function c_health(text) {
 		let p = split(l, '\t');
 		if (length(p) >= 3) seen[p[0]] = { st: p[1], note: p[2] };
 	}
+	// Ширина -- по самой длинной подписи: английская длиннее 17 знаков, и
+	// подпись слипалась с пояснением (Ф9, прогон 5).
+	let w = 17;
+	for (let c in c_checks()) if (c_len(c[1]) + 1 > w) w = c_len(c[1]) + 1;
 	for (let c in c_checks()) {
 		let v = seen[c[0]] ?? { st: 'warn', note: _t('нет данных') };
 		let col = v.st == 'ok' ? C_OK : (v.st == 'fail' ? C_BAD : C_WARN);
-		print('  ', col, '●', C_0, ' ', c_pad(c[1], 17), C_DIM, v.note, C_0, '\n');
+		print('  ', col, '●', C_0, ' ', c_pad(c[1], w), C_DIM, v.note, C_0, '\n');
 	}
 	for (let a in c_advice(seen)) print('\n  ', C_BAD, '! ', C_0, a, '\n');
 }
@@ -146,6 +171,7 @@ function cmd_home() {
 	print(C_B, 'byway ', getenv('BW_VERSION'), C_0, _t(' — раздельное туннелирование через VPN\n'));
 	print(C_DIM, _t('Собрано задолго до рассвета'), C_0, '\n\n');
 	if (c_nokey()) {
+		if (u('conn_mode') == 'urltest') print(_t('  Выбран автовыбор, а список ключей пуст: взять ключи из подписки — byway key sub АДРЕС, либо один ключ, как в шаге 1.\n\n'));
 		print(_t('  С чего начать:\n'));
 		print(_t('  1. Вписать ключ — ссылку от сервиса VPN, в одинарных кавычках:\n'), "       byway key 'vless://…'\n");
 		print(_t('  2. Добавить сайты, которые должны идти через VPN:\n       byway add youtube.com instagram.com\n'));
@@ -232,15 +258,54 @@ function cmd_help(all) {
 	c_help('show', _t('собранный конфиг без секретов: счётчики и правила'));
 	c_help('nft', _t('правила перехвата, не применяя их'));
 	c_help('plumb on|off', _t('включить или снять перехват (nft, маршрут, DNS)'));
-	c_help('job update|engine|probe|log', _t('то же в фоне, ход в журнале (так зовёт панель)'));
+	c_help('job update|engine|probe|gen|presets|restart|reload|import|log', _t('то же в фоне, ход в журнале (так зовёт панель)'));
 	c_help('version', _t('версия'));
 }
 
 // ── ключ и включение ──────────────────────────────────────────────────────
 // Применить: gen показывает, что собралось, reload службы перезапускает
 // только при отличии (как «Сохранить и применить» в панели).
+// Снимок настроек и своих списков до правки: сборка отказала -- правка
+// уходит назад. Прежде значение оставалось записанным, хотя консоль
+// говорила «работает прежняя настройка», и всплывало при следующей
+// сборке (Ф9, п4-53).
+let _snap = null;
+function c_snap() {
+	_snap = {};
+	let L = getenv('BW_LISTS');
+	for (let f in [ '/etc/config/byway', '/etc/config/' + KEY_PKG, L + '/domains.lst', L + '/subnets.lst' ]) {
+		let st = fs.stat(f);
+		_snap[f] = { t: fs.readfile(f), m: st ? st.mode & 0777 : null };
+	}
+}
+
+// Вернуть снимок c_snap; ложь -- что-то не вернулось (нет места).
+function c_restore() {
+	let ok = true;
+	for (let f, o in _snap ?? {}) {
+		if (o.t == null) fs.unlink(f);
+		else if (fs.readfile(f) !== o.t && !put_file(f, o.t, o.m)) ok = false;
+	}
+	_cur = null;
+	return ok;
+}
+
+// Запись не легла (нет места): то, что успело записаться до неё, -- назад.
+function c_nostore() {
+	c_restore();
+	exit(1);
+}
+
 function c_apply() {
 	if (sys([ m_self(), 'gen' ]) != 0) {
+		// Без ядра сборка отказывает при любой правке: ключ и настройки
+		// тогда записываются впрок, до установки ядра.
+		if (_snap && run([ 'test', '-x', xray_bin() ]).code == 0) {
+			let ok = c_restore();
+			if (!ok) die('не применилось, и прежняя настройка не вернулась (нет места?) — проверить: byway doctor');
+			print('  ', C_BAD, _t('не применилось'), C_0, _t(' — правка отменена, работает прежняя настройка'), '\n');
+			exit(1);
+		}
 		print('  ', C_BAD, _t('не применилось'), C_0, _t(' — работает прежняя настройка'), '\n');
 		return false;
 	}
@@ -260,7 +325,8 @@ function cmd_key(url) {
 	let r = run([ m_self(), 'check', url ], true);
 	print(r.out);
 	if (r.code != 0) die('ключ не принят — настройки не изменены');
-	m_uci('node_url=' + url, 'conn_mode=key');
+	c_snap();
+	if (!m_uci('node_url=' + url, 'conn_mode=key')) c_nostore();
 	say('ключ записан, способ подключения — один ключ');
 	c_apply();
 }
@@ -268,14 +334,38 @@ function cmd_key(url) {
 // bw_uc on | off. Выключение -- остановкой службы: она снимает перехват и
 // запрет «Не пускать», дом остаётся с интернетом без VPN.
 function cmd_onoff(on) {
-	m_uci('enabled=' + (on ? '1' : '0'));
+	if (!m_uci('enabled=' + (on ? '1' : '0'))) c_nostore();
 	if (on) {
 		run([ '/etc/init.d/byway', 'enable' ]);
 		sys([ '/etc/init.d/byway', 'restart' ]);
-		say('byway включён — ядро поднимается до 15 секунд; проверить: byway health');
+		// Ядра нет -- «поднимается» было бы неправдой (Ф9, п3-28).
+		if (run([ 'test', '-x', xray_bin() ]).code != 0) {
+			warn('byway включён, но ядра Xray нет — служба не поднимется; что делать — строками выше');
+			exit(1);
+		}
+		// Ждём движок до 15 с: не поднялся (адрес DNS занят, конфиг отвергнут)
+		// -- сказать сразу, а не зелёным «включён» (Ф9, п3-57, прогон 5).
+		// Движок, падающий на старте, procd поднимает снова: живым считаем pid,
+		// переживший три секунды.
+		// Счёт -- по часам: круг с проверкой pid длится 4 с, и 15 кругов
+		// давали до минуты при тексте «за 15 секунд» (н1-9).
+		let up = false, end = time() + 15;
+		while (!up && time() < end) {
+			let p = st_xray_pid();
+			if (p !== '') { run([ 'sleep', '3' ]); up = st_xray_pid() == p; }
+			if (!up) run([ 'sleep', '1' ]);
+		}
+		if (!up) {
+			warn('byway включён, но движок не поднялся за 15 секунд — причина: byway doctor; журнал: logread -e xray');
+			exit(1);
+		}
+		say('byway включён, движок работает; проверить: byway health');
 		if (c_nokey()) warn("ключ не задан — вписать: byway key 'ССЫЛКА'");
 	} else {
-		sys([ '/etc/init.d/byway', 'stop' ]);
+		// reload, а не stop: при enabled 0 он останавливает и заново
+		// регистрирует службу в procd -- иначе «Включить» в панели потом
+		// ничего не запускал (Ф9, п3-64).
+		sys([ '/etc/init.d/byway', 'reload' ]);
 		say('byway выключен: интернет идёт напрямую, без VPN; включить: byway on');
 	}
 }
@@ -295,10 +385,13 @@ function c_items(args) {
 			if (d > 0 && substr(ln, d - 1, 1) == ':') d = index(substr(ln, d + 2), '//') >= 0 ? d + 2 + index(substr(ln, d + 2), '//') : -1;
 			if (c >= 0) ln = substr(ln, 0, c);
 			if (d >= 0 && (c < 0 || d < c)) ln = substr(ln, 0, d);
-			for (let l in split(ln, /[ \t\r,]+/)) {
-				l = trim(l);
-				if (l !== '') push(out, l);
-			}
+			// Запятая разделяет записи, кроме regexp: -- в ней она часть
+			// выражения ({2,3}); прежде запись резалась надвое (Ф9, п3-4).
+			for (let w in split(ln, /[ \t\r]+/))
+				for (let l in (substr(w, 0, 7) == 'regexp:' ? [ w ] : split(w, ','))) {
+					l = trim(l);
+					if (l !== '') push(out, l);
+				}
 		}
 	}
 	return out;
@@ -306,6 +399,8 @@ function c_items(args) {
 
 // Ссылка вида https://www.example.com/path -- имя сайта; регистр -- строчный.
 function c_host(l) {
+	// regexp: -- как написано: строчные меняли смысл (\D -> \d; Ф9, п4-50).
+	if (substr(l, 0, 7) == 'regexp:') return l;
 	let m = match(l, /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/([^\/?#:]+)/);
 	if (m) l = m[1];
 	return lc(l);
@@ -324,8 +419,10 @@ function c_read(kind) { return map(pl_lines(fs.readfile(c_file(kind))), (x) => t
 function c_write(kind, lines) {
 	let f = c_file(kind), t = join('\n', lines);
 	if (t !== '') t += '\n';
-	fs.writefile(f + '.new', t);
-	return fs.rename(f + '.new', f);
+	// Первый файл пары уже мог лечь: снимок -- назад, иначе «прежний на
+	// месте» было бы неправдой (н1-1).
+	if (!put_file(f, t)) { if (_snap) c_restore(); dief('на флеше нет места: %s не записан, прежний на месте', f); }
+	return true;
 }
 
 // bw_uc add ЗАПИСЬ … : проверка -- той же меркой, что при сборке (lj_entry),
@@ -333,16 +430,18 @@ function c_write(kind, lines) {
 function cmd_add(...args) {
 	let items = c_items(args);
 	if (!length(items)) die('что добавить: byway add youtube.com instagram.com 91.108.4.0/22; список со ввода: byway add -');
-	let cur = { domains: c_read('domains'), subnets: c_read('subnets') }, n = 0, add = { domains: [], subnets: [] };
+	let cur = { domains: c_read('domains'), subnets: c_read('subnets') }, n = 0, bad = 0, add = { domains: [], subnets: [] };
 	for (let raw in items) {
 		let l = c_host(raw), k = c_kind(l);
-		if (lj_entry(l, k == 'domains', '') == null) { print('  ', C_BAD, '✗', C_0, ' ', _f('не похоже ни на сайт, ни на подсеть: %s', raw), '\n'); continue; }
+		if (lj_entry(l, k == 'domains', '') == null) { print('  ', C_BAD, '✗', C_0, ' ', _f('не похоже ни на сайт, ни на подсеть: %s', raw), '\n'); bad++; continue; }
 		if (index(cur[k], l) >= 0 || index(add[k], l) >= 0) { print('  ', C_DIM, '=', C_0, ' ', _f('уже есть: %s', l), '\n'); continue; }
 		push(add[k], l);
 		print('  ', C_OK, '+', C_0, ' ', l, C_DIM, k == 'subnets' ? _t('  (подсеть)') : '', C_0, '\n');
 		n++;
 	}
-	if (!n) { print(_t('  добавлять нечего\n')); return; }
+	// Ни одной годной записи -- отказ кодом 1; одни повторы -- не ошибка (Ф9, п3-23).
+	if (!n) { print(_t('  добавлять нечего\n')); if (bad) exit(1); return; }
+	c_snap();
 	for (let k in [ 'domains', 'subnets' ])
 		if (length(add[k])) c_write(k, [ ...cur[k], ...add[k] ]);
 	sayf('добавлено: %s', n);
@@ -364,7 +463,8 @@ function cmd_del(...args) {
 		print('  ', C_WARN, '−', C_0, ' ', l, '\n');
 		n++;
 	}
-	if (!n) { print(_t('  убирать нечего\n')); return; }
+	if (!n) { print(_t('  убирать нечего\n')); exit(1); }
+	c_snap();
 	c_write('domains', cur.domains);
 	c_write('subnets', cur.subnets);
 	sayf('убрано: %s', n);
@@ -386,38 +486,43 @@ function c_sets() {
 		[ 'mux_concurrency', 'r', '^[0-9]{1,3}$', _t('Mux: запросов в одном соединении, 0 — выключено') ],
 		[ 'dns_upstream', 'r', '^https://[^ ]+$', _t('DNS-сервер, шифрованный (DoH): https://…/dns-query') ],
 		[ 'dns_upstream2', 'r', '^(https://[^ ]+|none)$', _t('запасной DNS-сервер; none — без запасного') ],
-		[ 'dns_bootstrap', 'r', '^[0-9a-fA-F.:]+$', _t('DNS для имени DoH-сервера, если тот вписан именем') ],
+		[ 'dns_bootstrap', 'r', '^[0-9a-z.:/]+$', _t('DNS для имени DoH-сервера, если тот вписан именем') ],
 		[ 'dns_route', 'e', 'direct tunnel', _t('путь к DNS-серверу: напрямую или через VPN') ],
 		[ 'block_quic', 'f', '', _t('отказ QUIC для сайтов через VPN') ],
 		[ 'router_via_vpn', 'f', '', _t('VPN для программ на самом роутере') ],
 		[ 'ipv6', 'f', '', _t('IPv6 (экспериментально)') ],
 		[ 'log_level', 'e', 'none error warning info debug', _t('подробность журнала ядра') ],
-		[ 'probe_interval', 'r', '^[0-9]+[smh]?$', _t('шаг проверки ключей в автовыборе: 3m, 30s') ],
+		[ 'probe_interval', 'r', '^[0-9]{1,4}[smh]$', _t('шаг проверки ключей в автовыборе: 3m, 30s') ],
 		[ 'show_usage', 'f', '', _t('сбор статистики «чем пользуются»') ],
-		[ 'lists_update', 'r', '^[0-9]+[mhd]?([0-9]+[mhd])*$', _t('период обновления готовых списков: 12h, 1d; 0 — только вручную') ],
+		[ 'lists_update', 'r', '^[0-9]{1,5}[mhd]?([0-9]{1,5}[mhd])*$', _t('период обновления готовых списков: 12h, 1d; 0 — только вручную') ],
 		[ 'update_check', 'f', '', _t('проверка новых версий byway') ],
 		[ 'auto_update', 'f', '', _t('автоматическая установка новых версий') ],
 		[ 'auto_update_hour', 'r', '^([01]?[0-9]|2[0-3])$', _t('час автоматической установки, по часам роутера') ],
 		[ 'guard', 'f', '', _t('восстановление перехвата раз в пять минут') ],
-		[ 'xray_memlimit', 'r', '^([0-9]+([KMGT]i?B|[KMG])?|off|no)$', _t('предел памяти ядра: 96, 128MiB; 0 — без предела') ],
+		// Мерка -- как у init (xray_memlimit): K, KB, T, TB он не понимал и
+		// молча брал авто (Ф9, п4-30).
+		[ 'xray_memlimit', 'r', '^(off|no|[0-9]{1,7}(MiB|GiB|TiB|MB|M|Mi|GB|G|Gi)?)$', _t('предел памяти ядра: 96, 128MiB; 0 — без предела') ],
 		[ 'xray_root', 'f', '', _t('ядро от root — небезопасно') ],
 		[ 'allow_insecure', 'f', '', _t('незащищённые ключи — небезопасно, соединение можно подменить') ],
 		[ 'xray_bin', 'r', '^/[^ ]+$', _t('путь к ядру Xray; обычно его вписывает byway core') ],
 		[ 'fakeip_pool', 'r', '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+$', _t('пул подставных адресов') ],
 		[ 'fakeip6_pool', 'r', '^[0-9a-fA-F:]+/[0-9]+$', _t('пул подставных адресов IPv6') ],
-		[ 'dns_listen', 'r', '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$', _t('адрес резолвера byway') ],
+		[ 'dns_listen', 'r', '^127\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$', _t('адрес резолвера byway') ],
 		[ 'tproxy_port', 'r', '^[0-9]{1,5}$', _t('порт перехвата') ],
 		[ 'local_proxy_port', 'r', '^[0-9]{1,5}$', _t('порт прокси byway') ],
-		[ 'mark', 'r', '^(0x[0-9a-fA-F]{1,8}|[0-9]{1,10})$', _t('метка пакетов') ],
+		// Метка -- только шестнадцатеричная: перехват и status читают её так,
+		// десятичную молча заменяли умолчанием (Ф9, п3-9).
+		[ 'mark', 'r', '^0x[0-9a-fA-F]{1,8}$', _t('метка пакетов') ],
 		[ 'self_mark', 'r', '^(0x[0-9a-fA-F]{1,8}|[0-9]{1,10})$', _t('метка соединений ядра') ],
 	];
 }
 
 // Флаг: да/нет любыми словами -> 1/0; не флаг -- null.
 function c_flag(v) {
+	// lc() кириллицу не опускает: заглавные -- списком (Ф9, п4-31).
 	v = lc(v);
-	if (index([ '1', 'on', 'yes', 'true', 'да', 'вкл' ], v) >= 0) return '1';
-	if (index([ '0', 'off', 'no', 'false', 'нет', 'выкл' ], v) >= 0) return '0';
+	if (index([ '1', 'on', 'yes', 'true', 'да', 'Да', 'ДА', 'вкл', 'Вкл', 'ВКЛ' ], v) >= 0) return '1';
+	if (index([ '0', 'off', 'no', 'false', 'нет', 'Нет', 'НЕТ', 'выкл', 'Выкл', 'ВЫКЛ' ], v) >= 0) return '0';
 	return null;
 }
 
@@ -425,10 +530,14 @@ function c_uci(cmd) { return run([ 'uci', '-q', ...cmd ]).code == 0; }
 
 // Записать настройку: значение (или список) и commit; курсор -- заново.
 function c_store(name, vals, list) {
-	c_uci([ 'delete', 'byway.main.' + name ]);
-	if (list) { for (let v in vals) c_uci([ 'add_list', 'byway.main.' + name + '=' + v ]); }
-	else if (length(vals)) c_uci([ 'set', 'byway.main.' + name + '=' + vals[0] ]);
-	c_uci([ 'commit', 'byway' ]);
+	// Ключи -- в своём пакете (Ф9, п1-12).
+	let pk = opt_pkg(name);
+	if (pk == KEY_PKG && !key_ensure()) die('на флеше нет места: настройка не записана, прежняя на месте');
+	uci_fresh(pk);
+	c_uci([ 'delete', pk + '.main.' + name ]);
+	if (list) { for (let v in vals) c_uci([ 'add_list', pk + '.main.' + name + '=' + v ]); }
+	else if (length(vals)) c_uci([ 'set', pk + '.main.' + name + '=' + vals[0] ]);
+	if (!uci_commit(pk)) die('на флеше нет места: настройка не записана, прежняя на месте');
 	_cur = null;
 }
 
@@ -459,7 +568,11 @@ function cmd_set(name, ...rest) {
 		return;
 	}
 	let vals = rest;
-	if (length(rest) == 1 && rest[0] == 'default') vals = [];
+	// «default» -- значение поставки (etc-config-byway). Стёртую опцию код
+	// читает как «выключено», а поставка эти три включает: default выключал
+	// их (Ф9, п3-1). У остальных умолчание кода и поставки совпадают.
+	let SHIPPED = { router_via_vpn: '1', ru_direct: '1', mux_concurrency: '8' };
+	if (length(rest) == 1 && rest[0] == 'default') vals = SHIPPED[name] != null ? [ SHIPPED[name] ] : [];
 	else if (s[1] == 'f') {
 		let f = c_flag(rest[0]);
 		if (f == null) dief('%s — да или нет: on или off', name);
@@ -471,7 +584,36 @@ function cmd_set(name, ...rest) {
 		if (s[1] != 'l') vals = [ join(' ', rest) ];
 		for (let v in vals) if (!match(v, regexp(s[2]))) dief('значение «%s» не годится для %s', v, name);
 		if (name == 'xray_bin' && !x_ok(vals[0])) dief('%s — не запускаемое ядро Xray в системном каталоге', vals[0]);
+		// Предел в байтах и КиБ и меньше 16 МиБ -- сборка мусора без остановки,
+		// движок стоит (прогон 5).
+		if (name == 'xray_memlimit') {
+			let mm = match(vals[0], /^([0-9]+)(MiB|MB|M|Mi)?$/);
+			if (mm && int(mm[1]) != 0 && int(mm[1]) < 16) dief('предел памяти %s слишком мал: меньше 16 МиБ ядро только собирает мусор — 0 или от 16', vals[0]);
+			// Ноль с единицей init читал как предел 0 байт, а не «без
+			// предела» (н1-6): любой ноль -- ровно «0».
+			if (match(vals[0], /^0+[A-Za-z]*$/)) vals = [ '0' ];
+		}
+		// Та же мерка, что у сборки и перехвата: принятое здесь потом молча
+		// заменялось умолчанием (н1-5).
+		if (name == 'dns_bootstrap' && !match(vals[0], G_BOOT_RE)) dief('значение «%s» не годится для %s', vals[0], name);
+		if (name == 'fakeip_pool' && (!match(vals[0], G_POOL_RE) || !g_pool_sane(vals[0], true))) dief('значение «%s» не годится для %s', vals[0], name);
+		if (name == 'fakeip6_pool' && !g_pool6_ok(vals[0])) dief('значение «%s» не годится для %s', vals[0], name);
+		if (name == 'self_mark') {
+			let n = pl_num(vals[0]);
+			if (n == null || n <= 0 || n > 4294967295) dief('значение «%s» не годится для %s', vals[0], name);
+		}
+		if (name == 'mark' && hex(substr(vals[0], 2)) == 0) die('метка 0 не годится: ip rule с ней ловит весь трафик роутера');
+		if (name == 'dns_listen' && vals[0] == '127.0.0.1') die('127.0.0.1 занят dnsmasq — нужен другой адрес петли, например 127.0.0.42');
+		// Порт 0 nft принимал как «tproxy to :0», 99999 -- отвергал всю
+		// таблицу; set при этом говорил «применено» (Ф9, п3-17).
+		if ((name == 'tproxy_port' || name == 'local_proxy_port') && !g_port_ok(vals[0])) dief('порт — от 1 до 65535: %s', vals[0]);
+		// Мост, которого нет: правила ложились, проверки зелёные, а перехвата
+		// у сети нет (Ф9, п3-58). Не отказ: мост гостевой сети поднимается позже.
+		if (name == 'interface')
+			for (let i in vals)
+				if (!fs.stat('/sys/class/net/' + i)) warnf('устройства %s сейчас нет — проверьте имя: ip link', i);
 	}
+	c_snap();
 	c_store(name, vals, s[1] == 'l');
 	print('  ', C_B, name, C_0, ' = ', c_show_val(name, s[1]), '\n');
 	c_apply();
@@ -479,23 +621,26 @@ function cmd_set(name, ...rest) {
 
 // ── ключи ────────────────────────────────────────────────────────────────
 function c_keylist() {
-	let v = cursor().get('byway', 'main', 'node_urls');
+	let v = u_raw('node_urls');
 	if (v == null) return [];
 	return type(v) == 'array' ? v : [ v ];
 }
 
 // Ключ одной строкой: схема, сервер, имя -- uuid и пароль не печатаются.
+// Схема, сервер и имя -- тем же разбором, что у сборки: имя -- после первой
+// «#», а ss и vmess в base64 печатались целиком, с паролем и uuid (Ф9, п4-1).
 function c_keyshort(k) {
-	let b = split(k, '#')[0], h = rindex(k, '#');
-	// В ucode (POSIX) нет (?:…) -- учётная часть отдельной группой.
-	let m = match(b, /^([a-z0-9+.-]+):\/\/([^@\/?]*@)?([^\/?#]+)/);
-	let name = h >= 0 ? pk_pctd(substr(k, h + 1)) : '';
-	return (m ? m[1] + '://…@' + m[3] : substr(b, 0, 40) + '…') + (name !== '' ? ' · ' + name : '');
+	let R = parse_key(k, '', ''), name = R.label || (R.N?.PS ?? '');
+	if (!R.fatal && R.N.HOST !== '')
+		return R.scheme + '://…@' + R.N.HOST + ':' + R.N.PORT + (name !== '' ? ' · ' + name : '');
+	let m = match(k, /^([a-z0-9+.-]+):\/\//);
+	return (m ? m[1] + '://…' : '…') + (name !== '' ? ' · ' + name : '');
 }
 
 // byway keys: список с номерами, активный отмечен.
-function cmd_keys() {
-	c_cls();
+// Список без очистки экрана: `key sub` печатает его под своими
+// предупреждениями, и c_cls их стирал (н1-7).
+function c_keys_print() {
 	let L = c_keylist(), cur = u('node_url');
 	if (!length(L) && cur !== '') L = [ cur ];
 	if (!length(L)) { print(_t("  ключей нет — вписать: byway key 'ССЫЛКА' или из подписки: byway key sub АДРЕС"), '\n'); return; }
@@ -507,33 +652,73 @@ function cmd_keys() {
 	print('\n', _t('  ● — активный. Выбрать: byway key use N; проверить все: byway probe --all\n'));
 }
 
+function cmd_keys() {
+	c_cls();
+	c_keys_print();
+}
+
 // byway key use N: активный -- N-й из списка; способ -- «несколько вручную».
 function c_key_use(n) {
-	let L = c_keylist(), i = int(n ?? '0');
+	// «2abc» int() читал как 2: только цифры (Ф9, п4-62).
+	let L = c_keylist(), i = match(n ?? '', /^[0-9]{1,4}$/) ? int(n) : 0;
+	// Один ключ без списка: `byway keys` показывает его под номером 1 (Ф9, п3-18).
+	if (!length(L) && u('node_url') !== '' && i == 1) { say('ключ один и уже активный'); return; }
 	if (!length(L)) die("в списке ключей пусто — сначала: byway key sub АДРЕС или byway key 'ССЫЛКА'");
 	if (!(i >= 1 && i <= length(L))) dief('номер ключа — от 1 до %s: byway keys', length(L));
-	m_uci('node_url=' + L[i - 1], 'conn_mode=selector');
+	c_snap();
+	if (!m_uci('node_url=' + L[i - 1], 'conn_mode=selector')) c_nostore();
 	sayf('активный ключ: %s', c_keyshort(L[i - 1]));
 	c_apply();
 }
 
 // byway key sub АДРЕС: ключи подписки -- в список, активный остаётся, если
-// он есть среди них, иначе первый; способ -- «несколько вручную».
+// он есть среди них, иначе первый; способ -- «несколько вручную», если не
+// был выбран автовыбор (он остаётся).
 function c_key_sub(url) {
+	// Без адреса -- из файла (меню) или сохранённый: в командной строке он
+	// виден другим процессам роутера (н1-12).
+	if (!url) { url = trim(fs.readfile(PS_SUB_FILE) ?? ''); fs.unlink(PS_SUB_FILE); }
+	if (!url) url = u('sub_url');
 	if (!url) die('byway key sub АДРЕС — адрес подписки https://…');
-	let r = run([ 'env', 'BW_SUB_URL=' + url, m_self(), 'sub', url ], true);
-	let keys = [];
+	// Адрес -- файлом root: окружение дочернего процесса шло через `sh -c`,
+	// и строка с адресом висела в /proc/*/cmdline на всё время загрузки (Ф9, п1-4; н1-12).
+	if (!put_file(PS_SUB_FILE, url + '\n', 0600)) die('в /var/run нет места — подписка не загружена');
+	let r = run([ m_self(), 'sub' ], true);
+	fs.unlink(PS_SUB_FILE);
+	// Тело чужого ответа -- в терминал без управляющих знаков и коротко (Ф9,
+	// п2-30); отказ скачивания -- отказ команды, а не «ключей нет».
+	// ESC (\x1b) -- тоже: через него CSI и OSC доходили до терминала (Ф9, п2-30, прогон 5).
+	let shown = substr(replace(r.out, /[\x01-\x08\x0b-\x1f\x7f]/g, ''), 0, 600);
+	if (r.code != 0) { print(shown, '\n'); die('подписка не принята — настройки не изменены'); }
+	// Каждый ключ -- через разбор, как `byway key`: негодный первым вставал
+	// активным, и туннель ложился (Ф9, п1-14).
+	let keys = [], bad = 0;
 	for (let l in split(r.out, '\n')) {
 		l = trim(l);
+		// BOM в начале подписки: панель ключ брала, консоль теряла (Ф9, п4-68).
+		if (substr(l, 0, 3) == '\xef\xbb\xbf') l = substr(l, 3);
+		// Схема -- строчными, как у разбора: «VLESS://» сборка не берёт (п4-67).
 		let m = match(l, /^([a-z0-9+.-]+):\/\//);
-		if (m && index([ 'vless', 'vmess', 'trojan', 'ss', 'socks', 'hysteria2', 'hy2', 'wireguard', 'wg' ], lc(m[1])) >= 0) push(keys, l);
+		if (!m || index([ 'vless', 'vmess', 'trojan', 'ss', 'socks', 'hysteria2', 'hy2', 'wireguard', 'wg' ], m[1]) < 0) continue;
+		if (parse_key(l, '', '').fatal) { bad++; continue; }
+		push(keys, l);
 	}
-	if (!length(keys)) { print(r.out); die('ключей в подписке не нашлось — настройки не изменены'); }
+	if (bad) warnf('ключей не разобрано и пропущено: %s', bad);
+	if (!length(keys)) { print(shown, '\n'); die('ключей в подписке не нашлось — настройки не изменены'); }
+	// Активный -- прежний; сервис сменил ему имя (#метка) -- тот же по
+	// остальной ссылке, а не первый попавшийся (Ф9, п3-5).
+	let cur = u('node_url'), act = null;
+	if (index(keys, cur) >= 0) act = cur;
+	else for (let k in keys) if (act == null && cur !== '' && pk_before(k, '#') == pk_before(cur, '#')) act = k;
+	if (act == null) {
+		act = keys[0];
+		if (cur !== '') warn('прежнего ключа в подписке нет — активным стал первый');
+	}
+	c_snap();
 	c_store('node_urls', keys, true);
-	let cur = u('node_url'), act = index(keys, cur) >= 0 ? cur : keys[0];
-	m_uci('node_url=' + act, 'sub_url=' + url, (u('conn_mode') == 'urltest' ? 'conn_mode=urltest' : 'conn_mode=selector'));
+	if (!m_uci('node_url=' + act, 'sub_url=' + url, (u('conn_mode') == 'urltest' ? 'conn_mode=urltest' : 'conn_mode=selector'))) c_nostore();
 	sayf('ключей из подписки: %s', length(keys));
-	cmd_keys();
+	c_keys_print();
 	c_apply();
 }
 
@@ -546,9 +731,11 @@ function cmd_key2(a, b) {
 	if (c_nokey()) { print(_t("  ключ не задан — вписать: byway key 'ССЫЛКА'"), '\n'); return; }
 	let m = u('conn_mode') || 'key';
 	if (m == 'outbound') print(_t('  свой конфиг аутбаунда\n'));
-	else print('  ', c_keyshort(u('node_url') || c_keylist()[0]), '\n');
+	else if (m != 'urltest') print('  ', c_keyshort(u('node_url') || c_keylist()[0]), '\n');
 	print('\n');
-	sys([ 'env', 'BW_TTY=1', m_self(), 'probe' ]);
+	// Автовыбор: в работе все ключи списка, а не node_url (Ф9, п3-11).
+	if (m == 'urltest') sys([ 'env', 'BW_TTY=1', m_self(), 'probe', '--all' ]);
+	else sys([ 'env', 'BW_TTY=1', m_self(), 'probe' ]);
 }
 
 // ── списки ───────────────────────────────────────────────────────────────
@@ -576,9 +763,18 @@ function c_ready(act, names) {
 		if (act == 'on' && index(P, n) < 0) push(P, n);
 		if (act == 'off') { let k = []; for (let x in P) if (x != n) push(k, x); P = k; }
 	}
+	c_snap();
 	c_store('preset', P, true);
-	if (act == 'on') sys([ m_self(), 'presets' ]);
+	// Не скачался -- подключение остаётся (автообновление повторит), но
+	// команда отвечает отказом, а не «применено» (Ф9, п3-25).
+	let pr = act == 'on' ? sys([ m_self(), 'presets' ]) : 0;
 	c_apply();
+	if (pr != 0) {
+		// GitHub закрыт по IP: первая загрузка идёт мимо туннеля, повтор тем
+		// же путём не поможет (н1-8).
+		warn('список подключён, но не скачан — если GitHub недоступен напрямую: byway add githubusercontent.com, затем byway presets');
+		exit(1);
+	}
 }
 
 function cmd_list(what, ...rest) {
@@ -603,11 +799,14 @@ function cmd_list(what, ...rest) {
 // byway mode lists|all
 function cmd_mode(m) {
 	if (m != 'lists' && m != 'all') {
+		// Без довода -- показать режим; неизвестный довод -- отказ (Ф9, п3-23).
+		if (m != null && m !== '') dief('режим — lists или all: %s', m);
 		print('  ', _t('Режим: '), C_B, u('list_mode') == 'all' ? _t('всё через VPN') : _t('по спискам'), C_0, '\n');
 		print(_t('  byway mode lists — через VPN только списки; byway mode all — весь трафик\n'));
 		return;
 	}
-	m_uci('list_mode=' + m);
+	c_snap();
+	if (!m_uci('list_mode=' + m)) c_nostore();
 	if (m == 'all') say('режим: всё через VPN');
 	else say('режим: по спискам');
 	c_apply();
@@ -632,7 +831,11 @@ function c_dist(a, b) {
 function cmd_unknown(w) {
 	let best = null, bd = 99;
 	for (let n in C_NAMES) { let d = c_dist(lc(w ?? ''), n); if (d < bd) { bd = d; best = n; } }
-	if (best && bd <= 2) printf(_t('byway: нет команды «%s». Может быть: byway %s\n'), w, best);
+	// Порог от длины слова: у коротких два правки -- уже другое слово
+	// («foo», «qq» -> «on»; Ф9, п3-26).
+	// До трёх букв -- без подсказки: «ons» -> «on» тоже было мимо (прогон 5).
+	let wl = length(w ?? '');
+	if (best && wl > 3 && bd <= (wl <= 4 ? 1 : 2)) printf(_t('byway: нет команды «%s». Может быть: byway %s\n'), w, best);
 	else printf(_t('byway: нет команды «%s». Все команды: byway help\n'), w);
 	exit(1);
 }
@@ -644,10 +847,10 @@ function cmd_fix() {
 	if (u('enabled') == '1' && !fs.stat('/etc/rc.d/S21byway')) {
 		run([ '/etc/init.d/byway', 'enable' ]); say('автозапуск службы включён'); n++;
 	}
-	let cr = run([ 'crontab', '-l' ]).out, add = '';
-	if (index(cr, 'byway watch') < 0) add += '*/5 * * * * /usr/local/bin/byway watch >/dev/null 2>&1\n';
-	if (index(cr, 'byway stat') < 0) add += '7 * * * * /usr/local/bin/byway stat >/dev/null 2>&1\n';
-	if (index(cr, 'byway pulse') < 0) add += '* * * * * /usr/local/bin/byway pulse >/dev/null 2>&1\n';
+	let cr = run([ 'crontab', '-l' ]).out, add = '', cc = dr_cron();
+	if (!cc.watch) add += '*/5 * * * * /usr/local/bin/byway watch >/dev/null 2>&1\n';
+	if (!cc.stat) add += '7 * * * * /usr/local/bin/byway stat >/dev/null 2>&1\n';
+	if (!cc.pulse) add += '* * * * * /usr/local/bin/byway pulse >/dev/null 2>&1\n';
 	if (add !== '') {
 		let t = (cr !== '' && substr(cr, -1) != '\n') ? cr + '\n' : cr;
 		let p = fs.popen('crontab -', 'w');

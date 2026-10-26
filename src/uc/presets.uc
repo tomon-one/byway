@@ -58,7 +58,7 @@ function ps_fetch(urls, target, kind, name) {
 		}
 	}
 	// Пробелы снимаются только по краям: вырезание внутри склеивало
-	// hosts-формат в домен. Форма подсети -- та же, что у set_elements.
+	// hosts-формат в домен. Форма подсети -- та же, что у lj_items (элементы набора nft).
 	let cap = kind == 'net' ? 20000 : 200000;
 	let form = kind == 'net' ?
 		'grep -E "^[0-9]{1,3}(\\.[0-9]{1,3}){3}(/[0-9]{1,2})?$"' :
@@ -79,6 +79,15 @@ function ps_fetch(urls, target, kind, name) {
 	// Порог -- четверть прежнего размера: усохший с полутора тысяч до трёх
 	// список -- тоже заглушка.
 	let nw = lj_count(target + '.new'), od = lj_count(target);
+	// Конвейер посчитал строки до записи: в файле меньше -- запись оборвалась
+	// нехваткой места, и обрезанный список встал бы на место полного (Ф9, п2-5).
+	let wl = int(split(trim(run([ 'wc', '-l', target + '.new' ]).out), ' ')[0] ?? '0');
+	if (wl < (pre < cap ? pre : cap)) {
+		fs.unlink(target + '.new');
+		warnf('%s: не записался целиком (на флеше нет места?) — прежняя копия оставлена', name);
+		logf('пресет %s: запись оборвана, %s из %s', name, wl, pre < cap ? pre : cap);
+		return 1;
+	}
 	if (nw == 0 || (od > 0 && nw * 4 < od)) {
 		fs.unlink(target + '.new');
 		warnf('%s: скачанное не похоже на список (%s записей, было %s) — прежняя копия оставлена', name, nw, od);
@@ -132,11 +141,19 @@ function ps_pins_in(file) {
 
 function ps_hits(hits) { for (let h in hits) print('      ', h, '\n'); }
 
+// Не скачалось (код 2): словами -- и для доменов, и для подсетей. Подсети
+// молчали, и чисто подсетевой набор пропадал без причины (Ф9, п4-46).
+function ps_fail(n, f) {
+	let s = fs.stat(f);
+	if (s && s.size) warnf('%s: не скачался, остаётся прежняя копия', n);
+	else warnf('%s: не скачался, и прежней копии нет — список пуст', n);
+}
+
 // bw_uc presets: обновить подключённые наборы.
 function cmd_presets() {
 	let dir = getenv('BW_PRESETS');
 	if (!fs.stat(dir)) fs.mkdir(dir, 0755);
-	let any = false;
+	let any = false, fails = 0;
 	let names = split(trim(u('preset')), /[ \t\n]+/);
 	if (names[0] == '') names = [];
 	for (let n in names) {
@@ -147,18 +164,18 @@ function cmd_presets() {
 		let pf = dir + '/' + n + '.lst';
 		if (url != null) {
 			let fr = ps_fetch([ url ], pf, 'dom', n);
-			if (fr == 2) {
-				let s = fs.stat(pf);
-				if (s && s.size) warnf('%s: не скачался, остаётся прежняя копия', n);
-				else warnf('%s: не скачался, и прежней копии нет — список пуст', n);
-			}
-			if (fr != 0) continue;
+			if (fr == 2) ps_fail(n, pf);
+			if (fr != 0) { fails++; continue; }
 		}
 		// Подсети -- вторым файлом; отказ не отменяет принятые домены.
-		if (su != null && ps_fetch(su, dir + '/' + n + '.sub', 'net', n) == 0) {
-			sayf('%s: подсетей %s', n, lj_count(dir + '/' + n + '.sub'));
-			g_net_warn(dir + '/' + n + '.sub');
-			any = true;
+		if (su != null) {
+			let fr = ps_fetch(su, dir + '/' + n + '.sub', 'net', n);
+			if (fr == 2) ps_fail(n + ' (' + _t('подсети') + ')', dir + '/' + n + '.sub');
+			if (fr == 0) {
+				sayf('%s: подсетей %s', n, lj_count(dir + '/' + n + '.sub'));
+				g_net_warn(dir + '/' + n + '.sub');
+				any = true;
+			} else fails++;
 		}
 		if (url == null) continue;
 		sayf('%s: %s записей', n, lj_count(pf));
@@ -191,24 +208,60 @@ function cmd_presets() {
 		warn('  dnsmasq ответит по пину, подставного адреса не будет — в туннель они НЕ пойдут');
 		warn('  и запрет «не пускать мимо VPN» их не закроет: пин старше address=/домен/');
 	}
-	// Три исхода: обновилось (молчим), ничего не подключено, не скачалось.
-	if (any) return;
+	// Исходы: обновилось (молчим), ничего не подключено, не скачалось.
+	// Отказ хоть одного -- код 1: панель и `list ready on` судят по коду (Ф9, п3-25).
+	if (any) { if (fails) exit(1); return; }
 	if (!length(names)) {
 		say('ни одного готового списка не подключено');
 		say('  что бывает:');
 		for (let k in PS_NAMES) print(sprintf('    %-20s %s\n', k, ps_about(k)));
 		say('  подключить: byway list ready on ИМЯ');
 	} else {
-		warn('ни один из подключённых списков не обновился — прежние копии остались на месте');
+		// Копии могло и не быть: фраза -- по факту (Ф9, п3-25).
+		let have = false;
+		for (let n in names)
+			for (let e in [ '.lst', '.sub' ]) { let st = fs.stat(dir + '/' + n + e); if (st && st.size) have = true; }
+		if (have) warn('ни один из подключённых списков не обновился — прежние копии остались на месте');
+		else warn('ни один из подключённых списков не скачался, а копий нет — готовые списки пусты');
+		exit(1);
 	}
+}
+
+// Адрес подписки ведёт внутрь сети или на сам роутер -- выход словами. Подкоманду
+// может звать роль панели, а curl идёт от root: петля и приватные диапазоны
+// отсекаются до запроса и после переадресаций. «#» -- конец адреса: хост за
+// ним брался как есть (Ф9, п1-16).
+function sb_inside(url) {
+	let h = pk_after(url, '://');
+	h = pk_before(pk_before(pk_before(h, '/'), '?'), '#');
+	h = pk_lastafter(h, '@');
+	h = pk_before(h, ':');
+	if (h == 'localhost' || substr(h, 0, 10) == 'localhost.' || substr(h, -10) == '.localhost')
+		die('адрес подписки указывает на сам роутер');
+	// Настоящий адрес, а не местный ответ: домен из списков byway dnsmasq
+	// отдаёт подставным из пула, и подписка отвергалась как «внутрь сети».
+	let ip = match(h, /[a-zA-Z]/) ? g_server_addr(h) : h;
+	if (ip === '') dief('имя %s не разрешилось — стоит проверить адрес подписки и связь', h);
+	if (match(ip, /^(127\.|0\.|10\.|192\.168\.|169\.254\.|198\.18\.|198\.19\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[01]\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.)/))
+		dief('адрес подписки ведёт внутрь сети (%s) — byway туда не ходит', ip);
+	// Для curl --resolve: соединение -- на проверенный адрес, а не на тот,
+	// что имя вернёт вторым запросом (Ф9, п4-8).
+	let pm = match(pk_lastafter(pk_before(pk_before(pk_before(pk_after(url, '://'), '/'), '?'), '#'), '@'), /:([0-9]+)$/);
+	return h + ':' + (pm ? pm[1] : '443') + ':' + ip;
 }
 
 // bw_uc sub: подписка (адрес -- в BW_SUB_URL, не аргументом: аргументы видны
 // всем в /proc/*/cmdline) -> ключи построчно. Подписки обычно base64:
 // раскодирует ucode; не раскодированное отдаётся как есть -- панель
 // раскодирует сама, если в ответе нет «://».
+// Адрес подписки для `byway sub` без довода: панель, меню и `byway key sub`
+// кладут его сюда, а не в аргументы -- те видны всем в /proc/*/cmdline (н1-12).
+// /var/run -- каталог root: движок от byway подложить файл не может.
+const PS_SUB_FILE = '/var/run/byway-sub.url';
+
 function cmd_sub() {
 	let url = getenv('BW_SUB_URL') ?? '';
+	if (url === '') { url = trim(fs.readfile(PS_SUB_FILE) ?? ''); fs.unlink(PS_SUB_FILE); }
 	if (url === '') die('byway sub <адрес подписки>');
 	// Открытый HTTP правится на лету: подложенный ключ выиграл бы по задержке.
 	if (substr(url, 0, 7) == 'http://')
@@ -218,28 +271,41 @@ function cmd_sub() {
 	// приватные диапазоны отсекаются до запроса. IPv6-литерал не разбирается.
 	if (index(url, '://[') >= 0 || index(url, '@[') >= 0)
 		die('адрес подписки с IPv6-литералом не поддерживается — нужно имя или IPv4');
-	let h = pk_after(url, '://');
-	h = pk_before(pk_before(h, '/'), '?');
-	h = pk_lastafter(h, '@');
-	h = pk_before(h, ':');
-	if (h == 'localhost' || substr(h, 0, 10) == 'localhost.' || substr(h, -10) == '.localhost')
-		die('адрес подписки указывает на сам роутер');
-	let ip = match(h, /[a-zA-Z]/) ? g_a_of(h, '') : h;
-	if (match(ip || '0.0.0.0', /^(127\.|0\.|10\.|192\.168\.|169\.254\.|198\.18\.|198\.19\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[01]\.)/))
-		dief('адрес подписки ведёт внутрь сети (%s) — byway туда не ходит', ip || '?');
-	// Адрес -- в файл конфига curl (600), не в командную строку.
-	let cfg = trim(run([ 'mktemp', '/tmp/byway-sub.XXXXXX' ]).out);
-	if (cfg === '') die('подписка не скачалась: стоит проверить адрес и связь');
-	fs.chmod(cfg, 0600);
-	fs.writefile(cfg, 'url = "' + replace(url, /[\\"]/g, (c) => '\\' + c) + '"\n');
-	let px = u('local_proxy_port') || '1603';
-	let opts = [ 'curl', '-fsSL', '--max-time', '25', '--max-filesize', '4194304', '--max-redirs', '3', '-A', 'Mozilla/5.0' ];
-	let raw = run([ ...opts, '--proxy', 'http://127.0.0.1:' + px, '--config', cfg ]).out;
-	if (raw === '') raw = run([ ...opts, '--config', cfg ]).out;
-	fs.unlink(cfg);
+	let px = u('local_proxy_port') || '1603', raw = null;
+	// Переадресации -- руками, до трёх: каждая проверяется ДО запроса (прежде
+	// curl -L сходил бы внутрь сети, а проверка шла после), и только на
+	// https: на http:// ключи подменил бы кто угодно на пути (Ф9, п2-29, п4-8).
+	for (let hop = 0; raw == null; hop++) {
+		if (hop > 3) die('подписка: больше трёх переадресаций — стоит проверить адрес');
+		if (substr(url, 0, 8) != 'https://') die('подписка переадресует не на https:// — не принимается');
+		if (index(url, '://[') >= 0 || index(url, '@[') >= 0)
+			die('адрес подписки с IPv6-литералом не поддерживается — нужно имя или IPv4');
+		let rs = sb_inside(url);
+		// Адрес -- в файл конфига curl (600), не в командную строку.
+		let cfg = trim(run([ 'mktemp', '/tmp/byway-sub.XXXXXX' ]).out);
+		if (cfg === '') die('подписка не скачалась: стоит проверить адрес и связь');
+		fs.chmod(cfg, 0600);
+		fs.writefile(cfg, 'url = "' + replace(url, /[\\"]/g, (c) => '\\' + c) + '"\n');
+		let opts = [ 'curl', '-fsS', '--max-time', '25', '--max-filesize', '4194304', '-A', 'Mozilla/5.0',
+		             '-w', '\n@@bw-url@@%{http_code} %{redirect_url}' ];
+		let r = run([ ...opts, '--proxy', 'http://127.0.0.1:' + px, '--config', cfg ]);
+		if (r.code != 0) r = run([ ...opts, '--resolve', rs, '--config', cfg ]);
+		fs.unlink(cfg);
+		// Код, а не пустой вывод: оборванная загрузка (время, нехватка байтов
+		// против Content-Length, предел размера) отдаёт часть тела, и она
+		// принималась за полный список (Ф9, п2-24).
+		if (r.code == 28) die('подписка не скачалась за 25 секунд — стоит проверить адрес и связь');
+		if (r.code == 63) die('подписка больше 4 МБ — byway такую не берёт');
+		if (r.code != 0) dief('подписка не скачалась (curl %s) — стоит проверить адрес и связь', r.code);
+		let w = rpos(r.out, '\n@@bw-url@@');
+		let tail = w < 0 ? '' : trim(substr(r.out, w + 11));
+		let sp = index(tail, ' '), code = sp < 0 ? tail : substr(tail, 0, sp), next = sp < 0 ? '' : trim(substr(tail, sp + 1));
+		if (substr(code, 0, 1) == '3' && next !== '') { url = next; continue; }
+		raw = w < 0 ? r.out : substr(r.out, 0, w);
+	}
 	// Как $(…) в shell: хвостовые переводы строки срезаны.
 	raw = rtrim(raw, '\n');
-	if (raw === '') die('подписка не скачалась: стоит проверить адрес и связь');
+	if (raw === '') die('подписка пустая — стоит проверить адрес');
 	if (index(raw, '://') < 0) {
 		let s = replace(raw, /[\r\n\t ]/g, '');
 		s = replace(replace(s, '_', '/'), '-', '+');
@@ -248,5 +314,8 @@ function cmd_sub() {
 		let d = rtrim(b64dec(s) ?? '', '\n');
 		if (index(d, '://') >= 0) raw = d;
 	}
+	// Чужой ответ -- в терминал без управляющих знаков, кроме перевода строки и
+	// табуляции: CSI и OSC из тела подписки исполнял терминал (Ф9, п2-30, прогон 5).
+	raw = replace(raw, /[\x01-\x08\x0b-\x0c\x0e-\x1f\x7f]/g, '');
 	print(raw, '\n');
 }

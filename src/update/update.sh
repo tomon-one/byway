@@ -1,24 +1,17 @@
 # Обновление самого byway -- в ucode (uc/update.uc). Здесь пути меток проверки
-# обновлений и автообновления: их читают status и doctor (UP_* в ucode -- те же).
+# обновлений и автообновления, которые читают status и doctor (в ucode, UP_*,
+# пути те же; прочие метки -- UP_MARK, архивы отката, .au-try, .newver-seen --
+# знает только ucode).
 
-# Автопроверка новой версии. Метки в /tmp: ежедневная запись во флеш не
+# Автопроверка новой версии. Метки в /var/run: ежедневная запись во флеш не
 # нужна, а после перезагрузки проверка лишний раз безвредна.
-UPMARK=/tmp/byway-upcheck     # когда спрашивали в прошлый раз
+UPOK=/var/run/byway-upcheck-ok     # время последней проверки, дошедшей до GitHub
+UPFAIL=/var/run/byway-upcheck-fail # код ответа последней неудачной проверки
+NEWVER=/var/run/byway-newver      # номер найденной версии, если она новее
 
-UPOK=/tmp/byway-upcheck-ok     # время последней проверки, дошедшей до GitHub
-UPFAIL=/tmp/byway-upcheck-fail # код ответа последней неудачной проверки
-NEWVER=/tmp/byway-newver      # номер найденной версии, если она новее
+RELNOTE=/var/run/byway-relnote    # первая строка описания выпуска
 
-RELNOTE=/tmp/byway-relnote    # первая строка описания выпуска
-
-AULOG=/tmp/byway-autoupdate   # чем кончилось ночное обновление
-
-PREVBIN=/etc/byway/byway.prev # прежняя копия одного скрипта (до 0.3.0), удаляется
-PREVSET=/etc/byway/prev.tgz   # прежняя версия целиком (скрипт, init, панель) для отката
-
-AUTRY=/etc/byway/.au-try      # когда пробовали обновиться; флеш
-
-SEENF=/etc/byway/.newver-seen # версия и когда увидели впервые; флеш
+AULOG=/var/run/byway-autoupdate   # чем кончилось ночное обновление
 
 BINSUM=/etc/byway/.binmd5     # сумма выложенной версии (правку руками не трогаем)
 
@@ -33,9 +26,18 @@ update_env() {
 # ucode сигналов не ловит: рабочий каталог после Ctrl+C убирает обёртка (путь
 # -- в /var/run/byway-update.dir). Код выхода -- как у ucode (ночное
 # обновление судит по нему).
+# Идёт установка (метка byway-update.inst) -- каталог не трогаем: установщик
+# с игнором сигналов доводит её из него сам.
 cmd_update() {
-    trap '_ud=$(cat /var/run/byway-update.dir 2>/dev/null); [ -n "$_ud" ] && rm -rf "$_ud"; rm -f /var/run/byway-update.dir; exit 130' INT
-    trap '_ud=$(cat /var/run/byway-update.dir 2>/dev/null); [ -n "$_ud" ] && rm -rf "$_ud"; rm -f /var/run/byway-update.dir; exit 143' TERM
+    trap '[ -f /var/run/byway-update.inst ] || { _ud=$(cat /var/run/byway-update.dir 2>/dev/null); [ -n "$_ud" ] && rm -rf "$_ud"; rm -f /var/run/byway-update.dir; }; exit 130' INT
+    trap '[ -f /var/run/byway-update.inst ] || { _ud=$(cat /var/run/byway-update.dir 2>/dev/null); [ -n "$_ud" ] && rm -rf "$_ud"; rm -f /var/run/byway-update.dir; }; exit 143' TERM
+    # Одно обновление за раз: консоль, панель и ночное шли разом, и копия для
+    # отката получала уже новую версию (Ф9, п2-2). --check ничего не ставит.
+    case " $* " in
+      *" --check "*) ;;
+      *) take_lock /var/run/byway-update.lock "$(_t 'обновление')" || die "обновление уже идёт"
+         trap 'rm -rf /var/run/byway-update.lock 2>/dev/null; true' EXIT ;;
+    esac
     _urc=0
     update_env bw_uc update "$@" || _urc=$?
     trap - INT TERM

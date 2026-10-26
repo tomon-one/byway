@@ -15,12 +15,15 @@
 			},
 			"uci": [
 				"byway"
-			]
+			],
+			"ubus": {
+				"file": [
+					"read",
+					"stat"
+				]
+			}
 		},
 		"write": {
-			"cgi-io": [
-				"exec"
-			],
 			"file": {
 				"/etc/byway/domains.lst": [
 					"write"
@@ -35,7 +38,10 @@
 				"/etc/byway/health.log": [
 					"read"
 				],
-				"/tmp/byway-import.txt": [
+				"/var/run/byway-import.txt": [
+					"write"
+				],
+				"/tmp/run/byway-import.txt": [
 					"write"
 				],
 				"/usr/local/bin/byway version": [
@@ -56,12 +62,6 @@
 				"/usr/local/bin/byway report": [
 					"exec"
 				],
-				"/usr/local/bin/byway gen": [
-					"exec"
-				],
-				"/usr/local/bin/byway presets": [
-					"exec"
-				],
 				"/usr/local/bin/byway top 25": [
 					"exec"
 				],
@@ -71,10 +71,25 @@
 				"/usr/local/bin/byway lang en": [
 					"exec"
 				],
-				"/usr/local/bin/byway update --check": [
+				"/usr/local/bin/byway job update --check": [
 					"exec"
 				],
-				"/usr/local/bin/byway engine --check": [
+				"/usr/local/bin/byway job engine --check": [
+					"exec"
+				],
+				"/usr/local/bin/byway job gen": [
+					"exec"
+				],
+				"/usr/local/bin/byway job presets": [
+					"exec"
+				],
+				"/usr/local/bin/byway job restart": [
+					"exec"
+				],
+				"/usr/local/bin/byway job reload": [
+					"exec"
+				],
+				"/usr/local/bin/byway job import --no-key": [
 					"exec"
 				],
 				"/usr/local/bin/byway job update": [
@@ -89,22 +104,10 @@
 				"/usr/local/bin/byway export": [
 					"exec"
 				],
-				"/usr/local/bin/byway export --with-key": [
-					"exec"
-				],
-				"/usr/local/bin/byway import /tmp/byway-import.txt": [
-					"exec"
-				],
-				"/usr/local/bin/byway import /tmp/byway-import.txt --no-key": [
-					"exec"
-				],
 				"/usr/local/bin/byway clear log": [
 					"exec"
 				],
 				"/usr/local/bin/byway clear stat": [
-					"exec"
-				],
-				"/usr/local/bin/byway sub *": [
 					"exec"
 				],
 				"/usr/local/bin/byway job probe": [
@@ -113,18 +116,54 @@
 				"/usr/local/bin/byway job probe *": [
 					"exec"
 				],
-				"/etc/init.d/byway reload": [
-					"exec"
-				],
-				"/etc/init.d/byway restart": [
-					"exec"
-				],
 				"/usr/local/bin/byway job engine [0-9]*": [
 					"exec"
 				]
 			},
 			"uci": [
 				"byway"
+			],
+			"ubus": {
+				"file": [
+					"write",
+					"remove",
+					"exec"
+				]
+			}
+		}
+	},
+	"luci-app-byway-key": {
+		"description": "Ключ VPN и подписка byway",
+		"read": {
+			"uci": [
+				"byway_key"
+			]
+		},
+		"write": {
+			"file": {
+				"/usr/local/bin/byway export --with-key": [
+					"exec"
+				],
+				"/usr/local/bin/byway sub": [
+					"exec"
+				],
+				"/var/run/byway-sub.url": [
+					"write"
+				],
+				"/tmp/run/byway-sub.url": [
+					"write"
+				],
+				"/usr/local/bin/byway job import": [
+					"exec"
+				]
+			},
+			"ubus": {
+				"file": [
+					"exec"
+				]
+			},
+			"uci": [
+				"byway_key"
 			]
 		}
 	}

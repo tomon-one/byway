@@ -20,18 +20,15 @@ your VPN, the rest goes direct. The engine is
 
 > ### ⚠️ Read this before installing
 >
-> **Version 0.3.0.** byway runs every day on one
-> router: about 500 domains, 300 subnets, and a family that notices breakage
+> **Version 0.4.0.** byway runs every day on one
+> router: about 700 domains, 300 subnets, and a family that notices breakage
 > immediately. But still just **one** — the author had no other hardware.
 >
 > | | |
 > |---|---|
-> | fully verified | Cudy WR3000S v1 (MT7981, aarch64), OpenWrt 25.12.5 |
+> | fully verified | Cudy WR3000S v1 (MT7981, aarch64), OpenWrt 25.12.5 and 25.12.6 |
 > | verified on a test bench | install and removal on 22.03–25.12, with opkg and with apk; install on aarch64 and mipsel |
 > | never verified at all | IPv6 (written, but has never seen live traffic), behaviour under load, everyday use on any CPU other than MT7981 |
->
-> **Version 0.4 is waiting for a debugging audit.** The release is expected
-> within the next two weeks (as of 19 October 2026).
 >
 > **The code was written by an AI** — Claude, to a human's tasks and with a
 > human's corrections. That is said up front rather than in a footnote:
@@ -202,7 +199,7 @@ Worth knowing before installing, not after.
 **Way 1 — one line:**
 
 ```sh
-sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.3.0/install.sh)"
+sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/install.sh)"
 ```
 
 **Way 2 — through a mirror,** if `raw.githubusercontent.com` is unreachable.
@@ -214,7 +211,7 @@ first.
 
 ```sh
 wget -T 10 -O /tmp/byway-install.sh \
-  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.3.0/install.sh" \
+  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.4.0/install.sh" \
   && sh /tmp/byway-install.sh
 ```
 
@@ -229,8 +226,8 @@ the OpenWrt packages.
 
 ```sh
 cd /tmp
-wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.3.0.tar.gz
-tar xzf byway.tar.gz && cd byway-0.3.0
+wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.4.0.tar.gz
+tar xzf byway.tar.gz && cd byway-0.4.0
 sh install.sh
 ```
 
@@ -409,7 +406,9 @@ cure for every fault.
   byway adds only the tag to it; multiplexing and the mark for redirecting the
   router's own traffic (`sockopt.mark`) you write in yourself.
 - **[Multiplexing](https://xtls.github.io/en/config/outbound.html#muxobject)** — several client streams inside one connection to the VPN.
-  On by default (eight streams) on every transport except those that multiplex
+  On by default (eight streams) only for `vless` and `vmess` keys (`socks`, `trojan`
+  and `shadowsocks` do not get it: it is an Xray extension, and a foreign server
+  would not understand it), and not on transports that multiplex
   themselves: `xhttp` has its own `xmux` for that, `grpc` has `multiMode`, and
   `hysteria` has its own QUIC streams, and a second layer on top only gets in
   the way. With `xtls-rprx-vision` byway leaves it off too: Vision splits the
@@ -459,11 +458,10 @@ work](docs/troubleshooting.en.md).
 - **The LuCI web UI:** key, mode, lists, state and connection check, export
   and import, the environment check and the report, checking for and
   installing byway updates, replacing the engine with the tested one or with a
-  version by number. Console only, for
-  example: your own engine as a file (`byway core /tmp/FILE.gz`), the key
-  check (`byway probe`), `xray_memlimit`, `xray_root`, `allow_insecure`,
-  `self_mark`, experimental IPv6 (`fakeip6_pool`), `byway update --rollback`,
-  `byway core restore`.
+  version by number; the key check, the memory limit and running the engine as
+  root, `allow_insecure`, `self_mark` and IPv6 are on the Advanced tab. Console
+  only: your own engine as a file (`byway core /tmp/FILE.gz`),
+  `byway update --rollback`, `byway core restore`.
 - **A console menu** — `byway menu`, the same actions.
 - **Export and import.** Settings and lists as one piece of text:
   `byway export` and `byway import`. The export leaves the key out by default
@@ -560,6 +558,10 @@ a failure — [how byway works](docs/architecture.en.md).
 | **Maintenance** | four sub-tabs: status (full state, environment check, report for a support request, log), updates (byway and the Xray core — the tested one or a version by number, in the background, progress on the page; auto-update), moving settings, statistics |
 | **Advanced** | language and values you change once in a lifetime; the "Addresses and ports" sub-tab holds the pool, resolver address, ports and mark |
 
+Panel access comes in two groups: `luci-app-byway` (everything except the key)
+and `luci-app-byway-key` (the key, the subscription, export with the key). Root
+gets both; a separate rpcd user without the second one does not see the key.
+
 > **After a byway update, reload the web UI page (F5).** LuCI adds a tag to a
 > module's URL that changes together with the package database; byway is
 > installed outside the package manager and since 0.4 updates that tag itself
@@ -602,7 +604,7 @@ a failure — [how byway works](docs/architecture.en.md).
 | `byway stat` | collect statistics now, without waiting for the schedule; also only with `show_usage` |
 | `byway update [--check\|--force\|--rollback\|--no-verify]` | whether a new byway version exists, and installing it; `--force` installs the latest GitHub release even if it is not newer than the installed one; `--rollback` returns the previous version from the copy; `--no-verify` skips the release signature check (when there is nothing to check with) |
 | `byway core [--check\|VERSION\|tested\|newest\|stable\|restore\|/tmp/FILE]` | whether an Xray-core update exists, and replacing the engine; `--check` only finds out; `VERSION` of an engine already next to it switches without a download; `restore` installs a missing engine; `/tmp/FILE` is your own build (a `.gz` with the binary or the release `.zip`); the old name `byway engine` still works |
-| `byway job update\|engine [VERSION]\|probe [LINK\|--all]\|log` | internal, for the panel: an update, a core replacement or a key check in the background; `log` — progress, code 3 — still running |
+| `byway job update\|engine [VERSION]\|probe [LINK\|--all]\|gen\|presets\|restart\|reload\|import [--no-key]\|log` | internal, for the panel: an update, a core replacement, a key check, a config build, ready-list download, restart, reload or accepting an export in the background; `log` — progress, code 3 — still running |
 | `byway lang ru\|en` | output and web UI language |
 | `byway report [file]` | a report for a bug thread: state and diagnostics, no key |
 | `byway export [file] [--with-key]` | export settings without the VPN key; `--with-key` puts it in |
@@ -633,8 +635,8 @@ language and the web UI again, offering
 your previous answers as defaults. At the end the service restarts if it is
 enabled, and the tunnel drops for a few seconds. In the web UI the "Install
 the update" button on the "Maintenance" tab does the same: the installation
-runs in the background, with progress on the page. Clear the browser cache
-afterwards — see the warning in [The web UI](#the-web-ui).
+runs in the background, with progress on the page. Reload the page
+afterwards (F5) — see the warning in [The web UI](#the-web-ui).
 
 ⚠️ **Update this way, not with the install one-liner.** On a running router the
 install line may fail — the reason is below; `byway update` works whatever your
@@ -655,7 +657,7 @@ through a proxy):
 
 ```sh
 sh -c "$(curl -fsSL --proxy http://127.0.0.1:1603 \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.3.0/install.sh)"
+  https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/install.sh)"
 ```
 
 **Checking for a version and installing one are separate settings,** but
@@ -715,7 +717,11 @@ files kept across upgrades. When the service finds no engine at start, it
 installs one itself, in the background: the version that was there (the
 number in the file name in `xray_bin`), otherwise the tested one — and
 restarts. If that fails, the watchdog retries every 15 minutes; progress and
-errors are in `logread -e byway`. Until there is an engine, there is no
+errors are in `logread -e byway`. On a stock image the firmware upgrade also
+removes the packages the installer put there (`curl`, `unzip`, `kmod-nft-tproxy`,
+`kmod-nft-socket`): without them the engine cannot install itself, the reason is
+in `logread -e byway` ("no unzip — install: …"), and the packages are installed with
+the command `byway doctor` gives. Until there is an engine, there is no
 tunnel, and with "Block" what went through the VPN is closed. By hand —
 `byway core restore`.
 
@@ -827,7 +833,7 @@ public address without TLS or reality — byway says so plainly. And since
 real certificate, and byway says so right away, without handing the config to
 the engine. On an engine below these versions byway refuses both cases
 itself; for your own server with a self-signed certificate,
-`byway set allow_insecure on` lifts the refusal (console only, details
+`byway set allow_insecure on` lifts the refusal (or "Allow insecure keys" on the Advanced tab; details
 in [keys](docs/keys.en.md)). If the engine was updated around
 `byway core` (as a package, for example), `byway core NUMBER` can go back
 to the version that worked if there is room on flash for a second engine; if
@@ -847,7 +853,8 @@ there is nothing to download:
 ```sh
 byway-uninstall              # settings, lists and byway-uninstall itself stay
 byway-uninstall --purge      # remove everything, including the key and the engine downloaded from GitHub
-DRY_RUN=1 byway-uninstall    # show what would be done, change nothing
+byway-uninstall --dry-run    # show what would be done, change nothing (DRY_RUN=1 works too)
+byway-uninstall --help       # arguments
 ```
 
 ⚠️ **Installed a version before 0.1.4?** Then you do not have that file: only
@@ -855,7 +862,7 @@ installers from 0.1.4 on put it in place. Download it separately:
 
 ```sh
 wget -O /tmp/byway-uninstall \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.3.0/uninstall.sh
+  https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/uninstall.sh
 sh /tmp/byway-uninstall
 ```
 
@@ -876,7 +883,7 @@ them.
 ## Compatibility
 
 **On real hardware:** Cudy WR3000S v1 (MediaTek MT7981, aarch64), OpenWrt
-25.12.5. Developed and used daily: about 500 domains and 300 subnets,
+25.12.5. Developed and used daily: about 700 domains and 300 subnets,
 transports ws, xhttp, httpupgrade and tcp+reality. This is the only
 combination where byway is verified end to end — with a live tunnel, real
 traffic and real flash limits.
@@ -912,8 +919,9 @@ have one.
 "Removal verified" here is meant literally: a snapshot of the system is taken
 BEFORE the install and AFTER `uninstall.sh --purge`, and they match byte for
 byte — including dnsmasq and firewall settings, cron jobs, nft tables, routing
-rules and the list of files kept across firmware upgrades. On 22.03.7 that
-does not hold: the packages (`curl`, `unzip`, `kmod-nft-tproxy`,
+rules and the list of files kept across firmware upgrades. On 22.03.7 and 23.05.6
+that does not hold (on 23.05.6 per the audit's run-3 measurement, before the latest installer
+fixes): the packages (`curl`, `unzip`, `kmod-nft-tproxy`,
 `kmod-nft-socket` with their dependencies) and an empty `/etc/crontabs/root`
 remain; there are no byway traces in nft, routes, dnsmasq, cron or
 `sysupgrade.conf`. The dry run is

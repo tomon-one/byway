@@ -26,9 +26,19 @@ function pk_jf(o, k) { return (o[k] == null) ? '' : '' + o[k]; }
 
 function pk_nl(s) { return rtrim(s, '\n'); }
 
+// «%» без двух шестнадцатеричных цифр остаётся «%»: прежде, по образцу
+// `printf %b`, он давал «\x», и пароль «100%» уходил в конфиг как «100\x»
+// (Ф9, п2-27). NUL пропадает.
 function pk_pctd(s) {
-    return pk_nl(replace(s, /%([0-9a-fA-F]{1,2})?/g,
-        (m, h) => h ? (hex(h) ? chr(hex(h)) : '') : '\\x'));
+    return pk_nl(replace(s, /%([0-9a-fA-F]{2})/g, (m, h) => hex(h) ? chr(hex(h)) : ''));
+}
+
+// Метка ключа: после первой «#», %XX раскрыты, управляющие знаки прочь --
+// %0A и %1B давали поддельные строки и ESC в терминале (Ф9, п1-21). Одна
+// мерка для разбора, status, probe, keys и сборки направлений.
+function pk_label(k) {
+    let h = index(k ?? '', '#');
+    return h < 0 ? '' : replace(pk_pctd(substr(k, h + 1)), /[\x01-\x1f\x7f]/g, '');
 }
 
 function pk_b64d(s) {
@@ -43,7 +53,7 @@ function pk_before(s, c) { let i = index(s, c); return i < 0 ? s : substr(s, 0, 
 
 function pk_after(s, c) { let i = index(s, c); return i < 0 ? s : substr(s, i + length(c)); }
 
-function pk_lastafter(s, c) { let i = rindex(s, c); return i < 0 ? s : substr(s, i + length(c)); }
+function pk_lastafter(s, c) { let i = rpos(s, c); return i < 0 ? s : substr(s, i + length(c)); }
 
 function pk_grepq(re, s) {
     if (s == '') return false;
@@ -62,6 +72,12 @@ function pk_flush() {
 }
 
 function pk_node_json_ok() {
+    // Адрес сервера -- IPv4 или имя: «socks://», «vpn.» и обрезки ссылок
+    // принимались и записывались ключом (Ф9, п2-26).
+    if (!lj_v4_ok(PK_N.HOST, false) && !_domain_ok(PK_N.HOST)) {
+        pk_flush();
+        pk_dief("адрес сервера в ключе не годится: «%s» — нужен IPv4 или имя", PK_N.HOST);
+    }
     for (let p in [ ['адрес', PK_N.HOST], ['id', PK_N.UUID], ['пароль', PK_N.PASS],
                     ['user', PK_N.USER], ['method', PK_N.METHOD], ['type', PK_N.TYPE],
                     ['security', PK_N.SEC], ['sni', PK_N.SNI ?? PK_PREV_SNI], ['fp', PK_N.FP],
@@ -142,10 +158,6 @@ function parse_key(URL, prev_sni, prev_wshost) {
 	PK_PREV_SNI = prev_sni ?? '';
 	PK_PREV_WSHOST = prev_wshost ?? '';
 	try {
-		// Как `printf %b` над «%» -> «\x»: «%» без цифры остаётся «\x», NUL пропадает.
-		// base64 и base64url без «=» (SIP002), как `base64 -d` после добивки.
-		// grep -Eq: совпала хоть одна строка.
-
 		PK_N = {
 		    UUID: '', PASS: '', USER: '', METHOD: '', AID: '0',
 		    TYPE: 'tcp', SEC: 'none', PATH: '/', FP: 'chrome',
@@ -155,18 +167,6 @@ function parse_key(URL, prev_sni, prev_wshost) {
 		    OBFS: '', OBFSPW: '', HOP: '', PIN: '', VCN: '',
 		    WGKEY: '', WGPUB: '', WGPSK: '', WGADDR: '', WGMTU: '', WGRES: '', WGKA: ''
 		};
-		// sni и host ss не задаёт: в sh остаются прежние, их и проверяем.
-		// Строка JSON: пароль и логин уходят в конфиг строкой JSON, кавычка и
-		// обратная косая в них законны и экранируются (J_*), а не запрещаются.
-
-		// Поля, уходящие в конфиг строками. Пароли и логин экранирует jstr --
-		// кавычка в них не отказ; управляющий знак -- отказ везде.
-
-		// extra подставляется в конфиг объектом, мимо node_json_ok: ровно один
-		// объект и ничего вокруг. `{} } }, "settings": {…}` закрыл бы
-		// xhttpSettings и streamSettings и дописал свой settings (Xray берёт
-		// последний из повторных ключей). Вид скобок не различаем -- ядро отвергнет.
-
 		let scheme = pk_before(URL, '://');
 		pk_put('N_SCHEME', scheme);
 		PK_R.scheme = scheme;
@@ -180,7 +180,7 @@ function parse_key(URL, prev_sni, prev_wshost) {
 		let rest = pk_after(URL, '://');
 		// Метка после решётки -- имя, обычно с флагом; не секрет.
 		// Без управляющих знаков: метка попадает в вывод терминала.
-		PK_R.label = index(URL, '#') >= 0 ? replace(pk_pctd(pk_after(URL, '#')), /[\x01-\x1f\x7f]/g, '') : '';
+		PK_R.label = pk_label(URL);
 		pk_put('N_LABEL', PK_R.label);
 		rest = pk_before(rest, '#');
 
@@ -206,13 +206,21 @@ function parse_key(URL, prev_sni, prev_wshost) {
 		    PK_N.HDR = pk_jf(o, 'type'); if (PK_N.HDR == 'none') PK_N.HDR = '';
 		    if (pk_jf(o, 'tls') == 'tls') PK_N.SEC = 'tls';
 		    PK_N.SNI = pk_jf(o, 'sni') || PK_N.WSHOST || PK_N.HOST;
-		    if (PK_N.WSHOST == '') PK_N.WSHOST = PK_N.HOST;
+		    if (PK_N.WSHOST == '') PK_N.WSHOST = pk_jf(o, 'sni') || PK_N.HOST;
+		    // Xray-core (infra/conf/vmess.go) знает aes-128-gcm и chacha20-poly1305,
+		    // прочее -- в том числе none и zero -- молча читает как auto; прежде
+		    // byway отказывал в aes-128-cfb, а none пропускал (Ф9, п3-53).
 		    PK_N.METHOD = pk_jf(o, 'scy');
-		    if (!(PK_N.METHOD in [ '', 'auto', 'aes-128-gcm', 'chacha20-poly1305', 'none', 'zero' ])) {
-		        pk_flush();
-		        pk_dief("scy=%s у vmess Xray-core не знает: есть auto, aes-128-gcm, chacha20-poly1305, none, zero", PK_N.METHOD);
+		    if (!(PK_N.METHOD in [ '', 'auto', 'aes-128-gcm', 'chacha20-poly1305' ])) {
+		        pk_warnf("scy=%s у vmess Xray-core не поддерживает — шифрование будет auto", PK_N.METHOD);
+		        PK_N.METHOD = 'auto';
 		    }
+		    // alterId из Xray-core убран: только AEAD.
+		    if (PK_N.AID != '0') pk_warnf("aid=%s у vmess Xray-core не поддерживает (только AEAD, aid=0): сервер старого vmess не ответит", PK_N.AID);
 		    PK_N.ALPN = pk_jf(o, 'alpn');
+		    // Имя vmess -- поле ps внутри base64: панель его показывает, консоль
+		    // -- нет (прогон 5). Только для показа: направления ищут по «#».
+		    PK_N.PS = replace(pk_jf(o, 'ps'), /[\x01-\x1f\x7f]/g, '');
 		    if (pk_jf(o, 'fp') != '') PK_N.FP = pk_jf(o, 'fp');
 		    // У vmess имя сервиса gRPC лежит в path (v2rayN и др.); сырой path, не
 		    // PK_N.PATH, где пустой заменён на «/».
@@ -230,13 +238,16 @@ function parse_key(URL, prev_sni, prev_wshost) {
 		// ss://<base64 метод:пароль>@host:port и ss://метод:пароль@host:port; в
 		// старой форме в base64 вся ссылка.
 		if (scheme == 'ss') {
-		    if (index(rest, '@') < 0) {
+		    if (index(pk_before(rest, '?'), '@') < 0) {
 		        rest = pk_b64d(pk_before(rest, '?'));
 		        if (index(rest, '@') < 0) { pk_flush(); pk_die("ss-ссылка не разобралась"); }
 		    }
-		    // Делим по последней «@»: в открытом пароле она законна.
-		    let ui = substr(rest, 0, rindex(rest, '@'));
-		    let hp = pk_lastafter(rest, '@');
+		    // Делим по последней «@» до параметров: в открытом пароле она
+		    // законна, а «@» в параметре (obfs-host=a@b) уводила адрес сервера
+		    // в значение параметра (Ф9, п3-54, прогон 5).
+		    let at = rpos(pk_before(rest, '?'), '@');
+		    let ui = substr(rest, 0, at);
+		    let hp = substr(rest, at + 1);
 		    // Плагин (obfs-local, v2ray-plugin) Xray-core не запускает; прочие
 		    // параметры не переносятся -- называем.
 		    if (index(hp, 'plugin=') >= 0)
@@ -250,6 +261,7 @@ function parse_key(URL, prev_sni, prev_wshost) {
 		    hp = pk_before(pk_before(hp, '?'), '/');
 		    let plain = index(ui, ':') >= 0 ? pk_pctd(ui) : pk_b64d(ui);
 		    if (substr(hp, 0, 1) == '[') { pk_flush(); pk_dief("адрес IPv6 в ключе не поддержан: %s — нужен IPv4 или имя", hp); }
+		    if (index(plain, ':') < 0) { pk_flush(); pk_die("в ss-ссылке нет пароля: паролем стало бы имя метода"); }
 		    PK_N.METHOD = pk_before(plain, ':');
 		    PK_N.PASS = pk_after(plain, ':');
 		    PK_N.HOST = pk_before(hp, ':');
@@ -263,8 +275,12 @@ function parse_key(URL, prev_sni, prev_wshost) {
 
 		// Остальные схемы -- всё в адресе открытым текстом. Без «@» части до неё
 		// нет: wg-ссылки Hiddify и hysteria2 без пароля несут всё в параметрах.
-		let ui = index(rest, '@') >= 0 ? pk_before(rest, '@') : '';
-		let rest2 = pk_after(rest, '@');
+		// «@» -- последняя до параметров: незакодированная «@» в пароле trojan,
+		// hysteria2, socks резала пароль, а «@» в параметре hysteria2 без
+		// пароля уводила адрес сервера в значение параметра (Ф9, п2-25, п3-54).
+		let ai = rpos(pk_before(rest, '?'), '@');
+		let ui = ai >= 0 ? substr(rest, 0, ai) : '';
+		let rest2 = ai >= 0 ? substr(rest, ai + 1) : rest;
 		// hysteria2 пишет «host:port/?sni=…» -- косая перед вопросом не порт.
 		let hostport = pk_before(pk_before(rest2, '?'), '/');
 		// IPv6 не поддержан: [2001:db8::1]:443 резался бы по первому двоеточию.
@@ -290,21 +306,23 @@ function parse_key(URL, prev_sni, prev_wshost) {
 		    PK_N.PROTO = 'socks';
 		}
 
-		// Раскодируем целиком: кавычку, косую и управляющие знаки отсекает
-		// node_json_ok. Частичное раскодирование превращало путь v2rayN
-		// `%2F%3Fed%3D2048` в `/%3Fed=2048`: Xray не находил ed, ответ 404.
-		// Первый непустой из нескольких имён (v2rayN -- publickey, Hiddify -- peer_pk).
-		// extra -- объект JSON: раскодируются только знаки, законные в нём; объект
-		// проверяет json_obj_ok.
+		// Параметры раскодируются целиком (pk_qp): кавычку, косую и управляющие
+		// знаки отсекает pk_node_json_ok. Частичное раскодирование превращало
+		// путь v2rayN `%2F%3Fed%3D2048` в `/%3Fed=2048`: Xray не находил ed.
+		// pk_qpa -- первый непустой из нескольких имён (v2rayN -- publickey,
+		// Hiddify -- peer_pk); extra -- pk_qp_json, объект проверяет pk_json_obj_ok.
 
 		let v = pk_qp('type'); if (v != '') PK_N.TYPE = v;
 		// trojan без TLS не бывает, а клиенты security часто опускают.
 		if (PK_N.PROTO == 'trojan') PK_N.SEC = 'tls';
 		v = pk_qp('security'); if (v != '') PK_N.SEC = v;
-		PK_N.SNI = pk_qp('sni') || PK_N.HOST;
+		// sni и host подменяют друг друга, как у vmess и в v2rayN: без host
+		// заголовок Host был адресом сервера, а не sni, и сервер за CDN
+		// отвечал 404 (Ф9, п3-51).
+		PK_N.SNI = pk_qp('sni') || pk_qp('host') || PK_N.HOST;
 		v = pk_qp('fp'); if (v != '') PK_N.FP = v;
 		v = pk_qp('path'); if (v != '') PK_N.PATH = v;
-		PK_N.WSHOST = pk_qp('host') || PK_N.HOST;
+		PK_N.WSHOST = pk_qp('host') || pk_qp('sni') || PK_N.HOST;
 		PK_N.PBK = pk_qp('pbk'); PK_N.SID = pk_qp('sid'); PK_N.FLOW = pk_qp('flow');
 		// flow у trojan в конфиг не пишется, а mux при нём отключался.
 		if (PK_N.PROTO == 'trojan' && PK_N.FLOW != '') {
@@ -387,6 +405,25 @@ function parse_key(URL, prev_sni, prev_wshost) {
 		    pk_flush(); pk_dief("имя для проверки сертификата (vcn) -- не имя хоста: %s", PK_N.VCN);
 		}
 		pk_node_json_ok();
+		// После общей проверки знаков (кавычка, управляющие -- её словами).
+		// Порт и имена -- той же меркой, что у сборки: ключ подписки проверяется
+		// только разбором, и порт 99999 вставал активным, а сборка отвергала всю
+		// подписку (Ф9, п1-14, прогон 5). sni и Host с «@» и прочим не именем
+		// уходили в конфиг как есть.
+		if (!match(PK_N.PORT, /^[0-9]+$/) || int(PK_N.PORT) < 1 || int(PK_N.PORT) > 65535) {
+		    pk_flush(); pk_dief("порт в ссылке недопустим: %s", PK_N.PORT);
+		}
+		// pk_dief -- с одной подстановкой: имя поля -- в тексте.
+		// host -- первым: sni без своего значения берёт host.
+		if (PK_N.WSHOST != null && PK_N.WSHOST != '' && !pk_grepq(/^[A-Za-z0-9._:,*-]+$/, PK_N.WSHOST)) {
+		    pk_flush(); pk_dief("host в ключе -- не имя хоста: %s", PK_N.WSHOST);
+		}
+		if (PK_N.SNI != null && PK_N.SNI != '' && !pk_grepq(/^[A-Za-z0-9._:,*-]+$/, PK_N.SNI)) {
+		    pk_flush(); pk_dief("sni в ключе -- не имя хоста: %s", PK_N.SNI);
+		}
+		// extra подставляется в конфиг объектом, мимо pk_node_json_ok: ровно один
+		// объект и ничего вокруг (`{} } }, "settings": {…}` закрыл бы xhttpSettings
+		// и дописал свой settings). Вид скобок не различаем -- ядро отвергнет.
 		if (PK_N.EXTRA != '' && !pk_json_obj_ok(PK_N.EXTRA)) {
 		    pk_flush();
 		    pk_die("параметр extra в ссылке -- не один объект JSON: он подставляется в конфиг как есть, и такая ссылка переписывает соседние поля, включая адрес сервера и защиту");

@@ -1,6 +1,5 @@
 #!/bin/sh
-# Собирает byway из файлов src/ в порядке ORDER; строка «#@include ФАЙЛ»
-# заменяется содержимым файла (разборщик keys/parse.uc). Часть на ucode
+# Собирает byway из файлов src/ в порядке ORDER. Часть на ucode
 # (uc/ORDER) -- в конце, после exit, между #@uc-begin и #@uc-end: shell туда не
 # доходит, `sh -n` видит её телом heredoc, bw_uc (core/ucode.sh) вырезает. Правится src/, а не
 # byway: собранный файл перезаписывается целиком. --check -- только сверка
@@ -9,14 +8,6 @@ set -e
 cd "$(dirname "$0")"
 out=$(mktemp)
 trap 'rm -f "$out"' EXIT
-inc() {
-    while IFS= read -r _l || [ -n "$_l" ]; do
-        case "$_l" in
-          '#@include '*) cat "${_l#\#@include }" ;;
-          *) printf '%s\n' "$_l" ;;
-        esac
-    done < "$1"
-}
 _first=1
 grep -v '^[[:space:]]*\(#\|$\)' ORDER | while IFS= read -r f; do
     if [ "$_first" = 1 ]; then
@@ -26,7 +17,7 @@ grep -v '^[[:space:]]*\(#\|$\)' ORDER | while IFS= read -r f; do
         _first=0
     else
         echo
-        inc "$f"
+        cat "$f"
     fi
 done > "$out"
 {

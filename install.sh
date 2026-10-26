@@ -61,6 +61,7 @@ t() {
     [ "$LANG_EN" = 1 ] || { printf %s "$1"; return 0; }
     case "$1" in
       "── Проверка окружения ──") printf %s "── Checking the environment ──" ;;
+      "на флеше меньше 3 МБ — копия для отката (byway update --rollback) не сделана") printf %s "less than 3 MB free on the flash — no rollback copy made (byway update --rollback)" ;;
       "контрольная сумма выпуска (.dgst) не получена — архив отброшен") printf %s "the release checksum (.dgst) could not be fetched — archive discarded" ;;
       "архив не сошёлся с контрольной суммой SHA2-256 из выпуска — отброшен") printf %s "the archive does not match the SHA2-256 checksum from the release — discarded" ;;
       "архив сверен с контрольной суммой из выпуска") printf %s "archive matches the release checksum" ;;
@@ -75,7 +76,7 @@ t() {
       "не удалось загрузить файлы byway — скачать архив с github.com/%s и запустить install.sh из него") printf %s "could not download the byway files — download the archive from github.com/%s and run install.sh from it" ;;
       "движок записан в настройки: %s") printf %s "the core is recorded in the settings: %s" ;;
       "движок не найден: byway установлен, но служба не поднимется") printf %s "core not found: byway is installed, but the service will not start" ;;
-      "  указать путь: uci set byway.main.xray_bin=/путь/к/xray && uci commit byway") printf %s "  set the path: uci set byway.main.xray_bin=/path/to/xray && uci commit byway" ;;
+      "  указать путь: byway set xray_bin /путь/к/xray") printf %s "  set the path: byway set xray_bin /path/to/xray" ;;
       "движок уже указан в настройках: %s") printf %s "the core is already set in the settings: %s" ;;
       "не удалось записать %s — проверить место на флеше и права") printf %s "could not write %s — check free flash and permissions" ;;
       "файлы byway рядом со скриптом неполные, не хватает:%s") printf %s "byway files next to the script are INCOMPLETE, missing:%s" ;;
@@ -83,7 +84,7 @@ t() {
       "конфиг не пересобрался — движок остаётся на прежнем") printf %s "the config was not rebuilt — the core stays on the previous one" ;;
       "перезапуск службы — туннель прервётся на несколько секунд") printf %s "restarting the service — the tunnel will drop for a few seconds" ;;
       "служба перезапущена на новой версии") printf %s "the service restarted on the new version" ;;
-      "Обновлено. Если открыта панель — обновить страницу с очисткой кэша (Ctrl+F5).") printf %s "Updated. If the panel is open, reload the page with a cache reset (Ctrl+F5)." ;;
+      "Обновлено. Если открыта панель — обновить страницу (F5); осталась прежняя — Ctrl+F5.") printf %s "Updated. If the panel is open, reload the page (F5); if it is still the old one, Ctrl+F5." ;;
       "Обновлено.") printf %s "Updated." ;;
       "нет %s -- установка") printf %s "no %s -- installing" ;;
       "не поставился %s: поставить вручную") printf %s "%s did not install: install it by hand" ;;
@@ -105,10 +106,10 @@ t() {
       "система не подходит -- ничего не установлено") printf %s "this system does not qualify -- nothing has been installed" ;;
       "GitHub напрямую не отвечает — его адреса запрашиваются по DoH") printf %s "GitHub does not answer directly — resolving its addresses over DoH" ;;
       "адреса получены — соединение напрямую, минуя подменённый DNS") printf %s "addresses resolved — going direct, bypassing the spoofed DNS" ;;
-      "GitHub недоступен, а зеркало запрещено (NO_MIRROR=1) — установка не пойдёт") printf %s "GitHub is unreachable and the mirror is forbidden (NO_MIRROR=1) — the install will not proceed" ;;
+      "GitHub недоступен, а зеркало запрещено (NO_MIRROR=1) — с GitHub ничего не скачивается") printf %s "GitHub is unreachable and the mirror is forbidden (NO_MIRROR=1) — nothing is downloaded from GitHub" ;;
       "GitHub недоступен ни напрямую, ни по адресам из DoH — загрузка через зеркало gh-proxy") printf %s "GitHub is unreachable both directly and via DoH addresses — downloading through the gh-proxy mirror" ;;
       "  это СТОРОННИЙ сервер: он видит загружаемое и может подменить файлы.") printf %s "  it is a THIRD-PARTY server: it sees what is downloaded and may tamper with the files." ;;
-      "  запретить: запустить заново, поставив NO_MIRROR=1 перед командой, — установка тогда остановится") printf %s "  to forbid it: run again with NO_MIRROR=1 in front of the command — the install will then stop" ;;
+      "  запретить: запустить заново, поставив NO_MIRROR=1 перед командой, — тогда с GitHub ничего не скачивается") printf %s "  to forbid it: run again with NO_MIRROR=1 in front of the command — then nothing is downloaded from GitHub" ;;
       "на этом процессоре сборка с GitHub не запустится: MIPS там только с аппаратной плавающей точкой, а сопроцессора здесь нет") printf %s "the GitHub build will not run on this CPU: MIPS is published hard-float only, and there is no FPU here" ;;
       "  из пакетов OpenWrt ставится сборка без аппаратной плавающей точки") printf %s "  the OpenWrt package is built soft-float" ;;
       "Движок Xray-core. Какую версию поставить:") printf %s "Xray-core. Which version to install:" ;;
@@ -127,7 +128,7 @@ t() {
       "непонятный номер версии «%s»") printf %s "invalid version number "%s"" ;;
       "установка xray-core из пакетов OpenWrt") printf %s "installing xray-core from OpenWrt packages" ;;
       "Xray-core не поставился из пакетов OpenWrt") printf %s "Xray-core did not install from OpenWrt packages" ;;
-      "  и указать путь: uci set byway.main.xray_bin=/путь/к/xray") printf %s "  and point byway at it: uci set byway.main.xray_bin=/path/to/xray" ;;
+      "  и указать путь: byway set xray_bin /путь/к/xray") printf %s "  and point byway at it: byway set xray_bin /path/to/xray" ;;
       "  весь вывод пакетного менеджера: cat %s") printf %s "  full package manager output: cat %s" ;;
       "на флеше свободно %s МБ, а движку нужно около 30 -- он не поместится") printf %s "%s MB free on flash, the core needs about 30 -- it will not fit" ;;
       "  это не поправить настройкой: нужен роутер с большим флешем либо extroot на USB") printf %s "  no setting fixes this: you need a router with more flash, or extroot on USB" ;;
@@ -148,7 +149,7 @@ t() {
       "архив не того выпуска: внутри не v%s") printf %s "the archive is from another release: it is not v%s inside" ;;
       "движок не поднялся или перезапускается по кругу — смотреть: logread -e byway") printf %s "the core did not start or keeps restarting — see: logread -e byway" ;;
       "  вернуть прежнюю версию: byway update --rollback") printf %s "  return to the previous version: byway update --rollback" ;;
-      "  движок от root вместо пользователя byway: uci set byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway restart") printf %s "  run the core as root instead of the byway user: uci set byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway restart" ;;
+      "  движок от root вместо пользователя byway: byway set xray_root on") printf %s "  run the core as root instead of the byway user: byway set xray_root on" ;;
       "в архиве есть файлы вне подписанного списка") printf %s "the archive has files outside the signed list" ;;
       "нет usign — подпись выпуска проверить нечем") printf %s "no usign — nothing to check the release signature with" ;;
       "подпись выпуска не сошлась с ключом byway") printf %s "the release signature does not match the byway key" ;;
@@ -161,7 +162,7 @@ t() {
       "  на 21.02 и старше другой файрвол (iptables): туннель не получат гостевые сети — наполовину рабочий byway не ставится") printf %s "  21.02 and older use a different firewall (iptables): guest networks would not get the tunnel — byway does not install half-working" ;;
       "  узнать свою версию: cat /etc/openwrt_release") printf %s "  check your version: cat /etc/openwrt_release" ;;
       "  ${PKG:-apk} update && ${PKG:-apk} ${PKG_ADD:-add} xray-core -- либо положить бинарник вручную") printf %s "  ${PKG:-apk} update && ${PKG:-apk} ${PKG_ADD:-add} xray-core -- or drop the binary in by hand" ;;
-      "  uci set byway.main.xray_bin=/путь/к/xray && uci commit byway") printf %s "  uci set byway.main.xray_bin=/path/to/xray && uci commit byway" ;;
+      "  byway set xray_bin /путь/к/xray") printf %s "  byway set xray_bin /path/to/xray" ;;
       "проблем: %s — устранить перечисленное выше и запустить установку снова") printf %s "%s problem(s) found — fix what is listed above and run the installer again" ;;
       "всё на месте") printf %s "everything is in place" ;;
       "программа и служба установлены") printf %s "program and service installed" ;;
@@ -180,10 +181,16 @@ t() {
       "procd-ujail поставлен: ядро будет работать не от root") printf %s "procd-ujail installed: the core will not run as root" ;;
       "procd-ujail не поставился — ядро будет работать от root") printf %s "procd-ujail did not install — the core will run as root" ;;
       "ядро будет работать от root; поставить позже:") printf %s "the core will run as root; to install it later:" ;;
+      "сертификат GitHub не прошёл проверку: часы роутера показывают %s — если они неверны, выставить время (NTP) и запустить установку заново") printf %s "the GitHub certificate failed verification: the router clock shows %s — if that is wrong, set the time (NTP) and run the installation again" ;;
+      "на флеше нет места: настройка %s не записана") printf %s "no room on the flash: the %s setting was not saved" ;;
       "файлы byway переживут обновление прошивки (/etc/sysupgrade.conf)") printf %s "byway files will survive a firmware upgrade (/etc/sysupgrade.conf)" ;;
       "byway доступен по имени из любой оболочки") printf %s "byway is available by name from any shell" ;;
       "задачи в cron: проверка состояния, обновлений и списков; учёт использования") printf %s "cron jobs: state, update and list checks; usage accounting" ;;
       "правило firewall для гостевых сетей создано") printf %s "firewall rule for guest networks created" ;;
+      "настройки и ключ остались от прежней установки") printf %s "the settings and the key are left from the previous install" ;;
+      "служба запущена — проверить: byway") printf %s "the service is running — check: byway" ;;
+      "включить: byway on — проверить: byway") printf %s "turn it on: byway on — check: byway" ;;
+      "правило firewall для гостевых сетей не записано (место на флеше?)") printf %s "the firewall rule for guest networks was not written (room on the flash?)" ;;
       *) printf %s "$1" ;;
     esac
 }
@@ -196,7 +203,7 @@ FATAL=0   # непоправимое: система не того поколе�
 # а не «последняя»: установщик и файлы, которые он кладёт, обязаны быть одного
 # тега, иначе панель окажется новее программы или наоборот.
 REPO=tomon-one/byway
-VER=0.3.0
+VER=0.4.0
 # Открытый ключ подписи выпусков -- тот же, что BYWAY_PUBKEY в byway.
 BYWAY_PUBKEY="RWQ9r7vQihS1LvQHytsWrPqBkUalRDrj6JBUInbi7KXlUUPHBMzFmvJl"
 # Версия движка, на которой byway проверялся целиком -- на живом роутере, с
@@ -233,8 +240,13 @@ WAS_INSTALLED=0
 # cmd_update новой версии; обновление с 0.2.4 идёт под СТАРЫМ cmd_update,
 # который целиком копию не делал, -- и первый запуск движка в ujail
 # оставался без отката. Свежая (30 минут) копия -- чужая работа, не
-# трогаем. Список -- как у upd_snapshot, править парой.
-if [ "$WAS_INSTALLED" = 1 ] && [ -z "$(find /etc/byway/prev.tgz -mmin -30 2>/dev/null)" ]; then
+# трогаем. Список -- как у up_snapshot (uc/update.uc), править парой.
+# Копия -- ~200 КБ во флеш ДО проверки места ниже: на почти полном флеше она
+# съедала остаток (Ф9, п3-46). Меньше 3 МБ -- без копии, словами.
+_pf=$(df -k /etc 2>/dev/null | awk 'NR==2 { print $4 }')
+if [ "$WAS_INSTALLED" = 1 ] && [ "${_pf:-0}" -lt 3072 ]; then
+    warn "на флеше меньше 3 МБ — копия для отката (byway update --rollback) не сделана"
+elif [ "$WAS_INSTALLED" = 1 ] && [ -z "$(find /etc/byway/prev.tgz -mmin -30 2>/dev/null)" ]; then
     _us=""
     for _uf in /usr/local/bin/byway /etc/init.d/byway /usr/local/bin/byway-uninstall \
                /www/luci-static/resources/view/byway /www/luci-static/resources/byway \
@@ -256,14 +268,14 @@ fi
 # уберёт сторож.
 [ -z "$(find /etc/byway/byway.prev -mmin -30 2>/dev/null)" ] && rm -f /etc/byway/byway.prev 2>/dev/null || true
 
-# Свободное место на разделе, который переживает перезагрузку. Меряем
-# /overlay, а не корень: корень на OpenWrt -- squashfs, свободного места там
-# ноль по определению, и любой замер по нему бессмыслен.
+# Свободное место (free_mb, ниже) меряем на разделе, который переживает
+# перезагрузку: /overlay, а не корень -- корень на OpenWrt squashfs, свободного
+# места там ноль по определению.
 # Скачивание. На роутере, где byway УЖЕ работает, github.com обычно лежит в
 # его собственном списке -- и тогда сам роутер до него не достаёт: правила
 # tproxy ловят трафик мостов, а не свой собственный, и curl возвращает 000.
 # Поэтому сперва пробуем через локальный прокси-вход byway, потом напрямую.
-# Порядок тот же, что у fetch_list внутри самой программы. На чистом роутере
+# Порядок тот же, что у nt_get внутри самой программы (uc/net.uc). На чистом роутере
 # первая попытка стоит миллисекунд: никто не слушает, соединение отвергается
 # сразу.
 PXP=$(uci -q get byway.main.local_proxy_port 2>/dev/null || true)
@@ -292,8 +304,8 @@ dl() {   # аргументы curl как есть, --max-time задаёт вы
     curl -fsSL $GH_RES "$@" 2>/dev/null
 }
 
-# Доступен ли GitHub напрямую -- решается ОДНОЙ пробой, в начале, и дальше все
-# его адреса строятся уже с учётом ответа.
+# Доступен ли GitHub напрямую -- решается ОДНОЙ пробой (ленивой: при первой
+# загрузке, gh_ready), и дальше все его адреса строятся уже с учётом ответа.
 #
 # Приём подсмотрен у Zapret-Manager и он лучше отката на каждой загрузке: на
 # закрытой сети откат заставлял КАЖДОЕ скачивание сперва дважды упереться в
@@ -310,8 +322,11 @@ dl() {   # аргументы curl как есть, --max-time задаёт вы
 # в /etc/hosts гвоздями. Гвоздей не ставим: прибитый адрес однажды протухнет,
 # а CDN их меняет.
 doh_a() {   # 1 -- имя
-    for _dq in "https://dns.google/resolve?name=$1&type=A" \
-               "https://cloudflare-dns.com/dns-query?name=$1&type=A"; do
+    # Запросом К АДРЕСУ, как nt_doh_a в uc/net.uc: по имени (dns.google)
+    # DoH шёл через тот же сломанный DNS, ради обхода которого его и зовут
+    # (Ф9, п4-83).
+    for _dq in "https://8.8.8.8/resolve?name=$1&type=A" \
+               "https://1.1.1.1/dns-query?name=$1&type=A"; do
         _da=$(curl -fsSL --max-time 8 -H "accept: application/dns-json" "$_dq" 2>/dev/null |
               tr ',' '\n' | sed -n 's/.*"data":"\([0-9][0-9.]*\)".*/\1/p' | head -1)
         case "$_da" in
@@ -330,6 +345,31 @@ doh_a() {   # 1 -- имя
 #
 # Раньше первой загрузки её всё равно нельзя: сама ходит через curl, а его
 # установщик доставляет чуть выше.
+# uci commit с проверкой места: голый commit при полном флеше обнулял файл
+# настроек вместе с ключом (Ф9, п2-35; в установщике -- прогон 5). Отказ --
+# 1: звать в if или с `|| true`, иначе set -e обрывает установку (н1-15).
+ucommit() {
+    _uf=$(df -k /etc/config 2>/dev/null | awk 'NR==2 { print $4 }')
+    _us=$(wc -c < "/etc/config/$1" 2>/dev/null || echo 0)
+    if [ -n "$_uf" ] && [ $((_uf * 1024)) -lt $((_us + 65536)) ]; then
+        uci -q revert "$1"
+        warnf "на флеше нет места: настройка %s не записана" "$1"
+        BAD=$((BAD + 1))
+        return 1
+    fi
+    uci commit "$1"
+}
+
+# Есть ли ядро в /usr/local/bin; *.new -- недописанная копия прерванной
+# замены, не движок (прогон 5).
+xray_any() {
+    for _x in /usr/local/bin/xray-*; do
+        case "$_x" in *.new) continue ;; esac
+        [ -e "$_x" ] && return 0
+    done
+    return 1
+}
+
 gh_ready() { [ "${GH_DONE:-0}" = 1 ] || { GH_DONE=1; gh_probe; }; }
 
 gh_probe() {
@@ -341,7 +381,10 @@ gh_probe() {
     # перехват не попадает. Голая проба на таком роутере объявляла GitHub
     # недоступным и уводила установку на чужое зеркало без всякой нужды.
     # Поймано прогоном на боевом роутере, а не разбором.
-    dl --max-time 6 -o /dev/null \
+    # Первые полкилобайта, а не весь файл (120 КБ): на канале медленнее
+    # ~20 кБ/с проба не укладывалась в 6 с, и установка уходила на зеркало
+    # при живом GitHub (Ф9, п2-16).
+    dl --max-time 6 -r 0-511 -o /dev/null \
         "https://raw.githubusercontent.com/$REPO/refs/heads/main/install.sh" && return 0
 
     # Вторая ступень: имя не разрешается или ответ подменён -- спрашиваем
@@ -350,14 +393,16 @@ gh_probe() {
     # никакой посредник в середине не появляется.
     say "GitHub напрямую не отвечает — его адреса запрашиваются по DoH"
     _gr=""
+    # Как в uc/net.uc: release-assets -- переадресация архивов ядра (Ф9, п4-84).
     for _gh in raw.githubusercontent.com github.com api.github.com \
-               codeload.github.com objects.githubusercontent.com; do
+               codeload.github.com objects.githubusercontent.com \
+               release-assets.githubusercontent.com; do
         _gi=$(doh_a "$_gh") || continue
         _gr="$_gr --resolve $_gh:443:$_gi"
     done
     if [ -n "$_gr" ]; then
         GH_RES=$_gr
-        if dl --max-time 8 -o /dev/null \
+        if dl --max-time 8 -r 0-511 -o /dev/null \
               "https://raw.githubusercontent.com/$REPO/refs/heads/main/install.sh"; then
             say "адреса получены — соединение напрямую, минуя подменённый DNS"
             return 0
@@ -365,16 +410,26 @@ gh_probe() {
         GH_RES=""
     fi
 
+    # Отказ проверки сертификата (curl 60) -- чаще всего неверные часы: зеркало
+    # тут не поможет, а человек не узнает причину (Ф9, п2-14, прогон 5).
+    _gc=0
+    curl -fsS --max-time 6 -r 0-511 -o /dev/null \
+        "https://raw.githubusercontent.com/$REPO/refs/heads/main/install.sh" 2>/dev/null || _gc=$?
+    if [ "$_gc" = 60 ]; then
+        warnf "сертификат GitHub не прошёл проверку: часы роутера показывают %s — если они неверны, выставить время (NTP) и запустить установку заново" "$(date '+%Y-%m-%d %H:%M')"
+    fi
+
     # Третья ступень -- чужое зеркало, и только если предыдущие не вышли.
     [ "${NO_MIRROR:-0}" = 1 ] && {
-        warn "GitHub недоступен, а зеркало запрещено (NO_MIRROR=1) — установка не пойдёт"
+        # Итог (отказ или ядро из пакетов) называет вызывающая сторона (н1-17).
+        warn "GitHub недоступен, а зеркало запрещено (NO_MIRROR=1) — с GitHub ничего не скачивается"
         return 0
     }
     # Зеркало ЧУЖОЕ: публичный gh-proxy, тот же, что у Zapret-Manager. Мы его
     # не держим и не проверяем, что он отдаёт, -- поэтому говорим вслух.
     warn "GitHub недоступен ни напрямую, ни по адресам из DoH — загрузка через зеркало gh-proxy"
     warn "  это СТОРОННИЙ сервер: он видит загружаемое и может подменить файлы."
-    warn "  запретить: запустить заново, поставив NO_MIRROR=1 перед командой, — установка тогда остановится"
+    warn "  запретить: запустить заново, поставив NO_MIRROR=1 перед командой, — тогда с GitHub ничего не скачивается"
     GH=$MIRROR/
 }
 
@@ -439,9 +494,11 @@ ask() {   # $1 вопрос, $2 умолчание y|n -- отвечает ко�
     printf '\033[1;36m[?]\033[0m %s %s ' "$(t "$1")" "$_d" > /dev/tty
     read -r _a < /dev/tty || _a=""
     case "$_a" in
-        [yYдД]*) return 0 ;;
-        [nNнН]*) return 1 ;;
-        *)       [ "$2" = y ] ;;
+        # Словами, а не первой буквой: «[дД]» -- набор БАЙТОВ, и «н»/«нет»
+        # (тот же первый байт UTF-8) читались как «да» (Ф9, п4-24).
+        y|Y|yes|Yes|YES|д|Д|да|Да|ДА) return 0 ;;
+        n|N|no|No|NO|н|Н|нет|Нет|НЕТ) return 1 ;;
+        *) [ "$2" = y ] ;;
     esac
 }
 
@@ -759,8 +816,8 @@ if [ ! -x /sbin/ujail ]; then
     fi
 fi
 
-# Имя файла в выпусках Xray под нашу архитектуру. Список из списка файлов
-# самого выпуска, а не из головы: имена там свои, не как у uname.
+# Имя файла в выпусках Xray под нашу архитектуру. Соответствие (case ниже)
+# сверено со списком файлов выпуска: имена там свои, не как у uname.
 # Плавающая точка на MIPS. Go собирает mips32le и mips64le с АППАРАТНОЙ
 # плавающей точкой, и XTLS выкладывает только такую сборку -- softfloat в
 # выпуске нет вовсе (сверено по списку файлов выпуска, а не по памяти).
@@ -931,10 +988,15 @@ xray_from_github() {
     # Убираем и обломок: unzip мог успеть записать часть файла, а это
     # мегабайты на разделе в 43.7 МБ. Путь стал достижим именно теперь, когда
     # порог места опущен и ветка «взять с GitHub» наконец работает.
-    unzip -o -j "$_z" xray -d /usr/local/bin >/dev/null 2>&1 ||
-        { warn "не распаковался"; rm -rf "$_zd" /usr/local/bin/xray; return 1; }
+    # В своё имя (.new), не в /usr/local/bin/xray: там бывает чужое ядро, и
+    # unzip -o затирал его, а при сбое удалял (Ф9, п4-10). *.new запасным
+    # ядром не считается.
+    _xn="/usr/local/bin/xray-$_ver.new"
+    unzip -p "$_z" xray > "$_xn" 2>/dev/null && [ -s "$_xn" ] ||
+        { warn "не распаковался"; rm -rf "$_zd" "$_xn"; return 1; }
     rm -rf "$_zd"
-    mv /usr/local/bin/xray "/usr/local/bin/xray-$_ver" && chmod 755 "/usr/local/bin/xray-$_ver"
+    chmod 755 "$_xn" && mv "$_xn" "/usr/local/bin/xray-$_ver" ||
+        { warn "не распаковался"; rm -f "$_xn"; return 1; }
 
     # Проверяем, что оно вообще запускается на этом железе: неверно угаданная
     # архитектура даёт не ошибку скачивания, а «Exec format error» потом.
@@ -972,8 +1034,7 @@ if [ "${FATAL:-0}" = 1 ]; then
 # ещё один. Найдено третьим аудитом 2026-09-07.
 elif _xb=$(uci -q get byway.main.xray_bin 2>/dev/null); [ -n "$_xb" ] && [ -x "$_xb" ]; then
     sayf "движок уже указан в настройках: %s" "$_xb"
-elif ! command -v xray >/dev/null 2>&1 && [ ! -x /usr/bin/xray ] &&
-   ! ls /usr/local/bin/xray-* >/dev/null 2>&1; then
+elif ! command -v xray >/dev/null 2>&1 && [ ! -x /usr/bin/xray ] && ! xray_any; then
     echo
     # ⚠️ Спрашиваем про ВЕРСИЮ, а не про источник. Откуда её брать -- наша
     # забота: сперва GitHub, не вышло -- прошивка. Прежнее меню предлагало
@@ -991,7 +1052,7 @@ elif ! command -v xray >/dev/null 2>&1 && [ ! -x /usr/bin/xray ] &&
         _c=$(askv "Выбор" 1)
         case "$_c" in
           2) warn "движок не ставится: указать путь после установки"
-             warn "  uci set byway.main.xray_bin=/путь/к/xray && uci commit byway"
+             warn "  byway set xray_bin /путь/к/xray"
              _c=9 ;;
           *) _c=1 ;;
         esac
@@ -1009,7 +1070,7 @@ elif ! command -v xray >/dev/null 2>&1 && [ ! -x /usr/bin/xray ] &&
           2)     _ver=$(xray_ver_top any) ;;
           3)     _ver=$(xray_ver_top stable) ;;
           4)     warn "движок не ставится: указать путь после установки"
-                 warn "  uci set byway.main.xray_bin=/путь/к/xray && uci commit byway"
+                 warn "  byway set xray_bin /путь/к/xray"
                  _c=9 ;;
           # Номером -- чтобы не заставлять выбирать из списка того, кто уже
           # знает, что ему нужно.
@@ -1063,7 +1124,7 @@ elif ! command -v xray >/dev/null 2>&1 && [ ! -x /usr/bin/xray ] &&
             else
                 pkg_why
                 warn "  ${PKG:-apk} update && ${PKG:-apk} ${PKG_ADD:-add} xray-core -- либо положить бинарник вручную"
-                warn "  и указать путь: uci set byway.main.xray_bin=/путь/к/xray"
+                warn "  и указать путь: byway set xray_bin /путь/к/xray"
             fi
             BAD=$((BAD + 1))
         }
@@ -1165,12 +1226,35 @@ else
     # root, так что доступ не теряется ни у кого, кому он нужен.
     say "конфигурация создана из шаблона"
 fi
+# Ключи -- своим пакетом UCI (Ф9, п1-12): роль панели «только чтение» видит
+# /etc/config/byway целиком, этот файл -- нет. Прежние ключи из byway byway
+# переносит сам при первой команде (keymove ниже, после установки программы).
+if [ ! -f /etc/config/byway_key ]; then
+    ( umask 077; printf "\nconfig key 'main'\n" > /etc/config/byway_key )
+fi
+chmod 600 /etc/config/byway_key
+/usr/local/bin/byway keymove >/dev/null 2>&1 || true
+# Рабочие файлы до 0.4.0 жили в /tmp, теперь -- в /var/run (каталог root).
+# Обновление без перезагрузки: отметки состояния -- на новое место, иначе новая
+# сборка не снимала свой маршрут таблицы 100 ни при stop, ни при удалении,
+# а запрет и «сняли руками» числились снятыми (узкий аудит, н1-22). Кэши
+# прежней версии -- прочь: новая соберёт свои.
+for _f in route-mine route-mine6 plumb-down blocked blocked.sig blocked.parts nopid \
+          engine-restore newver relnote upcheck upcheck-fail upcheck-ok autoupdate watch.last; do
+    [ -e "/tmp/byway-$_f" ] || continue
+    [ -e "/var/run/byway-$_f" ] || mv -f "/tmp/byway-$_f" "/var/run/byway-$_f" 2>/dev/null || true
+    rm -f "/tmp/byway-$_f"
+done
+rm -f /tmp/byway-domains-all.lst /tmp/byway-subnets-all.lst /tmp/byway-domains-all.lst.sig \
+      /tmp/byway-subnets-all.lst.sig /tmp/byway-check.json /tmp/byway-config.new.json \
+      /tmp/byway-probe.json /tmp/byway-probe.log /tmp/byway-probe.out /tmp/byway-hostcheck /tmp/byway-dialbug \
+      /tmp/byway-bad-entries /tmp/byway-import.txt /tmp/byway-job.log
 
 # Выбранный язык -- в конфигурацию: иначе установщик говорил бы по-английски,
 # а всё, что человек откроет следом, -- по-русски.
 if [ "$LANG_EN" = 1 ]; then _wl=en; else _wl=ru; fi
 if [ "$(uci -q get byway.main.lang)" != "$_wl" ]; then
-    uci set byway.main.lang="$_wl" && uci commit byway
+    uci set byway.main.lang="$_wl" && ucommit byway || true
 fi
 
 # Путь к движку -- в настройки. Раньше XRAY_PATH присваивался и не читался
@@ -1192,19 +1276,27 @@ if [ -n "$XRAY_PATH" ] || [ -z "$_xb" ] || [ ! -x "$_xb" ]; then
         else
             # По времени, а не по алфавиту: лексически xray-26.7.9 старше
             # xray-26.7.11, и выбралась бы прошлая версия.
-            XRAY_PATH=$(ls -1t /usr/local/bin/xray-* 2>/dev/null | head -1)
+            XRAY_PATH=""
+            for _x in $(ls -1t /usr/local/bin/xray-* 2>/dev/null); do
+                case "$_x" in *.new) continue ;; esac
+                XRAY_PATH=$_x; break
+            done
         fi
     fi
     if [ -n "$XRAY_PATH" ] && [ -x "$XRAY_PATH" ]; then
-        uci set byway.main.xray_bin="$XRAY_PATH" && uci commit byway
-        sayf "движок записан в настройки: %s" "$XRAY_PATH"
+        if uci set byway.main.xray_bin="$XRAY_PATH" && ucommit byway; then
+            sayf "движок записан в настройки: %s" "$XRAY_PATH"
+        fi
     else
         # Движка нет НИ ОДНОГО, и молчать об этом нельзя: byway при этом
         # установлен целиком, а служба не стартует. Без этой ветки установка
         # объявлялась удавшейся -- и человек шёл искать поломку в панели.
         warn "движок не найден: byway установлен, но служба не поднимется"
-        warn "  указать путь: uci set byway.main.xray_bin=/путь/к/xray && uci commit byway"
-        BAD=$((BAD + 1))
+        warn "  указать путь: byway set xray_bin /путь/к/xray"
+        # Не BAD: тот проверен выше и здесь не действовал (Ф9, п4-57), а
+        # отказ откатил бы обновление при осознанном «не ставить движок».
+        # Повтор -- у «Готово», где его увидят.
+        NOENG=1
     fi
 fi
 
@@ -1222,7 +1314,8 @@ if [ -d "$SRC/lang" ]; then
     for l in "$SRC"/lang/*.tsv; do
         [ -f "$l" ] || continue
         if [ "$(basename "$l" .tsv)" = "$_wl" ]; then
-            cp "$l" /etc/byway/lang/ && chmod 644 "/etc/byway/lang/$(basename "$l")"
+            # put: отказ громкий, cp && chmod под set -e прощался (прогон 5).
+            put "$l" "/etc/byway/lang/$(basename "$l")" 644
         else
             rm -f "/etc/byway/lang/$(basename "$l")" 2>/dev/null || true
         fi
@@ -1251,7 +1344,9 @@ if [ "$PANEL" = 0 ] && [ -d /www/luci-static/resources/view/byway ]; then
         grep -vxF "$P" /etc/sysupgrade.conf > /tmp/su.$$ 2>/dev/null && mv /tmp/su.$$ /etc/sysupgrade.conf
     done
     for c in /tmp/luci-indexcache*; do [ -e "$c" ] && : > "$c"; done
-    /etc/init.d/rpcd restart >/dev/null 2>&1 || true
+    # reload, а не restart: права перечитываются, а сессии LuCI живы --
+    # обновление из панели не теряет свою вкладку посреди задачи (Ф9, п3-31).
+    /etc/init.d/rpcd reload >/dev/null 2>&1 || true
     say "панель LuCI убрана"
 fi
 
@@ -1260,10 +1355,10 @@ if [ "$PANEL" = 1 ]; then
     # Общие модули панели: словарь и внешний вид. Их подключают все вкладки
     # через 'require byway.<имя>', и путь тут не про вкус, а про то, где LuCI
     # ищет модули.
+    # put, а не «cp && chmod»: отказ cp в такой цепочке set -e прощал, и
+    # панель вставала не целиком под словом «поставлена» (Ф9, п4-58).
     for _m in lang ui; do
-        [ -f "$SRC/luci/$_m.js" ] &&
-            cp "$SRC/luci/$_m.js" "/www/luci-static/resources/byway/$_m.js" &&
-            chmod 644 "/www/luci-static/resources/byway/$_m.js"
+        [ ! -f "$SRC/luci/$_m.js" ] || put "$SRC/luci/$_m.js" "/www/luci-static/resources/byway/$_m.js" 644
     done
     # Номер версии в панель: по нему она узнаёт, что браузер показывает её
     # прежнюю из кэша (ui.js, BUILT).
@@ -1273,25 +1368,21 @@ if [ "$PANEL" = 1 ]; then
     # Строки перевода -- ровно те, что начинаются с двух табов и кавычки.
     if [ "$LANG_EN" != 1 ] && [ -f /www/luci-static/resources/byway/lang.js ]; then
         _tb=$(printf '\t')
-        sed "/^$_tb$_tb\"/d" /www/luci-static/resources/byway/lang.js > /tmp/byway-lang.js.$$ &&
-            mv /tmp/byway-lang.js.$$ /www/luci-static/resources/byway/lang.js &&
-            chmod 644 /www/luci-static/resources/byway/lang.js
+        if sed "/^$_tb$_tb\"/d" /www/luci-static/resources/byway/lang.js > /tmp/byway-lang.js.$$; then
+            put /tmp/byway-lang.js.$$ /www/luci-static/resources/byway/lang.js 644
+        fi
+        rm -f /tmp/byway-lang.js.$$ 2>/dev/null || true
     fi
     for v in overview settings lists maint advanced; do
-        [ -f "$SRC/luci/$v.js" ] &&
-            cp "$SRC/luci/$v.js" "/www/luci-static/resources/view/byway/$v.js" && chmod 644 "/www/luci-static/resources/view/byway/$v.js"
+        [ ! -f "$SRC/luci/$v.js" ] || put "$SRC/luci/$v.js" "/www/luci-static/resources/view/byway/$v.js" 644
     done
     # Знак: плоское начертание идёт значком вкладки (шестнадцать пикселей --
     # грани там превращаются в грязь), обычное лежит рядом на будущее.
     for _g in logo-flat.svg logo.svg; do
-        [ -f "$SRC/$_g" ] &&
-            cp "$SRC/$_g" "/www/luci-static/resources/byway/$_g" &&
-            chmod 644 "/www/luci-static/resources/byway/$_g"
+        [ ! -f "$SRC/$_g" ] || put "$SRC/$_g" "/www/luci-static/resources/byway/$_g" 644
     done
-    [ -f "$SRC/luci/menu.json" ] &&
-        cp "$SRC/luci/menu.json" /usr/share/luci/menu.d/luci-app-byway.json && chmod 644 /usr/share/luci/menu.d/luci-app-byway.json
-    [ -f "$SRC/luci/acl.json" ] &&
-        cp "$SRC/luci/acl.json" /usr/share/rpcd/acl.d/luci-app-byway.json && chmod 644 /usr/share/rpcd/acl.d/luci-app-byway.json
+    [ ! -f "$SRC/luci/menu.json" ] || put "$SRC/luci/menu.json" /usr/share/luci/menu.d/luci-app-byway.json 644
+    [ ! -f "$SRC/luci/acl.json" ] || put "$SRC/luci/acl.json" /usr/share/rpcd/acl.d/luci-app-byway.json 644
     # Кэш меню LuCI надо сбросить, иначе раздел не появится до перезагрузки.
     for c in /tmp/luci-indexcache*; do [ -e "$c" ] && : > "$c"; done
     # Файлы панели браузер берёт по адресу с ?v=, а в нём LuCI держит время
@@ -1300,15 +1391,20 @@ if [ "$PANEL" = 1 ]; then
     for _db in /lib/apk/db/installed /usr/lib/opkg/status; do
         [ -f "$_db" ] && touch "$_db"
     done
-    /etc/init.d/rpcd restart >/dev/null 2>&1 || true
+    # reload, а не restart: права перечитываются, сессии LuCI живы (Ф9, п3-31).
+    /etc/init.d/rpcd reload >/dev/null 2>&1 || true
     say "панель LuCI: Сервисы → Byway"
 fi
 
-# Пути в keep-список прошивки: без этого sysupgrade снесёт byway, а правку
-# dnsmasq в /etc/config оставит. Дом остался бы без DNS.
+# Пути в keep-список прошивки: без этого sysupgrade снесёт byway, а
+# /etc/config/byway оставит -- служба без программы.
 # Перечислены ФАЙЛЫ, а не каталог /usr/local/bin целиком: там же обычно лежит
 # бинарник Xray на 34 МБ, а sysupgrade пакует сохраняемое в память -- каталогом
 # целиком мы бы клали роутер на ровном месте.
+# Последняя строка файла без перевода строки склеилась бы с первым дописанным
+# путём: и чужая запись, и /etc/byway/ пропадали из списка (Ф9, п3-39).
+[ ! -s /etc/sysupgrade.conf ] || [ "$(tail -c 1 /etc/sysupgrade.conf | wc -l)" = 1 ] ||
+    echo >> /etc/sysupgrade.conf
 for P in /etc/byway/ /etc/init.d/byway /etc/rc.d/S21byway /etc/rc.d/K10byway \
          /usr/local/bin/byway /usr/local/bin/byway-uninstall          /usr/bin/byway /usr/bin/byway-uninstall; do
     grep -qxF "$P" /etc/sysupgrade.conf 2>/dev/null || echo "$P" >> /etc/sysupgrade.conf
@@ -1388,24 +1484,29 @@ fi
 # переписывает адрес назначения, пакет приходит в input с исходным 198.18.x.x
 # и упирается в политику зоны. Без этого правила выбор гостевой сети в
 # настройках просто не работает, а uninstall его при этом удаляет как своё.
+# Блоком в конец файла, а не uci commit: тот переписывает /etc/config/firewall
+# целиком, и комментарии человека пропадали (Ф9, п3-41). Через файл рядом:
+# дописывание при нехватке места обрезало бы настройки firewall.
 if [ -z "$(uci -q get firewall.bywaytproxy 2>/dev/null)" ]; then
-    uci -q set firewall.bywaytproxy=rule
-    uci -q set firewall.bywaytproxy.name='byway-tproxy'
-    uci -q set firewall.bywaytproxy.src='*'
-    uci -q set firewall.bywaytproxy.proto='all'
     # И значение, и маска -- из настройки. Прежде маска стояла литералом,
     # и при своей метке правило выходило вида 0x200000/0x100000: маска не от
     # той метки, совпадение случайное.
     _fwm=$(uci -q get byway.main.mark || echo 0x100000)
-    uci -q set firewall.bywaytproxy.mark="$_fwm/$_fwm"
-    uci -q set firewall.bywaytproxy.target='ACCEPT'
-    uci commit firewall
-    /etc/init.d/firewall reload >/dev/null 2>&1 || true
-    say "правило firewall для гостевых сетей создано"
+    if { cat /etc/config/firewall; [ "$(tail -c 1 /etc/config/firewall | wc -l)" = 1 ] || echo
+         printf "\nconfig rule 'bywaytproxy'\n\toption name 'byway-tproxy'\n\toption src '*'\n\toption proto 'all'\n\toption mark '%s'\n\toption target 'ACCEPT'\n" "$_fwm/$_fwm"
+       } > /etc/config/firewall.bw-new && [ -s /etc/config/firewall.bw-new ] &&
+       mv /etc/config/firewall.bw-new /etc/config/firewall; then
+        /etc/init.d/firewall reload >/dev/null 2>&1 || true
+        say "правило firewall для гостевых сетей создано"
+    else
+        rm -f /etc/config/firewall.bw-new
+        warn "правило firewall для гостевых сетей не записано (место на флеше?)"
+    fi
 fi
 
 echo
 say "── Готово ──"
+[ "${NOENG:-0}" = 1 ] && warn "движок не найден: byway установлен, но служба не поднимется"
 /usr/local/bin/byway version
 echo
 
@@ -1421,7 +1522,14 @@ echo
 # смотрели только node_url, и автовыбор после обновления жил на старой сборке.
 # `|| true` у каждой: uci отвечает 1 на пустую опцию, а под set -e голое
 # присваивание обрывало установку и откатывало обновление.
-_cfgd=$(uci -q get byway.main.node_url 2>/dev/null || true)$(uci -q get byway.main.node_urls 2>/dev/null || true)$(uci -q get byway.main.outbound_json 2>/dev/null || true)
+_cfgd=$(uci -q get byway_key.main.node_url 2>/dev/null || true)$(uci -q get byway_key.main.node_urls 2>/dev/null || true)$(uci -q get byway_key.main.outbound_json 2>/dev/null || true)
+# Выключенная служба -- всё равно в procd: start при enabled 0 движок не
+# поднимает, но регистрирует службу с триггером настроек. Без этого галочка
+# «Включить» в панели после установки ничего не запускала до перезагрузки
+# (Ф9, п3-64).
+if [ "$(uci -q get byway.main.enabled 2>/dev/null || true)" != 1 ]; then
+    /etc/init.d/byway start >/dev/null 2>&1 || true
+fi
 if [ "$WAS_INSTALLED" = 1 ] && [ -n "$_cfgd" ]; then
     # Конфиг движка собран ПРЕЖНЕЙ версией программы. Один перезапуск поднял
     # бы движок на нём же: новая программа на диске, работает старая сборка,
@@ -1468,13 +1576,23 @@ if [ "$WAS_INSTALLED" = 1 ] && [ -n "$_cfgd" ]; then
         else
             warn "движок не поднялся или перезапускается по кругу — смотреть: logread -e byway"
             warn "  вернуть прежнюю версию: byway update --rollback"
-            warn "  движок от root вместо пользователя byway: uci set byway.main.xray_root=1 && uci commit byway && /etc/init.d/byway restart"
+            warn "  движок от root вместо пользователя byway: byway set xray_root on"
         fi
     fi
     if [ "$PANEL" = 1 ]; then
-        say "Обновлено. Если открыта панель — обновить страницу с очисткой кэша (Ctrl+F5)."
+        say "Обновлено. Если открыта панель — обновить страницу (F5); осталась прежняя — Ctrl+F5."
     else
         say "Обновлено."
+    fi
+elif [ -n "$_cfgd" ]; then
+    # Повторная установка поверх оставленных настроек: ключ на месте, три шага
+    # первой установки здесь ни к чему (Ф9, п3-48).
+    say "настройки и ключ остались от прежней установки"
+    if [ "$(uci -q get byway.main.enabled 2>/dev/null || true)" = 1 ]; then
+        /etc/init.d/byway restart >/dev/null 2>&1 || true
+        say "служба запущена — проверить: byway"
+    else
+        say "включить: byway on — проверить: byway"
     fi
 elif [ "$LANG_EN" = 1 ]; then
 # Метка в кавычках -- ОБЯЗАТЕЛЬНО. Без них оболочка разбирает тело как
@@ -1488,17 +1606,17 @@ _H() { printf '\033[1;36m%s\033[0m\n' "$1"; }
 _C() { printf '       \033[0;33m%s\033[0m\n' "$1"; }
 
 printf '\n\033[1;32m%s\033[0m\n' "Next:"
-_H "  1  The VPN key — web UI, Services → Byway → Overview, or by command:"
-_C "uci set byway.main.node_url='vless://…'"
-_C "uci set byway.main.enabled=1"
-_C "uci commit byway"
-_H "  2  Start now — after that it starts automatically at boot:"
-_C "/etc/init.d/byway start"
+if [ "${PANEL:-0}" = 1 ]; then
+    _H "  1  The VPN key — web UI, Services → Byway → Overview, or by command:"
+else
+    _H "  1  The VPN key — by command (the web UI was not installed):"
+fi
+_C "byway key 'vless://…'"
+_H "  2  Turn it on — after that it starts automatically at boot:"
+_C "byway on"
 _H "  3  Lists — AFTER the tunnel is up:"
-_C "uci add_list byway.main.preset=byway"
-_C "uci commit byway && byway presets"
-_C "/etc/init.d/byway reload"
-printf '     %s\n' "ready-made lists are fetched THROUGH the tunnel, and reload moves them into the config"
+_C "byway list ready on byway"
+printf '     %s\n' "ready-made lists are fetched THROUGH the tunnel"
 printf '\n  %s   %s\n' "Check the environment: byway doctor" "State: byway"
 else
 # Метка в кавычках -- ОБЯЗАТЕЛЬНО. Без них оболочка разбирает тело как
@@ -1525,16 +1643,12 @@ if [ "${PANEL:-0}" = 1 ]; then
 else
     _H "  1  Ключ VPN — командой (панель не ставилась):"
 fi
-_C "uci set byway.main.node_url='vless://…'"
-_C "uci set byway.main.enabled=1"
-_C "uci commit byway"
-_H "  2  Запуск сейчас — дальше служба стартует при загрузке роутера:"
-_C "/etc/init.d/byway start"
+_C "byway key 'vless://…'"
+_H "  2  Включить — дальше служба стартует при загрузке роутера:"
+_C "byway on"
 _H "  3  Списки — ПОСЛЕ того, как туннель поднялся:"
-_C "uci add_list byway.main.preset=byway"
-_C "uci commit byway && byway presets"
-_C "/etc/init.d/byway reload"
-printf '     %s\n' "готовые списки качаются через туннель, а reload переносит их в конфиг"
+_C "byway list ready on byway"
+printf '     %s\n' "готовые списки качаются через туннель"
 printf '\n  %s   %s\n' "Проверить окружение: byway doctor" "Состояние: byway"
 fi
 }

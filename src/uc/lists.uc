@@ -22,14 +22,17 @@ function _only(s, set) { return ltrim(s, set) === ''; }
 // против 17 у awk), а ltrim/index работают на C. Равносильно паре
 //   ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$  и
 //   \.([A-Za-z][A-Za-z]+|xn--[A-Za-z0-9-]+)$
-// плюс отказ на «..» (dots -- без него: так судит plain_domains).
+// плюс отказ на «..» (dots -- без него: так судит lj_plain).
 function _domain_ok(v, dots) {
 	let n = length(v);
 	if (!n || !_only(v, ALNUM + '.-') || index(ALNUM, substr(v, 0, 1)) < 0 ||
 	    index(ALNUM, substr(v, n - 1, 1)) < 0 || (!dots && index(v, '..') >= 0))
 		return false;
-	let d = rindex(v, '.');
+	let d = rpos(v, '.');
 	if (d < 0) return false;
+	// Метка длиннее 63 знаков: dnsmasq отвергал запрет доменов целиком, а
+	// ожидание движка висело на пробе (Ф9, п4-36).
+	for (let x in split(v, '.')) if (length(x) > 63) return false;
 	let tld = substr(v, d + 1);
 	if (length(tld) >= 2 && _only(tld, ALPHA)) return true;
 	return substr(tld, 0, 4) == 'xn--' && length(tld) > 4 && _only(substr(tld, 4), ALNUM + '-');
@@ -42,9 +45,64 @@ function _numgt(s, lim) {
 	return length(s) > 3 || (s !== '' && int(s) > lim);
 }
 
+// Число строго: цифры, без ведущего нуля (кроме самого «0»), не больше lim.
+// «091» nft разбирал как имя хоста и отвергал всю таблицу, «010» молча
+// читал восьмеричным 8, а Xray отвергал весь конфиг (Ф9, п4-35, п4-44).
+function lj_num(x, lim) {
+	return x !== '' && _only(x, '0123456789') && (length(x) == 1 || substr(x, 0, 1) != '0') && !_numgt(x, lim);
+}
+
+// a.b.c.d (net -- и a.b.c.d/n). Одна мерка для сборки и для nft.
+function lj_v4_ok(l, net) {
+	let s = index(l, '/'), a = s < 0 ? l : substr(l, 0, s);
+	if (s >= 0 && (!net || !lj_num(substr(l, s + 1), 32))) return false;
+	let o = split(a, '.');
+	if (length(o) != 4) return false;
+	for (let x in o) if (!lj_num(x, 255)) return false;
+	return true;
+}
+
+// IPv6 разбирается ЦЕЛИКОМ, а не «не больше восьми групп»: «2001:db8:»,
+// «1:::2» и пустая группа посреди адреса уходили в elements, и ядро
+// отвергало весь документ -- с ветками по доменам и по IPv4 (таблица inet
+// одна на оба семейства). Четвёртый аудит, заход 3. Та же мерка -- у сборки
+// (Ф9, п4-44: dead:beef и /200 проходили в конфиг Xray).
+const HEX = '0123456789abcdefABCDEF';
+function lj_v6_ok(l) {
+	let s = index(l, '/'), e = s < 0 ? l : substr(l, 0, s);
+	if (s >= 0) {
+		// Пустая длина после «/» прежде проходила (ядро отвергало набор).
+		let p = substr(l, s + 1);
+		// «/0128» -- не длина: ведущий ноль nft и Xray читают по-разному (прогон 5).
+		if (p === '' || !_only(p, '0123456789') || _numgt(p, 128) || (length(p) > 1 && substr(p, 0, 1) == '0')) return false;
+	}
+	if (e === '' || !_only(e, HEX + ':') || index(e, ':') < 0) return false;
+	let c = 0, t = e, j;
+	while ((j = index(t, '::')) >= 0) { c++; t = substr(t, j + 2); }
+	if (c > 1) return false;
+	if (c == 1) {
+		let p = index(e, '::'), ng = 0;
+		for (let h in [ substr(e, 0, p), substr(e, p + 2) ]) {
+			if (h === '') continue;
+			let g = split(h, ':');
+			for (let x in g) if (x === '' || length(x) > 4) return false;
+			ng += length(g);
+		}
+		// «::» обязано сжимать хотя бы одну группу.
+		return ng <= 7;
+	}
+	let g = split(e, ':');
+	if (length(g) != 8) return false;
+	for (let x in g) if (x === '' || length(x) > 4) return false;
+	return true;
+}
+
 // Отброшенная строка -- в файл bad. Наверху и с глобальным состоянием, не
 // вложенной функцией: см. uc/keys.uc о ucode 22.03/23.05.
 let LJ_BAD = null, LJ_BF = null;
+// Регулярки: LJ_RE собирает встреченные (для поиска отвергнутых движком),
+// LJ_RE_SKIP -- отвергнутые; ключ -- запись в виде конфига («regexp:…»).
+let LJ_RE = null, LJ_RE_SKIP = null;
 function lj_reject(s) {
 	if (!LJ_BAD) return;
 	LJ_BF ??= fs.open(LJ_BAD, 'a');
@@ -68,7 +126,12 @@ function lj_entry(l, dom, pfx) {
 			}
 		}
 		if (pre == 'regexp:') {
-			v = replace(replace(v, '\\', '\\\\'), '"', '\\"');
+			// Управляющий знак JSON сырым не пускает: Xray отвергал весь
+			// конфиг, reload молча оставлял прежний (Ф9, п1-22). Экранирует
+			// по JSON вывод (lj_stream, %J): здесь -- запись как есть.
+			if (match(v, /[\x01-\x1f\x7f]/)) { lj_reject(l); return null; }
+			if (LJ_RE_SKIP && LJ_RE_SKIP[pre + v]) { lj_reject(l); return null; }
+			if (LJ_RE) LJ_RE[pre + v] = true;
 		} else if (pre == 'keyword:') {
 			if (!_only(v, ALNUM + '._-')) { lj_reject(l); return null; }
 		} else {
@@ -77,21 +140,9 @@ function lj_entry(l, dom, pfx) {
 		}
 		return pre + v;
 	}
-	// Подсети: та же форма, что у set_elements для nft, с проверкой чисел --
-	// одна регулярка пропускает и 999.1.2.3, и /33. IPv6 -- грубо: строгую
-	// форму проверяет set_elements6, дальше строку разбирает сам Xray.
-	if (index(l, ':') >= 0) {
-		if (!match(l, /^[0-9a-fA-F:]+(\/[0-9]{1,3})?$/)) { lj_reject(l); return null; }
-	} else {
-		let ok = match(l, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/) != null;
-		if (ok) {
-			let oc = split(l, /[.\/]/);
-			for (let i = 0; i < 4; i++)
-				if (_numgt(oc[i], 255)) ok = false;
-			if (length(oc) == 5 && _numgt(oc[4], 32)) ok = false;
-		}
-		if (!ok) { lj_reject(l); return null; }
-	}
+	// Подсети: та же мерка, что у наборов nft (pl_elements): что принято в
+	// конфиг, принято и в перехват, и наоборот.
+	if (!(index(l, ':') >= 0 ? lj_v6_ok(l) : lj_v4_ok(l, true))) { lj_reject(l); return null; }
 	return pfx + l;
 }
 
@@ -118,7 +169,8 @@ function lj_stream(out, file, pfx, skip, ind, first) {
 		if (l == null || (skip && skip[l])) continue;
 		let e = lj_entry(l, dom, pfx);
 		if (e == null) continue;
-		push(buf, ind + '"' + e + '"');
+		// Кавычка и обратная косая законны только в regexp:, у прочих их нет.
+		push(buf, ind + (substr(e, 0, 7) == 'regexp:' ? sprintf('%J', e) : '"' + e + '"'));
 		if (length(buf) >= 2000) {
 			out.write(((n || !first) ? ',\n' : '\n') + join(',\n', buf));
 			n += length(buf);
@@ -168,7 +220,7 @@ function lj_count(file) {
 	return n;
 }
 
-// Запись, которую можно спросить у резолвера (plain_domains в lists/merge.sh):
+// Запись, которую можно спросить у резолвера:
 // без regexp:/keyword:, префиксы domain:/full: сняты; иначе null.
 function lj_plain(l) {
 	l = trim(replace(l, '\r', ''), WS);

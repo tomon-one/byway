@@ -37,6 +37,8 @@ Xray-core: вход dns-in 127.0.0.42:53 → исходящее dns-out → вс
   │ соединение на 198.18.x.x:443
   ▼
 nft: table inet byway, chain prerouting (priority mangle)
+  0. iifname не из interface, источник из privnets, ip daddr @fakeip
+                                          → tproxy на :1604 (вход «напрямую»), иначе drop
   1. iifname не из byway.main.interface  → return
   2. ip daddr @privnets                   → return
   3. socket transparent 1                 → метка, accept
@@ -47,6 +49,8 @@ ip rule fwmark 0x100000/0x100000 lookup 100
 table 100: local default dev lo           → доставка локальному сокету
   ▼
 Xray-core: вход tproxy-in 0.0.0.0:1602, sniffing fakedns/http/tls/quic
+          (для сетей вне interface — tproxy-direct :1604, sniffing только fakedns,
+           маршрут сразу direct)
   ▼
 routing → proxy | route-ИМЯ | direct | block
 ```
@@ -120,7 +124,9 @@ QUIC, затем `drop` для tcp/udp на `tproxy_port`. Оно закрыва
 соединения к адресам самого роутера (публичному адресу WAN, глобальному IPv6):
 через заворот гость иначе дотянулся бы до служб роутера. Петля и порт 53
 исключены. Движок опознаётся по uid процесса (не от root), иначе по метке
-`self_mark` при `router_via_vpn 1`; нечем опознать — цепочки нет.
+`self_mark`: она есть при `router_via_vpn 1` и у движка от root (`xray_root 1`,
+нет `procd-ujail` или не удалось подготовить пользователя `byway`); нечем
+опознать — цепочки нет.
 
 Отсюда же два следствия. Вход `tproxy-in` слушает `0.0.0.0`, а не петлю —
 пакет доходит до сокета с адресом `198.18.x.x`. И нужно правило
@@ -143,9 +149,17 @@ local default dev lo table 100`. Без них ядро переслало бы 
 дальше, и сокет tproxy его не увидел бы. Номер таблицы — константа `PL_RT` в
 коде: busybox `ip` не принимает номер больше 255. Чужие маршруты в таблице 100
 byway не трогает и говорит о них. `pl_route_down` удаляет маршрут, только если
-его создал byway (отметка `/tmp/byway-route-mine`).
+его создал byway (отметка `/var/run/byway-route-mine`).
 
 ### Внутри Xray-core
+
+`tproxy-direct` на порту `tproxy_port` плюс 2 (обычно 1604) принимает то, что
+uже предназначалось сетям вне `interface`: dnsmasq у byway один на все мосты и
+отдаёт им подставные адреса списка, а туннеля у них нет. Правило nft (до
+отсечки «не из interface») ведёт на этот вход пакеты с частного адреса на пул,
+xray возвращает имя (sniffing только `fakedns`, чтобы заголовок Host не
+подменил назначение) и отправляет соединение напрямую; приватные адреса в
+направлении — в `block`. Порт закрыт в `input`, как и порт `tproxy-in`.
 
 `tproxy-in` — `dokodemo-door` с `followRedirect` и `sockopt.tproxy`. Sniffing
 с `destOverride` `fakedns`, `http`, `tls`, `quic` и `routeOnly: false`:
@@ -364,11 +378,11 @@ meta mark & 0x100000 == 0x100000 udp dport 443 \
 достучаться до сервера и подняться; LuCI и ssh идут через `input` и не задеты;
 мосты вне `list interface` не закрыты. `keyword:` и `regexp:` по имени не
 закрыть (dnsmasq сопоставляет суффиксом) — byway называет их число. Итог
-пишется в `/tmp/byway-blocked`: `lists`, `all` или `none` (закрывать нечего
-либо ядро не приняло правило), рядом в `/tmp/byway-blocked.sig` — md5 от
+пишется в `/var/run/byway-blocked`: `lists`, `all` или `none` (закрывать нечего
+либо ядро не приняло правило), рядом в `/var/run/byway-blocked.sig` — md5 от
 режима, мостов, IPv6 и объединённых списков. Повторный `pl_block_on` с той же
 подписью и стоящим запретом ничего не делает (таблица `inet byway_block` и файл
-dnsmasq сверяются по списку частей в `/tmp/byway-blocked.parts`: снесённое
+dnsmasq сверяются по списку частей в `/var/run/byway-blocked.parts`: снесённое
 ставится заново); с другой пересобирает запрет на месте, без снятия:
 таблица заменяется одной транзакцией (прелюдия `table`/`delete table`), файл
 dnsmasq — после `dnsmasq --test` и только если он изменился. В режиме `all`
@@ -397,18 +411,18 @@ dnsmasq — после `dnsmasq --test` и только если он измен
 
 1. Замок `/var/run/byway-gen.lock`.
 2. Объединение списков: свой файл, готовые списки, направления. Кэш —
-   `/tmp/byway-domains-all.lst` и `/tmp/byway-subnets-all.lst`,
+   `/var/run/byway-domains-all.lst` и `/var/run/byway-subnets-all.lst`,
    пересобирается, если сменился набор источников или файл новее кэша.
 3. Каждое значение UCI, идущее в JSON или в правила nft, сверяется с образцом
    (`g_val_or`); не подошло — умолчание и предупреждение. Значения приходят и из
    панели, и из чужой выгрузки (`byway import`), поэтому проверяются.
-4. Черновик `/tmp/byway-config.new.json` (640 root:byway, 600 без группы
+4. Черновик `/var/run/byway-config.new.json` (640 root:byway, 600 без группы
    `byway`) проверяется `xray run
    -test -c`. Отвергнут — черновик остаётся, печатаются ошибка и подсказка,
    рабочий конфиг не тронут, код возврата 1. Принят — предупреждения движка об
    устаревших полях выводятся.
 5. Строки списков, не похожие ни на имя, ни на подсеть, отбрасываются
-   (`/tmp/byway-bad-entries`); у принятого конфига число и первые три
+   (`/var/run/byway-bad-entries`); у принятого конфига число и первые три
    печатаются до сравнения с рабочим, то есть и тогда, когда конфиг не
    изменился.
 6. Совпал с рабочим (`cmp`) — ничего не меняется. Иначе проверка свободного
@@ -469,7 +483,7 @@ root. Смена `xray_root` и ядра замечается `reload`: он с�
 `start`: `enabled` не `1` — `byway plumb off --service` и выход. При `closed`
 — `byway plumb close`. Нет файла движка — подсказка и выход; лежит рядом
 запускаемый `/usr/local/bin/xray-*` — подсказка называет его, иначе служба
-ставит метку `/tmp/byway-engine-restore` и в фоне, дождавшись маршрута по умолчанию (до двух минут), через 10 с после
+ставит метку `/var/run/byway-engine-restore` и в фоне, дождавшись маршрута по умолчанию (до двух минут), через 10 с после
 него зовёт `byway core restore` (вывод — в системный журнал), один раз за загрузку. Затем
 `byway gen`, инстанс procd, и в `service_started` до трёх попыток `byway plumb
 on` с паузой 10 с — в фоне, потому что вместе с ожиданием это до минуты, а
@@ -482,7 +496,7 @@ md5 `config.json` и md5 вывода `byway nftsig`.
 
 `stop`: сначала убивается фоновый цикл и его дети (если PID ещё принадлежит
 byway), затем `byway plumb off --service`. Флаг `--service` не ставит отметку
-«сняли руками» (`/tmp/byway-plumb-down`), иначе `byway watch` не восстановил
+«сняли руками» (`/var/run/byway-plumb-down`), иначе `byway watch` не восстановил
 бы правила после неудачного старта.
 
 `restart` и ветка reload «конфиг изменился» передают `--keep-dns`: резолвер
@@ -492,7 +506,8 @@ byway), затем `byway plumb off --service`. Флаг `--service` не ста
 запрет и остаётся до удачного `plumb on` (см. [Если движок не
 поднялся](#если-движок-не-поднялся)).
 
-`reload`. `service_triggers` регистрирует `procd_add_reload_trigger byway`, и
+`reload`. `service_triggers` регистрирует `procd_add_reload_trigger byway byway_key` (второй
+пакет — ключи), и
 procd зовёт reload по `reload_config`, то есть на каждое «Сохранить и
 применить» в LuCI, включая смену языка панели; сам byway зовёт его после
 обновления готовых списков. Голый `uci commit byway` из консоли службу не
@@ -544,12 +559,12 @@ watch`.
 куда смотрит dnsmasq, отдаёт ли резолвер подставной адрес) и по порядку:
 
 1. При `enabled 1` файл движка не проходит `x_ok`, запускаемого
-   `/usr/local/bin/xray-*` рядом нет, а метке `/tmp/byway-engine-restore`
+   `/usr/local/bin/xray-*` рядом нет, а метке `/var/run/byway-engine-restore`
    больше 15 минут или её нет — метка обновляется, в фоне `byway core
    restore`, вывод в системный журнал. Флешу нужно 25 МБ свободных; меньше —
    отказ до загрузки.
 2. Движка нет при `enabled 1` и без отметки «сняли руками» — `pl_block_on`
-   (действует при `closed`). Промахи считаются в `/tmp/byway-nopid`. На втором
+   (действует при `closed`). Промахи считаются в `/var/run/byway-nopid`. На втором
    подряд, если dnsmasq смотрит на DNS-вход, — `plumb off --service
    --keep-block`: резолвер к провайдеру, запрет остаётся. В журнал —
    `(nodns)`.
@@ -557,21 +572,21 @@ watch`.
    снимает запрет (`(healed)`), неудачный его оставляет (`(failed)`). При
    `enabled` не `1` — просто `pl_block_off`.
 4. Движок есть, `enabled 1`, `guard` не `0`, нет отметки «сняли руками»
-   (`/tmp/byway-plumb-down`), а таблицы, правила, маршрута или своего адреса
+   (`/var/run/byway-plumb-down`), а таблицы, правила, маршрута или своего адреса
    в `byway-dns.conf` нет — `plumb on`, в журнал `(healed)` или `(failed)`.
    Адрес сверяется по файлу, а не по работающему dnsmasq. Так чинится чужой
    `nft flush ruleset` или перезагрузка firewall.
 5. Готовые списки, проверка версии, автообновление (ниже), раз в час —
    `wt_hosts`: при `dns_route tunnel` адреса серверов из `dns.hosts`
    сверяются с DNS; сменился адрес (прежнего нет среди ответов) — `byway gen`
-   и `reload` (метка `/tmp/byway-hostcheck`).
+   и `reload` (метка `/var/run/byway-hostcheck`).
 6. `/var/run/byway/access.log` больше 4 МБ — обрезается до нуля: значит, не
    работает `byway stat`.
 7. Строка состояния дописывается в `/etc/byway/health.log` (200 строк), только
    если что-то изменилось или чинилось. Сменился PID движка, а резолвер уже
    отдаёт адрес из пула — `killall -HUP dnsmasq`.
 
-`byway plumb off` без `--service` ставит `/tmp/byway-plumb-down`, и `byway
+`byway plumb off` без `--service` ставит `/var/run/byway-plumb-down`, и `byway
 watch` не трогает правила до следующего `plumb on` или перезагрузки.
 
 ### byway stat
@@ -607,10 +622,10 @@ reload`. Срабатывает на ближайшем `byway watch` после
 ### Проверка версии и автообновление
 
 `update_check 1` (умолчание) — раз в случайные 12–36 часов запрос к GitHub
-API `releases/latest`. В `/tmp/byway-upcheck` лежит промежуток до следующей
+API `releases/latest`. В `/var/run/byway-upcheck` лежит промежуток до следующей
 проверки в минутах (720–2160, случайность из `/proc/sys/kernel/random/uuid`),
-mtime файла — время прошлой. Новее — номер в `/tmp/byway-newver`, первая
-строка описания в `/tmp/byway-relnote`, момент первого появления в
+mtime файла — время прошлой. Новее — номер в `/var/run/byway-newver`, первая
+строка описания в `/var/run/byway-relnote`, момент первого появления в
 `/etc/byway/.newver-seen`, строка в журнал. Ничего не скачивается.
 
 `auto_update 1` ставит найденное само; без `update_check` ставить нечего.
@@ -637,7 +652,7 @@ mtime файла — время прошлой. Новее — номер в `/t
 `example.com`, годится любой ответ HTTP, — он должен пройти и после. Не
 поднялось — `prev.tgz` распаковывается на место (`byway update --rollback`
 делает то же), служба перезапускается, версия пишется в `.au-failed`. **Откат
-возвращает версию целиком:** программу, init-скрипт, панель и словари. Итог — `/tmp/byway-autoupdate` и
+возвращает версию целиком:** программу, init-скрипт, панель и словари. Итог — `/var/run/byway-autoupdate` и
 системный журнал.
 
 ### Замена движка
@@ -657,7 +672,7 @@ mtime файла — время прошлой. Новее — номер в `/t
 меньше — замена через память, и только если прежнее ядро лежит в
 `/usr/local/bin/xray-*`; с пакетным byway отказывает. Сперва скачивается архив
 прежней версии для отката, затем служба останавливается примерно на минуту, и
-на это время ставится `/tmp/byway-plumb-down`, чтобы `byway watch` не
+на это время ставится `/var/run/byway-plumb-down`, чтобы `byway watch` не
 вмешивался; остановка идёт с `BYWAY_KEEP_BLOCK=1`, и запрет при `closed`
 держится всю минуту. В обоих случаях итог проверяется `up_alive_ok` и, если
 связь через сервер была до замены, `up_tunnel_ok`; при неудаче прежнее ядро
@@ -686,12 +701,16 @@ mtime файла — время прошлой. Новее — номер в `/t
 
 Запрос панели живёт секунды, обновление и замена ядра — минуты, поэтому кнопки
 «Поставить обновление» и «Поставить проверенное ядро» зовут `byway job update`
-и `byway job engine tested`. `job` отцепляет `byway job run …` (через
+и `byway job engine tested`; тем же способом идут `job gen`, `job presets`,
+`job restart`, `job reload` и `job import [--no-key]` (приём выгрузки из панели,
+файл — `/var/run/byway-import.txt`). `job` отцепляет `byway job run …` (через
 `setsid`, если он есть), пишет PID в `/var/run/byway-job.pid` и сразу
-отвечает. `job run` пишет вывод прямо в `/tmp/byway-job.log`, без конвейера,
+отвечает. `job run` пишет вывод прямо в `/var/run/byway-job.log`, без конвейера,
 чтобы ход был виден по мере работы, и в конце строку `== конец`. Одна задача
 за раз: при живом PID — отказ. `byway job log` отдаёт журнал без цветов и,
-пока задача жива, строку `… идёт` с кодом 3; панель опрашивает его раз в 3 с.
+пока задача жива, строку `… идёт` с кодом 3, после конца — 0 или 1 по итогу
+(код итога лежит в `/var/run/byway-job.rc`); панель опрашивает его раз в 3 с.
+Замок задачи — `/var/run/byway-job.lock` с PID: умерший владелец замок не держит.
 `byway doctor` и `byway report` панель зовёт напрямую — они укладываются в
 секунды.
 
@@ -765,6 +784,7 @@ HUP.
 | `/usr/local/bin/xray-ВЕРСИЯ` | движок, если ставился с GitHub |
 | `/etc/init.d/byway` | служба |
 | `/etc/config/byway` | UCI: секция `main`, секции `route` для направлений |
+| `/etc/config/byway_key` | UCI, права 600: `node_url`, `node_urls`, `sub_url`, `outbound_json` (ключи отдельно, чтобы роль панели «чтение» их не получала) |
 | `/etc/byway/domains.lst`, `subnets.lst` | свои списки; домены понимают `full:`, `keyword:`, `regexp:` |
 | `/etc/byway/presets/ИМЯ.lst`, `ИМЯ.sub` | скачанные готовые списки: домены и подсети |
 | `/etc/byway/routes/ИМЯ.lst` | список направления |
@@ -773,24 +793,26 @@ HUP.
 | `/etc/byway/health.log`, `usage.tsv` | журнал `byway watch`, учёт `byway stat` |
 | `/etc/byway/prev.tgz`, `.binmd5`, `.au-try`, `.au-failed`, `.newver-seen` | автообновление; `prev.tgz` — прежняя версия целиком для отката |
 | `/var/run/byway/access.log` | журнал обращений Xray-core |
-| `/tmp/byway-config.new.json` | черновик; остаётся, если движок его отверг |
-| `/tmp/byway-domains-all.lst`, `byway-subnets-all.lst` (+ `.sig`) | объединённые списки |
-| `/tmp/byway-bad-entries` | отброшенные строки списков |
-| `/tmp/byway-blocked`, `.sig`, `.parts` | действующий запрет: `lists`, `all`, `none`; подпись, по которой он пересобирается; части запрета (таблица, файл dnsmasq) для сверки |
-| `/tmp/byway-plumb-down` | правила сняты вручную |
-| `/tmp/byway-route-mine`, `byway-route-mine6` | маршрут в таблице 100 создан byway |
-| `/tmp/byway-watch.last`, `byway-nopid` | прошлое состояние и счётчик промахов `byway watch` |
+| `/var/run/byway-config.new.json` | черновик; остаётся, если движок его отверг |
+| `/var/run/byway-domains-all.lst`, `byway-subnets-all.lst` (+ `.sig`) | объединённые списки |
+| `/var/run/byway-bad-entries` | отброшенные строки списков |
+| `/var/run/byway-blocked`, `.sig`, `.parts` | действующий запрет: `lists`, `all`, `none`; подпись, по которой он пересобирается; части запрета (таблица, файл dnsmasq) для сверки |
+| `/var/run/byway-plumb-down` | правила сняты вручную |
+| `/var/run/byway-route-mine`, `byway-route-mine6` | маршрут в таблице 100 создан byway |
+| `/var/run/byway-watch.last`, `byway-nopid` | прошлое состояние и счётчик промахов `byway watch` |
 | `/var/run/byway/fakemap`, `fakemap.pos`, `statmark` | учёт `byway stat` |
-| `/tmp/byway-upcheck`, `-newver`, `-relnote`, `-autoupdate` | проверка версии, итог автообновления |
-| `/tmp/byway-upcheck-ok`, `-fail` | время последней проверки, дошедшей до GitHub, и код ответа неудачной; по ним `byway doctor` видит, доходит ли проверка |
+| `/var/run/byway-upcheck`, `-newver`, `-relnote`, `-autoupdate` | проверка версии, итог автообновления |
+| `/var/run/byway-upcheck-ok`, `-fail` | время последней проверки, дошедшей до GitHub, и код ответа неудачной; по ним `byway doctor` видит, доходит ли проверка |
 | `/etc/byway/.github-noexec` | метка: сборка ядра с GitHub на этом процессоре не запускается |
 | `/etc/byway/before-import/` | копия настроек и списков до `byway import` (права 700, с ключом) |
-| `/tmp/byway-dialbug` | итог проверки ядра на ошибку Go 1.27 для файла ядра |
-| `/tmp/byway-engine-restore` | метка попытки поставить пропавшее ядро: служба — раз за загрузку, `byway watch` — когда она старше 15 минут |
-| `/tmp/byway-job.log`, `/var/run/byway-job.pid` | ход и PID фоновой задачи панели (`byway job`) |
+| `/var/run/byway-dialbug` | итог проверки ядра на ошибку Go 1.27 для файла ядра |
+| `/var/run/byway-engine-restore` | метка попытки поставить пропавшее ядро: служба — раз за загрузку, `byway watch` — когда она старше 15 минут |
+| `/var/run/byway-job.log`, `byway-job.pid`, `byway-job.rc`, `byway-job.lock` | ход, PID, код итога и замок фоновой задачи панели (`byway job`) |
+| `/var/run/byway-import.txt` | выгрузка, принятая панелью; после приёма удаляется (в ней ключ) |
+| `/var/run/byway-mark` | применённая метка перехвата (только hex, не 0) |
 | `/var/run/byway.pid`, `byway.applied` | PID обёртки ujail (движок — её потомок); слепок применённого для reload |
 | `/var/run/byway-caps.json` | права движка для procd-ujail |
-| `/tmp/byway-hostcheck` | метка часовой сверки адресов серверов (`wt_hosts`) |
+| `/var/run/byway-hostcheck` | метка часовой сверки адресов серверов (`wt_hosts`) |
 | `/var/run/byway-plumb.pid`, `byway-nostart` | фоновый цикл подъёма; «старт отказал, цикл не запускать» |
 | `<conf-dir dnsmasq>/byway-dns.conf` | перевод dnsmasq на DNS-вход, пока стоит перехват |
 | `<conf-dir dnsmasq>/byway-block.conf` | запрет по именам при `closed` |

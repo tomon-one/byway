@@ -21,15 +21,16 @@ cmd_gen() {
     # Список негодных строк -- до сборки списков и направлений.
     : > "$BADLIST" 2>/dev/null || true
 
-    # Слияние списков с пресетами и метка сокетов -- пока на shell (списки,
-    # перехват): ucode получает готовое.
-    D=$LISTS/domains.lst
-    S=$(merged_subnets)
-    MERGED=$(merged_domains)
+    # Слияние списков с пресетами (uc/merge.uc) и метка сокетов: ucode
+    # получает готовое.
+    # Склейка отказывает словами (нет места в /tmp): подстановка их глотала
+    # бы, и сборка молча обрывалась.
+    S=$(merged_subnets) || { printf '%s\n' "$S"; exit 1; }
+    MERGED=$(merged_domains) || { printf '%s\n' "$MERGED"; exit 1; }
     _gm=$(ob_env_mark)
     _grc=0
     BW_OUT=$OUT BW_LISTS=$LISTS BW_ROUTES=$ROUTES_DIR BW_MERGED=$MERGED BW_SUBNETS=$S \
-    BW_BADLIST=$BADLIST BW_ACCESS=$ACCESS BW_PROBE=$PROBE_DOMAIN BW_POOL6_DEF=$POOL6_DEF \
+    BW_BADLIST=$BADLIST BW_ACCESS=$ACCESS BW_PROBE=$PROBE_DOMAIN \
     BW_SELFMARK=$_gm \
         bw_uc gen || _grc=$?
     rm -rf "$_lock" 2>/dev/null || true

@@ -2,10 +2,10 @@
 // и `run -test`, probe -- одно соединение через ноду. Боевой конфиг, nft и
 // dnsmasq не трогаются -- можно на работающем роутере.
 
-const PR_CHECK = '/tmp/byway-check.json';
-const PR_CFG = '/tmp/byway-probe.json';
-const PR_LOG = '/tmp/byway-probe.log';
-const PR_OUT = '/tmp/byway-probe.out';
+const PR_CHECK = '/var/run/byway-check.json';
+const PR_CFG = '/var/run/byway-probe.json';
+const PR_LOG = '/var/run/byway-probe.log';
+const PR_OUT = '/var/run/byway-probe.out';
 // pid движка пробы: по нему shell-обёртка гасит движок, если probe прервали
 // (Ctrl+C) -- сам ucode сигналы не ловит. Каталог root, не общий /tmp: иначе
 // чужой процесс подложил бы номер, и root убил бы его.
@@ -66,7 +66,7 @@ function cmd_check(url) {
 	}
 	print(_t('ОТВЕРГНУТ\n'));
 	let l = pr_tail(r.out, 1)[0] ?? '';
-	let i = rindex(l, '> ');
+	let i = rpos(l, '> ');
 	print(i < 0 ? l : '    ' + substr(l, i + 2), '\n');
 	g_xray_hint(r.out);
 	exit(1);
@@ -113,7 +113,7 @@ function pr_one(x, url, soft, name) {
 	for (let i = 0; i < 5 && fs.stat('/proc/' + pid); i++) system([ 'sleep', '1' ]);
 	fs.unlink(PR_PID);
 	let sp = index(R, ' ');
-	let code = sp < 0 ? R : substr(R, 0, sp), time = substr(R, rindex(R, ' ') + 1);
+	let code = sp < 0 ? R : substr(R, 0, sp), time = substr(R, rpos(R, ' ') + 1);
 	// Любой трёхзначный код -- связь состоялась (302, 403 Cloudflare).
 	let ok = match(code, /^[1-5][0-9][0-9]$/) != null;
 	if (ok && PR_TTY) {
@@ -136,15 +136,20 @@ function pr_one(x, url, soft, name) {
 // bw_uc probe [ССЫЛКА|--all]: соединение через ноду со своим socks-входом.
 // PROBE_URL -- сайт вместо выхода; PROBE_PORT -- порт входа.
 function cmd_probe(arg) {
+	// Ссылка от фоновой задачи панели -- окружением (job.sh).
+	arg ??= getenv('BW_PROBE_LINK');
+	// Автовыбор без довода -- все ключи списка: node_url в нём не участвует,
+	// и проба старого ключа отвечала «РАБОТАЕТ» (Ф9, п3-11, прогон 5).
+	if ((arg == null || arg === '') && u('conn_mode') == 'urltest' && length(ul('node_urls'))) arg = '--all';
 	let x = pr_xray();
 	if (arg == '--all') {
 		// Каждый ключ автовыбора отдельно; негодный не обрывает остальных.
-		let keys = split(trim(u('node_urls')), /[ \t\n]+/);
-		if (keys[0] == '') die('ключей автовыбора нет (byway.main.node_urls) — проверять нечего');
+		let keys = ul('node_urls');
+		if (!length(keys)) die('ключей автовыбора нет (byway_key.main.node_urls) — проверять нечего');
 		let i = 0, okn = 0;
 		for (let k in keys) {
 			i++;
-			let h = rindex(k, '#'), nm = h < 0 ? '' : pk_pctd(substr(k, h + 1));
+			let nm = pk_label(k);
 			if (PR_TTY) {
 				fs.stdout?.flush();
 				if (pr_one(x, k, true, nm !== '' ? nm : _f('ключ %s', i))) okn++;
@@ -157,17 +162,19 @@ function cmd_probe(arg) {
 		if (PR_TTY) {
 			let col = okn == i ? '\033[1;32m' : (okn ? '\033[1;33m' : '\033[1;31m');
 			print('\n  ', col, _f('работают %s из %s', okn, i), '\033[0m\n');
-			return;
+		} else {
+			print('\n');
+			sayf('работают %s из %s', okn, i);
 		}
-		print('\n');
-		sayf('работают %s из %s', okn, i);
+		// Ни один не работает -- отказ кодом, как у пробы одного ключа (Ф9, п4-63).
+		if (!okn) exit(1);
 		return;
 	}
 	let url = arg ?? '';
 	// Без аргумента в режиме «свой конфиг» проверяется он, как у check.
 	if (url === '' && u('conn_mode') != 'outbound') {
 		url = u('node_url');
-		if (url === '') die('ссылка не задана: передать аргументом либо записать в byway.main.node_url');
+		if (url === '') die("ссылка не задана: передать аргументом либо записать: byway key 'ССЫЛКА'");
 	}
 	if (!pr_one(x, url, false)) exit(1);
 }

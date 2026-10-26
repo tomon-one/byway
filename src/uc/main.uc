@@ -51,6 +51,11 @@ const CMDS = {
 	list: cmd_list,
 	mode: cmd_mode,
 	unknown: cmd_unknown,
+	// Служебная: commit с проверкой места (core.uc uci_commit) для shell.
+	ucommit: function (p) { exit(uci_commit(p ?? '') ? 0 : 1); },
+	// Служебная: перенос ключей в byway_key делает сам разбор команды ниже
+	// (установщик зовёт её после обновления).
+	keymove: function () {},
 	onoff: function (on) { cmd_onoff(on == '1'); },
 	add: cmd_add,
 	del: cmd_del,
@@ -58,4 +63,7 @@ const CMDS = {
 
 let _cmd = ARGV[0] ?? '';
 if (CMDS[_cmd] == null) cmd_unknown(_cmd);
+// Ключи прежних версий -- в byway_key при первой же команде (Ф9, п1-12).
+// Частые служебные (перевод init, версия) не трогают UCI.
+if (index([ 'version', 'xlat', 'hfmt', 'parse', 'ucommit' ], _cmd) < 0) key_move();
 CMDS[_cmd](...slice(ARGV, 1));

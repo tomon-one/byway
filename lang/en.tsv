@@ -68,12 +68,10 @@ dns\tok\tотвечает\n	dns\tok\tanswers\n
   Ключ никуда не отправляется и в журнал не пишется.\n\n	  The key is not sent anywhere and is not written to the log.\n\n
   \033[1;32mключ принят\033[0m\n	  \033[1;32mkey accepted\033[0m\n
   \033[1;31mключ не разобран\033[0m, вот что говорит проверка:\n\n	  \033[1;31mkey not parsed\033[0m, here is what the check says:\n\n
-\n  Ключи выше. Вписать нужный — пункт 2.\n	\n  The keys are listed above. To use one, pick item 2.\n
   Сейчас: \033[1m%s\033[0m\n\n	  Now: \033[1m%s\033[0m\n\n
   Через VPN пойдёт весь трафик, включая загрузки и обновления.\n	  All traffic will go through the VPN, downloads and updates included.\n
   доменов %s, подсетей %s\n\n	  %s domains, %s subnets\n\n
   Туннеля не станет, интернет продолжит работать напрямую.\n	  The tunnel will be gone, the internet keeps working directly.\n
-\n  остановлена\n	\n  stopped\n
 \n  автозапуск выключен\n	\n  autostart off\n
 \n  автозапуск включён\n	\n  autostart on\n
   Все настройки и списки одним текстом: перенести на другой\n	  All settings and lists as a single text: move them to another\n
@@ -136,16 +134,16 @@ byway import ФАЙЛ [--no-key] — файл от byway export	byway import FIL
 применено. byway выключен настройкой -- включить: byway on	applied. byway is switched off in the settings -- turn it on: byway on
 конфиг не собрался — прежние настройки возвращаются на место	the config did not build — the previous settings are put back
 настройки из файла не приняты, прежние на месте	the settings from the file were not accepted, the previous ones are in place
-ссылка не задана: передать аргументом либо записать в byway.main.node_url	no link given: pass it as an argument or write it into byway.main.node_url
+ссылка не задана: передать аргументом либо записать: byway key 'ССЫЛКА'	no link given: pass it as an argument or set it: byway key 'LINK'
 другая сборка конфига не закончилась за 30 секунд	another config build did not finish within 30 seconds
 xray не найден	xray not found
 нет списка доменов %s	no domain list %s
 нет списка подсетей %s — правило по адресам не будет создано	no subnet list %s — the address rule will not be created
 движок: %s	engine: %s
 записей отброшено как неподходящие: %s	entries dropped as unsuitable: %s
-  причина: не похоже ни на домен (буквы, цифры, дефис и точки; последняя часть — не короче двух букв), ни на подсеть IPv4, либо длиннее 253 знаков	  reason: it looks neither like a domain (letters, digits, hyphen and dots; the last part at least two letters) nor like an IPv4 subnet, or it is longer than 253 characters
+  причина: не похоже ни на домен (буквы, цифры, дефис и точки; последняя часть — не короче двух букв), ни на подсеть IPv4, либо длиннее 253 знаков, либо регулярку (regexp:) не принял движок	  reason: it looks neither like a domain (letters, digits, hyphen and dots; the last part at least two letters) nor like an IPv4 subnet, or it is longer than 253 characters, or the engine rejected the regular expression (regexp:)
 конфиг собран и проверен движком: %s (%s байт)	config built and verified by the engine: %s (%s bytes)
-  доменов %s (свои %s + пресеты), подсетей %s	  %s domains (%s own + presets), %s subnets
+  доменов %s (в своём списке %s, остальное — направления и пресеты), подсетей %s	  %s domains (%s in your own list, the rest from routes and presets), %s subnets
   доменов %s, подсетей %s	  %s domains, %s subnets
   подключение: %s — Xray-core выбирает рабочий ключ по задержке	  connection: %s — Xray-core picks a working key by latency
   подключение: %s (%s:%s), транспорт %s, защита %s	  connection: %s (%s:%s), transport %s, security %s
@@ -172,8 +170,6 @@ byway sub <адрес подписки>	byway sub <subscription address>
 не OpenWrt	not OpenWrt
 byway рассчитан на OpenWrt, на другом может не работать	byway is made for OpenWrt, elsewhere it may not work
 вписать на вкладке «Основное» или: byway key 'ССЫЛКА'	write it on the "Overview" tab, or: byway key 'LINK'
-ключ не заполнен	the key is still a placeholder
-вписать настоящий ключ вместо заглушки	write a real key in place of the placeholder
 списки не нужны: режим «всё через VPN»	lists are not needed: mode "everything through the VPN"
 список доменов пуст	the domain list is empty
 через VPN не пойдёт ничего: наполнить или включить пресет	nothing will go through the VPN: fill the list or enable a preset
@@ -301,7 +297,7 @@ GitHub ответил %s, но версии в ответе нет	GitHub answer
 направление «%s» ведёт в «%s»	route "%s" leads to "%s"
 направление «%s»: список %s пуст, пропущено	route "%s": the list %s is empty, skipping
 направление «%s»: ключа с меткой «%s» среди добавленных нет	route "%s": none of the added keys is labelled "%s"
-направление «%s»: ключ не разбирается, пропущено	route "%s": the key does not parse, skipping
+направление «%s»: ключ не разбирается (%s), пропущено	route "%s": the key does not parse (%s), skipping
 направлений со своим выходом: %s	routes with their own exit: %s
 есть	yes
 провайдер	ISP
@@ -330,7 +326,7 @@ IPv6 поднят, а перехват только по IPv4	IPv6 is up, interc
   пинов из /etc/hosts внутри подсетей byway: %s	  /etc/hosts pins inside byway subnets: %s
   их адреса уйдут в туннель, хотя пин ставят затем, чтобы шли мимо	  those addresses will go through the tunnel, though a pin exists to keep them out of it
   что бывает:	  what exists:
-  подключить: byway list ready on ИМЯ	  switch one on: uci add_list byway.main.preset=NAME && uci commit byway && byway presets && /etc/init.d/byway reload
+  подключить: byway list ready on ИМЯ	  switch one on: byway list ready on NAME
 движка нет (%s) — ключ проверить нечем; сам ключ тут ни при чём	no engine (%s) — nothing to check the key with; the key itself is not at fault
 файрвол firewall4	firewall4
 firewall4 не найден — вероятно firewall3, 21.02 и старше	firewall4 not found — probably firewall3, 21.02 or older
@@ -343,11 +339,6 @@ firewall4 не найден — вероятно firewall3, 21.02 и старш�
 автообновление включено, но byway правлен руками	auto-update is on, but byway has been edited by hand
 автообновление включено	auto-update is on
 пул %s: маска /%s не годится -- взято умолчание	pool %s: mask /%s is not usable -- falling back to the default
-пул %s лежит в приватном или зарезервированном -- он мёртв: цепочка nft отсекает такие адреса первым же правилом	pool %s is inside private or reserved space -- it is dead: the nft chain drops such addresses in its very first rule
-пул %s лежит в 172.16/12 -- он мёртв	pool %s is inside 172.16/12 -- it is dead
-пул %s лежит в 192.168/16 -- он мёртв	pool %s is inside 192.168/16 -- it is dead
-пул %s лежит в 169.254/16 -- он мёртв	pool %s is inside 169.254/16 -- it is dead
-пул %s лежит в 100.64/10 -- он мёртв	pool %s is inside 100.64/10 -- it is dead
 доменов %s, а адресов в пуле %s — часть будет вытесняться и уводить соединения к чужому хосту. Расширить пул (byway.main.fakeip_pool) либо укоротить список	domains %s, addresses in the pool %s — some will be evicted and send connections to the wrong host. Widen the pool (byway.main.fakeip_pool) or shorten the list
 %s: источники дали больше 32 МБ — загрузка отменена, прежний список на месте	%s: sources returned more than 32 MB — download cancelled, the previous list is kept
 настройка %s = «%s» не годится для %s, взято %s	setting %s = "%s" is not usable for %s, falling back to %s
@@ -435,7 +426,7 @@ VPN для программ на роутере (router_via_vpn) включён,
   и запрет «не пускать мимо VPN» их не закроет: пин старше address=/домен/	  and the "no traffic outside the VPN" block will not cover them either: a pin outranks address=/domain/
 туннеля нет, и трафик перечисленных сетей мимо VPN закрыт: так велит настройка «не пускать мимо VPN». Сети вне byway.main.interface запрет не закрывает	no tunnel, and traffic from the listed networks is blocked outside the VPN: the "no traffic outside the VPN" setting says so. Networks outside byway.main.interface are not covered by the block
 правила не легли в ядро — %s	rules did not reach the kernel - %s
-и домены, и подсети закрывают только IPv4: клиент, получивший AAAA, предпочтёт его и уйдёт напрямую. Выключить IPv6 на WAN -- либо помнить, что подсети сервиса его не покрывают	both domains and subnets cover IPv4 only: a client that got an AAAA record will prefer it and go direct. Turn IPv6 off on the WAN - or remember that the service subnets do not cover it
+домены списка не задеты (AAAA на них роутер не отдаёт), но подсети закрывают только IPv4: устройство, узнавшее адрес сервиса не у роутера, уйдёт к нему по IPv6 напрямую. Выключить IPv6 на WAN -- либо помнить, что подсети сервиса его не покрывают	list domains are not affected (the router gives them no AAAA), but subnets cover IPv4 only: a device that learned the service address elsewhere will reach it over IPv6 directly. Turn IPv6 off on the WAN - or remember that the service subnets do not cover it
 dnsmasq отвечает по пину сам, подставного адреса не будет — эти домены в туннель не пойдут, и запрет «не пускать мимо VPN» их тоже не закроет	dnsmasq answers from the pin itself, so there will be no fake address - those domains will not enter the tunnel, and the "no traffic outside the VPN" block will not cover them either
 маршрут решает DNS: устройство с «Приватным DNS», DoH в браузере или чужим резолвером в настройках уйдёт напрямую, и byway этого не увидит. Шифрованный DNS («Приватный DNS», DoH) выключается только на самом устройстве: перехват 53-го порта его не берёт. Чужой резолвер без шифрования ловит перехват 53-го порта в firewall. Для всех трёх случаев годятся ПОДСЕТИ сервиса рядом с доменами: подсеть работает по адресу, а значит и для того, кто спросил адрес не у роутера. Но подсети покрывают ТОЛЬКО IPv4: клиент, получивший AAAA, уйдёт мимо них	the route is decided by DNS: a device with Private DNS, DoH in the browser or a foreign resolver in its settings goes direct, and byway does not see it. Encrypted DNS (Private DNS, DoH) can only be turned off on the device itself: intercepting port 53 does not catch it. A foreign resolver without encryption is caught by intercepting port 53 in the firewall. For all three cases the service's SUBNETS next to the domains work: a subnet works by address, so also for whoever asked for the address elsewhere. But subnets cover ONLY IPv4: a client that got an AAAA record goes around them
 VPN для программ на роутере работает по доменам списка: наполнить список либо подключить готовый	the redirect works by the domains of the list: fill the list in or enable a preset
@@ -467,7 +458,7 @@ self_mark пересекается битами с mark %s -- взято %s	self
 перехват включён без DNS: таблица inet %s, правило fwmark	interception is on without DNS: table inet %s, fwmark rule
 автообновление включено, но суточная проверка версий выключена	auto-update is on, but the daily version check is off
 ключи для автовыбора не заданы	no keys set for auto-select
-добавить на вкладке «Основное» либо: byway key sub АДРЕС	add on the Overview tab, or: uci add_list byway.main.node_urls=vless://...
+добавить на вкладке «Основное» либо: byway key sub АДРЕС	add on the Overview tab, or: byway key sub ADDRESS
 свой конфиг аутбаунда задан	custom outbound config is set
 вписать кусок JSON на вкладке «Основное»	paste the JSON snippet on the Overview tab
 без проверки версий автообновлению нечего ставить — включить: byway set update_check on	without the version check auto-update has nothing to install — turn it on: byway set update_check on
@@ -578,9 +569,7 @@ obfs=salamander у hysteria2 нужен Xray-core 26.7.11 или новее, а 
 транспорт %s не поддержан — есть ws, tcp/raw, kcp, grpc, httpupgrade, xhttp, hysteria	transport %s is not supported — available: ws, tcp/raw, kcp, grpc, httpupgrade, xhttp, hysteria
 в ключе отключена проверка сертификата (allowInsecure или insecure), а Xray-core с 26.3.27 так не умеет: нужен отпечаток сертификата сервера (pcs= или pinSHA256=) либо настоящий сертификат на сервере	the key turns off certificate checks (allowInsecure or insecure), and since 26.3.27 Xray-core cannot do that: the key needs the server certificate fingerprint (pcs= or pinSHA256=), or the server needs a real certificate
 проверка сертификата по отпечатку (pcs, vcn) нужна Xray-core 26.3.27 или новее, а стоит %s — обновить: byway core tested	certificate checks by fingerprint (pcs, vcn) need Xray-core 26.3.27 or newer, and %s is installed — update: byway core tested
-mux к wireguard не применяется: у него нет потока, который можно делить	mux does not apply to wireguard: it has no stream to split
 в поле «%s» ссылки управляющий знак (перевод строки, табуляция): такая ссылка подменяет поля конфига	the «%s» field of the link has a control character (newline, tab): such a link overrides config fields
-scy=%s у vmess Xray-core не знает: есть auto, aes-128-gcm, chacha20-poly1305, none, zero	Xray-core does not know scy=%s for vmess: there are auto, aes-128-gcm, chacha20-poly1305, none, zero
 plugin у shadowsocks не переносится: Xray-core плагины не запускает, сервер с плагином не ответит	the shadowsocks plugin is not carried over: Xray-core does not run plugins, and a server with a plugin will not answer
 не отвечает	not responding
 трафик не проходит	traffic does not pass
@@ -589,7 +578,7 @@ plugin у shadowsocks не переносится: Xray-core плагины не
 aid у vmess — не число: %s	vmess aid is not a number: %s
 ss-ссылка не разобралась	the ss link could not be parsed
 flow=%s у trojan Xray-core не поддерживает — пропущен	Xray-core does not support flow=%s for trojan — skipped
-ключей автовыбора нет (byway.main.node_urls) — проверять нечего	no auto-select keys (byway.main.node_urls) — nothing to check
+ключей автовыбора нет (byway_key.main.node_urls) — проверять нечего	no auto-select keys (byway_key.main.node_urls) — nothing to check
 ключ %s %s	key %s %s
 работают %s из %s	%s of %s work
 ключ пропущен: %s	key skipped: %s
@@ -614,7 +603,7 @@ flow=%s у trojan Xray-core не поддерживает — пропущен	X
 задача запущена: byway %s	task started: byway %s
 конец	done
 … идёт	… in progress
-byway job update|engine [ВЕРСИЯ]|probe [ССЫЛКА|--all]|log	byway job update|engine [VERSION]|probe [LINK|--all]|log
+byway job update|engine [ВЕРСИЯ]|probe [ССЫЛКА|--all]|gen|presets|restart|reload|import [--no-key]|log	byway job update|engine [VERSION]|probe [LINK|--all]|gen|presets|restart|reload|import [--no-key]|log
 byway watch: ядра нет -- byway core restore в фоне	byway watch: no core -- byway core restore in the background
   GitHub не ответил ни через туннель, ни напрямую, ни по адресам из DoH — проверить связь роутера и повторить	  GitHub did not answer through the tunnel, directly or at addresses from DoH — check the router's connection and retry
 xmux        не ограничивает соединения: ядро собрано на Go 1.27, см. byway doctor\n	xmux        does not limit connections: the core is built with Go 1.27, see byway doctor\n
@@ -698,7 +687,7 @@ byway выключен в /etc/config/byway (option enabled)	byway is turned off
   указать его: byway set xray_bin %s	  point byway at it: byway set xray_bin %s
   движок ставится в фоне: byway core restore (журнал: logread -e byway)	  the core is being installed in the background: byway core restore (log: logread -e byway)
   поставить руками: byway core restore, либо %s xray-core	  install by hand: byway core restore, or %s xray-core
-  либо указать свой путь: byway set xray_bin /путь/к/xray	  or set your own path: uci set byway.main.xray_bin=/path/to/xray
+  либо указать свой путь: byway set xray_bin /путь/к/xray	  or set your own path: byway set xray_bin /path/to/xray
 конфиг не пересобрался — служба поднимается на прежнем рабочем конфиге	the config was not rebuilt — the service starts on the previous working config
 правила перехвата не легли с попытки %s, следующая через паузу	interception rules failed on attempt %s, the next one after a pause
 правила перехвата не легли за три попытки -- туннеля нет, интернет работает напрямую	interception rules failed after three attempts -- no tunnel, internet works directly
@@ -724,8 +713,8 @@ reload: конфиг не изменился, служба не тронута	r
 \n  byway ВЫКЛЮЧЕН настройкой — служба не запускается\n	\n  byway is TURNED OFF by setting — the service does not start\n
 \n  движок не поднялся — смотреть: logread -e byway\n	\n  the core did not come up — see: logread -e byway\n
 сбор статистики выключен — включить: byway set show_usage on (в панели: Обслуживание → Сбор статистики)	statistics collection is off — turn on: byway set show_usage on (panel: Maintenance → Statistics collection)
-byway возьмёт другое значение сам (его видно в byway nft, строка «meta mark … return»); закрепить: byway set self_mark ЗНАЧЕНИЕ	byway will pick another value itself (see byway nft, the "meta mark … return" line); to pin it: uci set byway.main.self_mark=VALUE && uci commit byway && /etc/init.d/byway reload
-их клиенты получат подставной адрес, до туннеля не дойдут и потеряют ВЕСЬ список. Лечится одним из двух: добавить сеть в byway.main.interface либо выдать ей свой DNS через dhcp_option '6,…'	their clients will get a placeholder address, never reach the tunnel and lose the WHOLE list. Two fixes: add the device to byway.main.interface, or give it its own DNS via dhcp_option '6,…'
+byway возьмёт другое значение сам (его видно в byway nft, строка «meta mark … return»); закрепить: byway set self_mark ЗНАЧЕНИЕ	byway will pick another value itself (see byway nft, the "meta mark … return" line); to pin it: byway set self_mark VALUE
+сайты из списков у них открываются напрямую, мимо VPN. Нужен VPN и там -- добавить сеть в byway.main.interface; не нужен и подставные адреса ни к чему -- выдать ей свой DNS через dhcp_option '6,…'	list sites open there directly, bypassing the VPN. To have the VPN there too, add the network to byway.main.interface; if not, and fake addresses are not wanted, give it its own DNS via dhcp_option '6,…'
 в этом режиме byway.main.interface -- граница ВСЕЙ защиты, а не только списков: что вне его, то мимо туннеля и мимо запрета «не пускать мимо VPN». Добавить устройства в byway.main.interface	in this mode byway.main.interface is the boundary of ALL protection, not just of the lists: whatever is outside it bypasses both the tunnel and the "no traffic outside the VPN" block. Add the devices to byway.main.interface
 проверка новых версий не удалась (ответ GitHub: %s)	the version check failed (GitHub answer: %s)
 новые выпуски не видны: нет связи с GitHub либо он отвечает отказом. Проверить вручную: byway update --check	new releases are not visible: no connection to GitHub, or it answers with a refusal. Check by hand: byway update --check
@@ -774,7 +763,6 @@ byway выключен	byway is off
 применено	applied
 ключ не принят — настройки не изменены	key rejected — settings not changed
 ключ записан, способ подключения — один ключ	key saved, connection mode — one key
-byway включён — ядро поднимается до 15 секунд; проверить: byway health	byway is on — the core takes up to 15 seconds to start; check: byway health
 byway выключен: интернет идёт напрямую, без VPN; включить: byway on	byway is off: the internet goes direct, without the VPN; turn it on: byway on
 что добавить: byway add youtube.com instagram.com 91.108.4.0/22; список со ввода: byway add -	what to add: byway add youtube.com instagram.com 91.108.4.0/22; a list from input: byway add -
 не похоже ни на сайт, ни на подсеть: %s	looks like neither a site nor a subnet: %s
@@ -918,3 +906,127 @@ tested, ВЕРСИЯ	tested, VERSION
  — выйти	 — quit
 DNS: нет ответа для %s	DNS: no answer for %s
 Собрано задолго до рассвета	Built long before daylight
+на флеше нет места: настройка не записана, прежняя на месте	no room on the flash: the setting is not saved, the old one stays
+на флеше нет места: настройки dnsmasq не записаны, прежние на месте	no room on the flash: dnsmasq settings are not saved, the old ones stay
+на флеше нет места: правило firewall не записано, прежнее на месте	no room on the flash: the firewall rule is not saved, the old one stays
+файл %s испорчен нехваткой места, копия — %s: освободить флеш и вернуть её на место	%s was damaged by lack of space, a copy is in %s: free up the flash and put it back
+часть byway на ucode не извлечена в /var/run (нет места в /tmp?)	the ucode part of byway was not extracted to /var/run (no room in /tmp?)
+на флеше нет места: учёт не записан, посчитается в следующий раз	no room on the flash: usage not saved, it will be counted next time
+на флеше нет места: %s не записан, прежний на месте	no room on the flash: %s not saved, the old one stays
+%s: не записался целиком (на флеше нет места?) — прежняя копия оставлена	%s: not saved in full (no room on the flash?), the old copy is kept
+на флеше нет места на копию для отката — настройки из файла не приняты, прежние на месте	no room on the flash for a rollback copy: settings from the file are not accepted, the old ones stay
+на флеше нет места: настройки из файла не приняты, прежние на месте	no room on the flash: settings from the file are not accepted, the old ones stay
+склейка списков не собралась: в /tmp нет места? Рабочий конфиг не тронут	lists were not merged: no room in /tmp? The working config is untouched
+не вернулся на место: %s	not put back: %s
+на флеше нет места?	no room on the flash?
+пресет %s: запись оборвана, %s из %s	preset %s: write cut short, %s of %s
+склейка списков не собралась: в /tmp нет места? Перехват не включён	lists were not merged: no room in /tmp? Interception is not on
+движок вернулся, но перехват не поднялся	the core is back, but interception did not come up
+метка 0 не годится: ip rule с ней ловит весь трафик роутера	mark 0 is not allowed: an ip rule with it catches all router traffic
+перехвата нет: трафик дома идёт мимо туннеля	no interception: home traffic bypasses the tunnel
+настройка %s = «%s» не годится: нужен адрес петли 127.x.x.x, кроме 127.0.0.1 (его занимает dnsmasq), взято %s	setting %s = "%s" does not fit: needs a loopback address 127.x.x.x other than 127.0.0.1 (dnsmasq holds it), using %s
+127.0.0.1 занят dnsmasq — нужен другой адрес петли, например 127.0.0.42	127.0.0.1 is held by dnsmasq — use another loopback address, e.g. 127.0.0.42
+порт — от 1 до 65535: %s	port must be 1 to 65535: %s
+устройства %s сейчас нет — проверьте имя: ip link	device %s does not exist right now — check the name: ip link
+пул %s: адрес не годится -- взято умолчание	pool %s: the address does not fit -- using the default
+пул %s задевает приватный или зарезервированный %s/%s -- он мёртв: цепочка nft отсекает такие адреса первым же правилом	pool %s touches the private or reserved %s/%s -- it is dead: the nft chain drops such addresses with its very first rule
+ключей не разобрано и пропущено: %s	keys not parsed and skipped: %s
+прежнего ключа в подписке нет — активным стал первый	the previous key is not in the subscription — the first one is active now
+подписка не принята — настройки не изменены	subscription not accepted — settings unchanged
+имя %s не разрешилось — стоит проверить адрес подписки и связь	name %s did not resolve — check the subscription address and the connection
+подписка не скачалась за 25 секунд — стоит проверить адрес и связь	the subscription did not download in 25 seconds — check the address and the connection
+подписка больше 4 МБ — byway такую не берёт	the subscription is over 4 MB — byway does not take it
+подписка не скачалась (curl %s) — стоит проверить адрес и связь	the subscription did not download (curl %s) — check the address and the connection
+подписка пустая — стоит проверить адрес	the subscription is empty — check the address
+адрес сервера в ключе не годится: «%s» — нужен IPv4 или имя	the server address in the key does not fit: "%s" — needs IPv4 or a name
+в ss-ссылке нет пароля: паролем стало бы имя метода	the ss link has no password: the method name would become the password
+extra.downloadSettings: адрес «%s» не годится — нужен IPv4 или имя	extra.downloadSettings: address "%s" does not fit — needs IPv4 or a name
+extra.downloadSettings без TLS к публичному адресу: трафик виден любому на пути. Нужна защита tls или reality; разрешить всё же: byway set allow_insecure on	extra.downloadSettings without TLS to a public address: traffic is visible to anyone on the path. Needs tls or reality; allow anyway: byway set allow_insecure on
+extra.downloadSettings отключает проверку сертификата (allowInsecure): соединение может подменить любой на пути. Разрешить всё же: byway set allow_insecure on	extra.downloadSettings turns off certificate checks (allowInsecure): anyone on the path can intercept. Allow anyway: byway set allow_insecure on
+scy=%s у vmess Xray-core не поддерживает — шифрование будет auto	scy=%s for vmess is not supported by Xray-core — encryption will be auto
+aid=%s у vmess Xray-core не поддерживает (только AEAD, aid=0): сервер старого vmess не ответит	aid=%s for vmess is not supported by Xray-core (AEAD only, aid=0): an old vmess server will not answer
+обновление	update
+обновление уже идёт	an update is already running
+часы роутера показывают %s — проверка сертификатов не пройдёт, ядро Xray может не запуститься: дождаться синхронизации времени (NTP) или выставить его	the router clock shows %s — certificate checks will fail and the Xray core may not start: wait for time sync (NTP) or set it
+часы роутера: %s	router clock: %s
+время не выставлено: загрузки по HTTPS не пройдут, ядро Xray может не запуститься. Проверить синхронизацию (Система → Время в LuCI, ntpd) и связь	the time is not set: HTTPS downloads will fail and the Xray core may not start. Check time sync (System → Time in LuCI, ntpd) and the connection
+на GitHub выпуск %s — старше вашего %s; --force переставляет только ту же версию	the release on GitHub is %s, older than your %s; --force only reinstalls the same version
+  вернуть прежнюю версию: byway update --rollback	  return to the previous version: byway update --rollback
+НЕ ПОСТАВЛЕНО %s: копия для отката не сделалась (место на флеше?), %s\n	NOT INSTALLED %s: no rollback copy (room on the flash?), %s\n
+НЕ ПОСТАВЛЕНО %s: архив не совпал с подписанным выпуском, %s\n	NOT INSTALLED %s: the archive does not match the signed release, %s\n
+НЕ ПОСТАВЛЕНО %s: у выпуска нет подписи, %s\n	NOT INSTALLED %s: the release has no signature, %s\n
+НЕ ПОСТАВЛЕНО %s: не скачалось, %s\n	NOT INSTALLED %s: download failed, %s\n
+автообновление: у выпуска %s нет подписи -- не ставится	auto-update: release %s has no signature -- not installed
+ядро %s уже стоит — повторить через секунду	core %s is already installed — retry in a second
+<скрыто>	<hidden>
+Ни один ключ автовыбора не даёт связи. Проверить все: byway probe --all; обновить ключи из подписки: byway key sub АДРЕС.	None of the auto-select keys connects. Check them all: byway probe --all; refresh the keys from the subscription: byway key sub ADDRESS.
+путь из настройки xray_bin не годится: %s	the xray_bin path from the settings is not usable: %s
+byway report [файл]	byway report [file]
+это каталог, нужен файл: %s	this is a directory, a file is needed: %s
+не записан: %s	not written: %s
+в пуле подставных адресов всего %s: адрес берёт каждое имя, включая поддомены, и при нехватке он переходит к другому домену — соединение уйдёт к чужому хосту. Расширить пул (byway.main.fakeip_pool), например до /16	the fake address pool holds only %s: every name takes an address, subdomains included, and when they run out an address passes to another domain — the connection goes to the wrong host. Widen the pool (byway.main.fakeip_pool), for example to /16
+IPv6 включён, но защита dnsmasq от DNS-rebind отбрасывает подставные адреса IPv6	IPv6 is on, but the dnsmasq DNS-rebind protection drops the fake IPv6 addresses
+домены списка идут через VPN только по IPv4 (подсети IPv6 -- заворачиваются). Чтобы и по IPv6: выключить защиту (Сеть → DHCP и DNS → «Защита от DNS-rebind») -- решение за вами, она закрывает подмену адресов внутри сети	list domains go through the VPN over IPv4 only (IPv6 subnets are redirected). For IPv6 too: turn the protection off (Network → DHCP and DNS → "Rebind protection") -- your call, it guards against address spoofing inside the network
+адрес DNS движка %s:53 свободен или занят byway	engine DNS address %s:53 is free or held by byway
+адрес DNS движка %s:53 занят: %s	engine DNS address %s:53 is taken: %s
+движок не поднимется: сменить byway.main.dns_listen на другой адрес петли либо убрать чужую службу	the engine will not start: change byway.main.dns_listen to another loopback address or remove the other service
+self_mark %s -- не число (ведущий ноль читается восьмеричным) -- взято умолчание 0x400000	self_mark %s -- not a number (a leading zero reads as octal) -- default 0x400000 used
+self_mark 0 не годится: метки у сокетов движка не будет -- взято умолчание 0x400000	self_mark 0 is not usable: engine sockets would get no mark -- default 0x400000 used
+byway plumb off [--keep-dns] [--keep-block] — неизвестно: %s	byway plumb off [--keep-dns] [--keep-block] — unknown: %s
+места на второе ядро нет, а прежнее — ссылка на %s: ссылка места не занимает, ничего не тронуто. Положить новое ядро рядом с прежним (на флешку) и указать путь: byway set xray_bin	no room for a second core, and the current one is a link to %s: the link takes no space, nothing touched. Put the new core next to the old one (on the USB drive) and set the path: byway set xray_bin
+стоит Xray %s	installed: Xray %s
+на этом процессоре ядро ставится и обновляется пакетом OpenWrt: %s xray-core	on this CPU the core is installed and updated as an OpenWrt package: %s xray-core
+подсети	subnets
+ни один из подключённых списков не скачался, а копий нет — готовые списки пусты	none of the enabled lists downloaded and there are no copies — the ready-made lists are empty
+подписка: больше трёх переадресаций — стоит проверить адрес	subscription: more than three redirects — check the address
+подписка переадресует не на https:// — не принимается	the subscription redirects to something other than https:// — not accepted
+  Выбран автовыбор, а список ключей пуст: взять ключи из подписки — byway key sub АДРЕС, либо один ключ, как в шаге 1.\n\n	  Auto-select is chosen but the key list is empty: take keys from a subscription — byway key sub URL, or a single key as in step 1.\n\n
+не применилось, и прежняя настройка не вернулась (нет места?) — проверить: byway doctor	not applied, and the previous setting did not come back (no space?) — check: byway doctor
+ — правка отменена, работает прежняя настройка	 — the change is undone, the previous setting is in effect
+byway включён, но ядра Xray нет — служба не поднимется; что делать — строками выше	byway is on, but there is no Xray core — the service will not start; what to do — see the lines above
+ключ один и уже активный	there is one key and it is already active
+список подключён, но не скачан — если GitHub недоступен напрямую: byway add githubusercontent.com, затем byway presets	the list is enabled but not downloaded — if GitHub is not reachable directly: byway add githubusercontent.com, then byway presets
+режим — lists или all: %s	mode is lists or all: %s
+(поддомены)	(subdomains)
+(подсети)	(subnets)
+(по IP)	(by IP)
+ССЫЛКА	LINK
+САЙТ	SITE
+АДРЕС	ADDRESS
+ФАЙЛ	FILE
+ВЕРСИЯ	VERSION
+ЗНАЧЕНИЕ	VALUE
+  ядро %s есть, но не запускается: проверить часы роутера (date) и запуск: %s version	  the core %s is there but does not start: check the router clock (date) and run: %s version
+в %s была незаписанная правка (%s строк) — снята, записывается только эта команда	%s had an unsaved change (%s lines) — dropped, only this command is saved
+выпуск %s не поставлен: его подпись не сошлась или её нет — сам больше не ставится	release %s was not installed: its signature did not match or is missing — it will not be installed automatically again
+подождать исправленного выпуска; поставить без проверки подписи — только если доверяете источнику: byway update --no-verify	wait for a fixed release; to install without the signature check — only if you trust the source: byway update --no-verify
+устройства %s из byway.main.interface нет	device %s from byway.main.interface does not exist
+опечатка или мост ещё не поднят: проверить имя (ip link) и поправить: byway set interface …	a typo, or the bridge is not up yet: check the name (ip link) and fix it: byway set interface …
+настройка mark «%s» не годится — работает %s	the mark setting "%s" is not usable — %s is in effect
+метка -- шестнадцатеричная и не 0: byway set mark 0x100000	the mark is hexadecimal and not 0: byway set mark 0x100000
+настройка %s «%s» не годится — работает %s	the %s setting "%s" is not usable — %s is in effect
+порт -- от 1 до 65535: byway set %s %s	a port is 1 to 65535: byway set %s %s
+настройка dns_listen «%s» не годится — работает %s	the dns_listen setting "%s" is not usable — %s is in effect
+нужен адрес петли 127.x.x.x, кроме 127.0.0.1: byway set dns_listen 127.0.0.42	a loopback address 127.x.x.x other than 127.0.0.1 is needed: byway set dns_listen 127.0.0.42
+вход «напрямую» для сетей вне interface	the "direct" inbound for networks outside interface
+сертификат GitHub не прошёл проверку (curl 60): часы роутера показывают %s — если они неверны, дождаться синхронизации времени (NTP) или выставить его	the GitHub certificate failed verification (curl 60): the router clock shows %s — if that is wrong, wait for time sync (NTP) or set it
+значение «%s» для %s не годится — пропущено	value "%s" for %s is not usable — skipped
+Правил перехвата нет, трафик дома идёт мимо туннеля. Поднять: byway plumb on; не помогло — /etc/init.d/byway restart и byway doctor.	There are no interception rules, home traffic bypasses the tunnel. Bring them up: byway plumb on; if that does not help — /etc/init.d/byway restart and byway doctor.
+byway включён, но движок не поднялся за 15 секунд — причина: byway doctor; журнал: logread -e xray	byway is on, but the engine did not come up within 15 seconds — the reason: byway doctor; log: logread -e xray
+byway включён, движок работает; проверить: byway health	byway is on, the engine is running; check: byway health
+предел памяти %s слишком мал: меньше 16 МиБ ядро только собирает мусор — 0 или от 16	memory limit %s is too small: below 16 MiB the core does nothing but collect garbage — use 0 or 16 and up
+sni в ключе -- не имя хоста: %s	sni in the key is not a host name: %s
+host в ключе -- не имя хоста: %s	host in the key is not a host name: %s
+в /tmp свободно %s КБ — dnsmasq не перезапущен: без места он не встаёт, и дом остался бы без DNS. %s Освободить место: df -h /tmp	/tmp has %s KB free — dnsmasq was not restarted: without space it does not come back, and the home would be left without DNS. %s Free up space: df -h /tmp
+DNS дома пока не переведён на byway.	Home DNS is not switched to byway yet.
+Запрет «не пускать мимо VPN» остаётся, пока место не освободится.	The "no traffic outside the VPN" block stays until space is freed.
+Домены списка не закрыты по имени.	List domains are not blocked by name.
+Прежний запрет по именам остаётся, пока место не освободится.	The previous block by name stays until space is freed.
+движок пойдёт от root, а конфиг с меткой сокетов не собрался — запрет на адреса роутера не действует	the engine will run as root, but the config with the socket mark was not built — the ban on the router's own addresses does not apply
+в byway.main.%s вписано значение, отличное от действующего, — оно не принято и убрано: ключ меняется командой byway key или в панели	byway.main.%s holds a value different from the active one — it is not accepted and was removed: the key is changed with byway key or in the web UI
+метка -- число больше 0: byway set self_mark default	the mark is a number above 0: byway set self_mark default
+пул -- вне частных сетей, маска 8–30: byway set fakeip_pool default	the pool must lie outside private networks, mask 8–30: byway set fakeip_pool default
+пул -- в fc00::/7, маска 16–120: byway set fakeip6_pool default	the pool must lie in fc00::/7, mask 16–120: byway set fakeip6_pool default
+на флеше нет места: ключ не возвращён в настройки прежней версии — он в /etc/config/byway_key	no space on flash: the key was not returned to the previous version's settings — it is in /etc/config/byway_key
+в /var/run нет места — подписка не загружена	no space in /var/run — the subscription was not loaded
+в byway.main.%s вписано значение, отличное от действующего, -- не принято и убрано	byway.main.%s holds a value different from the active one -- not accepted and removed

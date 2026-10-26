@@ -39,6 +39,8 @@ Xray-core: dns-in 127.0.0.42:53 → dns-out outbound → built-in DNS
   │ connection to 198.18.x.x:443
   ▼
 nft: table inet byway, chain prerouting (priority mangle)
+  0. iifname not in interface, source in privnets, ip daddr @fakeip
+                                         → tproxy to :1604 ("direct" inbound), else drop
   1. iifname not in byway.main.interface → return
   2. ip daddr @privnets                  → return
   3. socket transparent 1                → mark, accept
@@ -49,6 +51,8 @@ ip rule fwmark 0x100000/0x100000 lookup 100
 table 100: local default dev lo          → delivered to a local socket
   ▼
 Xray-core: tproxy-in 0.0.0.0:1602, sniffing fakedns/http/tls/quic
+          (for networks outside interface: tproxy-direct :1604, sniffing fakedns only,
+           routed straight to direct)
   ▼
 routing → proxy | route-NAME | direct | block
 ```
@@ -125,8 +129,10 @@ The `engine_local` chain (`output` hook) stops the engine from opening new
 connections to the router's own addresses (the public WAN address, the global
 IPv6): otherwise a guest could reach the router's services through the
 interception. Loopback and port 53 are excluded. The engine is recognised by
-the process uid (not root), otherwise by the `self_mark` mark with
-`router_via_vpn 1`; with nothing to recognise it by, there is no chain.
+the process uid (not root), otherwise by the `self_mark` mark: it is set with
+`router_via_vpn 1` and for an engine running as root (`xray_root 1`, no
+`procd-ujail`, or the `byway` user could not be prepared); with nothing to
+recognise it by, there is no chain.
 
 Two more consequences of that. `tproxy-in` listens on `0.0.0.0`, not loopback,
 because the packet arrives with destination `198.18.x.x`. And the firewall
@@ -151,9 +157,18 @@ packet and the tproxy socket would never see it. The table number is the
 constant `PL_RT` in the code, not an option: busybox `ip` rejects table
 numbers above 255. Foreign routes in table 100 are left alone, with a warning.
 `pl_route_down` removes the route only if byway created it (marker
-`/tmp/byway-route-mine`).
+`/var/run/byway-route-mine`).
 
 ### Inside Xray-core
+
+`tproxy-direct` on port `tproxy_port` plus 2 (usually 1604) takes what was meant
+for networks outside `interface`: byway's dnsmasq is one for all bridges and hands
+them placeholder addresses from the list, while they have no tunnel. An nft rule
+(ahead of the "not from interface" return) sends packets from a private address
+to the pool to this inbound, xray turns the name back (sniffing is `fakedns` only,
+so a Host header cannot replace the destination) and sends the connection
+direct; private addresses in the destination go to `block`. The port is closed in
+`input`, like the `tproxy-in` port.
 
 `tproxy-in` is a `dokodemo-door` with `followRedirect` and `sockopt.tproxy`.
 Sniffing uses `destOverride` `fakedns`, `http`, `tls`, `quic` with `routeOnly:
@@ -391,12 +406,12 @@ can still reach the server and come up; LuCI and ssh go through `input` and
 are unaffected; bridges outside `list interface` are not blocked. `keyword:`
 and `regexp:` entries cannot be blocked by name (dnsmasq matches by suffix),
 and byway reports how many there are. The outcome goes to
-`/tmp/byway-blocked`: `lists`, `all` or `none` (nothing to block, or the
-kernel rejected the rule), and next to it `/tmp/byway-blocked.sig` holds the
+`/var/run/byway-blocked`: `lists`, `all` or `none` (nothing to block, or the
+kernel rejected the rule), and next to it `/var/run/byway-blocked.sig` holds the
 md5 of the mode, the bridges, IPv6 and the merged lists. Another `pl_block_on`
 with the same signature and the block still in place does nothing (the
 `inet byway_block` table and the dnsmasq file are checked against the parts
-list in `/tmp/byway-blocked.parts`: whatever is gone is put back); with a
+list in `/var/run/byway-blocked.parts`: whatever is gone is put back); with a
 different one it rebuilds the
 block in place, without lifting it: the table is replaced in one transaction
 (a `table`/`delete table` prelude), the dnsmasq file after `dnsmasq --test`
@@ -426,18 +441,18 @@ such pins.
 
 1. Lock `/var/run/byway-gen.lock`.
 2. Merge the lists: your own file, ready-made lists, routes. Cached in
-   `/tmp/byway-domains-all.lst` and `/tmp/byway-subnets-all.lst`, rebuilt when
+   `/var/run/byway-domains-all.lst` and `/var/run/byway-subnets-all.lst`, rebuilt when
    the set of sources changes or any file is newer than the cache.
 3. Every UCI value that goes into JSON or into the nft rules is matched
    against a pattern (`g_val_or`); on mismatch the default is used and a warning
    printed. Values come from the panel and from other people's exports (`byway
    import`), hence the checks.
-4. The draft `/tmp/byway-config.new.json` (640 root:byway, 600 without a
+4. The draft `/var/run/byway-config.new.json` (640 root:byway, 600 without a
    `byway` group) is checked with `xray run -test -c`. Rejected: the draft stays, the error and a hint are printed, the
    working config is untouched, exit code 1. Accepted: the engine's
    deprecation warnings are shown.
 5. List lines that look like neither a name nor a subnet are dropped
-   (`/tmp/byway-bad-entries`); for an accepted config the count and the first
+   (`/var/run/byway-bad-entries`); for an accepted config the count and the first
    three are printed before the comparison with the working one, so also when
    the config did not change.
 6. Identical to the working config (`cmp`): nothing changes. Otherwise free
@@ -501,7 +516,7 @@ port nobody listens on.
 `start`: if `enabled` is not `1`, run `byway plumb off --service` and exit.
 With `closed`, run `byway plumb close`. No engine binary: print a hint and
 exit; if a runnable `/usr/local/bin/xray-*` sits next to it, the hint names
-it, otherwise the service sets the marker `/tmp/byway-engine-restore` and
+it, otherwise the service sets the marker `/var/run/byway-engine-restore` and
 in the background, once the default route is up (waiting up to two minutes), 10 s after it runs `byway core restore` (output to syslog),
 once per boot. Then `byway gen`, the procd instance, and in `service_started`
 up to three `byway plumb on` attempts 10 s apart. That loop runs in the
@@ -517,7 +532,7 @@ would have no DNS.
 
 `stop`: first kill the background loop and its children (if the PID still
 belongs to byway), then `byway plumb off --service`. `--service` does not set
-the "removed by hand" marker (`/tmp/byway-plumb-down`); otherwise `byway
+the "removed by hand" marker (`/var/run/byway-plumb-down`); otherwise `byway
 watch` would not restore the rules after a failed start.
 
 `restart`, and the reload branch for "config changed", pass `--keep-dns`: the
@@ -528,7 +543,8 @@ answer, `plumb on` hands dnsmasq back to the ISP on its failure path. Under
 successful `plumb on` (see [When the engine does not come
 up](#when-the-engine-does-not-come-up)).
 
-`reload`. `service_triggers` registers `procd_add_reload_trigger byway`, so
+`reload`. `service_triggers` registers `procd_add_reload_trigger byway byway_key` (the second
+package holds the keys), so
 procd calls reload on `reload_config`, that is, on every "Save & Apply" in
 LuCI, panel language changes included; byway itself calls it after updating
 the ready-made lists. A bare `uci commit byway` from the console does not
@@ -583,11 +599,11 @@ in order:
 
 1. With `enabled 1`, the engine file fails `x_ok`, there is no runnable
    `/usr/local/bin/xray-*` next to it, and the marker
-   `/tmp/byway-engine-restore` is over 15 minutes old or missing: the marker
+   `/var/run/byway-engine-restore` is over 15 minutes old or missing: the marker
    is refreshed, `byway core restore` runs in the background, output to
    syslog. Flash needs 25 MB free; with less it refuses before downloading.
 2. No engine while `enabled 1` and no "removed by hand" marker: `pl_block_on`
-   (only acts with `closed`). Misses are counted in `/tmp/byway-nopid`. On the
+   (only acts with `closed`). Misses are counted in `/var/run/byway-nopid`. On the
    second miss in a row, if dnsmasq points at the DNS inbound, `plumb off
    --service --keep-block`: resolver back to the ISP, block stays. Logged as
    `(nodns)`.
@@ -595,21 +611,21 @@ in order:
    a successful one lifts the block (`(healed)`), a failed one leaves it
    (`(failed)`). With `enabled` other than `1`, just `pl_block_off`.
 4. Engine running, `enabled 1`, `guard` not `0`, no "removed by hand" marker
-   (`/tmp/byway-plumb-down`), but the table, rule, route or byway's address in
+   (`/var/run/byway-plumb-down`), but the table, rule, route or byway's address in
    `byway-dns.conf` is missing: `plumb on`, logged as `(healed)` or
    `(failed)`. The address is checked in the file, not in the running dnsmasq.
    This repairs a foreign `nft flush ruleset` or a firewall reload.
 5. Ready-made lists, version check, auto-update (below), and hourly
    `wt_hosts`: with `dns_route tunnel` the server addresses in `dns.hosts`
    are compared with DNS; if an address changed (the old one is not among the
-   answers), `byway gen` and `reload` (marker `/tmp/byway-hostcheck`).
+   answers), `byway gen` and `reload` (marker `/var/run/byway-hostcheck`).
 6. `/var/run/byway/access.log` over 4 MB: truncated to zero, which means `byway
    stat` is not running.
 7. A state line is appended to `/etc/byway/health.log` (last 200 lines) only
    when something changed or was repaired. Engine PID changed and the
    resolver already returns a pool address: `killall -HUP dnsmasq`.
 
-`byway plumb off` without `--service` creates `/tmp/byway-plumb-down`, and
+`byway plumb off` without `--service` creates `/var/run/byway-plumb-down`, and
 `byway watch` leaves the rules alone until the next `plumb on` or reboot.
 
 ### byway stat
@@ -647,12 +663,12 @@ presets`, errors to syslog, `/etc/init.d/byway reload`. It fires on the first
 ### Version check and auto-update
 
 `update_check 1` (default): a request to the GitHub API `releases/latest`
-every random 12–36 hours. `/tmp/byway-upcheck` holds the interval until the
+every random 12–36 hours. `/var/run/byway-upcheck` holds the interval until the
 next check in minutes (720–2160, randomness from
 `/proc/sys/kernel/random/uuid`); the file's mtime is the time of the last
 one. If newer: the version goes to
-`/tmp/byway-newver`, the first line of the release notes to
-`/tmp/byway-relnote`, the time it was first seen to `/etc/byway/.newver-seen`,
+`/var/run/byway-newver`, the first line of the release notes to
+`/var/run/byway-relnote`, the time it was first seen to `/etc/byway/.newver-seen`,
 and a line to syslog. Nothing is downloaded.
 
 `auto_update 1` installs what was found; without `update_check` there is
@@ -681,7 +697,7 @@ to pass after it too. If it does not come up, `prev.tgz` is unpacked back
 (`byway update --rollback` does the same), the service restarts, and the version
 is recorded in `.au-failed`. **Rollback restores the whole version:** program,
 init script, panel and dictionaries. The outcome goes to
-`/tmp/byway-autoupdate` and syslog.
+`/var/run/byway-autoupdate` and syslog.
 
 ### Replacing the engine
 
@@ -701,7 +717,7 @@ After success the old `/usr/local/bin/xray-*` is deleted; a packaged
 `/usr/bin/xray` stays. With less space the swap goes through RAM, and only if
 the old binary is in `/usr/local/bin/xray-*`; with a packaged one byway
 refuses. The old version's archive is downloaded first for rollback, then the
-service stops for about a minute, and for that time `/tmp/byway-plumb-down`
+service stops for about a minute, and for that time `/var/run/byway-plumb-down`
 is set so that `byway watch` stays out of the way; the stop runs with
 `BYWAY_KEEP_BLOCK=1`, so under `closed` the block holds for the whole minute.
 Either way `up_alive_ok` checks the result and, if the connection through the
@@ -733,14 +749,18 @@ and no wait for the tunnel: there is nothing to roll back to.
 
 A panel request lives for seconds, an update or an engine swap for minutes,
 so the "Install the update" and "Install the tested core" buttons call
-`byway job update` and `byway job engine tested`. `job` detaches
+`byway job update` and `byway job engine tested`; `job gen`, `job presets`,
+`job restart`, `job reload` and `job import [--no-key]` (accepting an export from
+the panel; the file is `/var/run/byway-import.txt`) go the same way. `job` detaches
 `byway job run …` (through `setsid` if present), writes the PID to
 `/var/run/byway-job.pid` and answers at once. `job run` writes output straight
-to `/tmp/byway-job.log`, without a pipe, so progress shows as it goes, and
+to `/var/run/byway-job.log`, without a pipe, so progress shows as it goes, and
 ends with the line `== done` (`== конец` in Russian). One job at a time: with
 a live PID it refuses. `byway job log` returns the log without colours and,
-while the job is alive, the line `… in progress` with exit code 3; the panel
-polls it every 3 s. `byway doctor` and `byway report` the panel calls
+while the job is alive, the line `… in progress` with exit code 3, and after it
+ends 0 or 1 by outcome (the outcome code is kept in `/var/run/byway-job.rc`); the
+panel polls it every 3 s. The job lock is `/var/run/byway-job.lock` with a PID:
+a dead owner does not hold it. `byway doctor` and `byway report` the panel calls
 directly — they finish in seconds.
 
 ## dnsmasq
@@ -814,6 +834,7 @@ the interception rules.
 | `/usr/local/bin/xray-VERSION` | engine, if installed from GitHub |
 | `/etc/init.d/byway` | service |
 | `/etc/config/byway` | UCI: section `main`, `route` sections for per-route outbounds |
+| `/etc/config/byway_key` | UCI, mode 600: `node_url`, `node_urls`, `sub_url`, `outbound_json` (keys kept apart so the panel's read-only role does not get them) |
 | `/etc/byway/domains.lst`, `subnets.lst` | your lists; domains accept `full:`, `keyword:`, `regexp:` |
 | `/etc/byway/presets/NAME.lst`, `NAME.sub` | downloaded ready-made lists: domains and subnets |
 | `/etc/byway/routes/NAME.lst` | per-route list |
@@ -822,24 +843,26 @@ the interception rules.
 | `/etc/byway/health.log`, `usage.tsv` | `byway watch` log, `byway stat` counts |
 | `/etc/byway/prev.tgz`, `.binmd5`, `.au-try`, `.au-failed`, `.newver-seen` | auto-update; `prev.tgz` is the whole previous version for rollback |
 | `/var/run/byway/access.log` | Xray-core access log |
-| `/tmp/byway-config.new.json` | draft config; kept if the engine rejected it |
-| `/tmp/byway-domains-all.lst`, `byway-subnets-all.lst` (+ `.sig`) | merged lists |
-| `/tmp/byway-bad-entries` | dropped list lines |
-| `/tmp/byway-blocked`, `.sig`, `.parts` | active block: `lists`, `all`, `none`; the signature it is rebuilt by; the block's parts (table, dnsmasq file) for the check |
-| `/tmp/byway-plumb-down` | rules removed by hand |
-| `/tmp/byway-route-mine`, `byway-route-mine6` | the route in table 100 was created by byway |
-| `/tmp/byway-watch.last`, `byway-nopid` | previous state and miss counter of `byway watch` |
+| `/var/run/byway-config.new.json` | draft config; kept if the engine rejected it |
+| `/var/run/byway-domains-all.lst`, `byway-subnets-all.lst` (+ `.sig`) | merged lists |
+| `/var/run/byway-bad-entries` | dropped list lines |
+| `/var/run/byway-blocked`, `.sig`, `.parts` | active block: `lists`, `all`, `none`; the signature it is rebuilt by; the block's parts (table, dnsmasq file) for the check |
+| `/var/run/byway-plumb-down` | rules removed by hand |
+| `/var/run/byway-route-mine`, `byway-route-mine6` | the route in table 100 was created by byway |
+| `/var/run/byway-watch.last`, `byway-nopid` | previous state and miss counter of `byway watch` |
 | `/var/run/byway/fakemap`, `fakemap.pos`, `statmark` | `byway stat` accounting |
-| `/tmp/byway-upcheck`, `-newver`, `-relnote`, `-autoupdate` | version check, auto-update outcome |
-| `/tmp/byway-upcheck-ok`, `-fail` | time of the last check that reached GitHub, and the response code of a failed one; `byway doctor` uses them to see whether the check gets through |
+| `/var/run/byway-upcheck`, `-newver`, `-relnote`, `-autoupdate` | version check, auto-update outcome |
+| `/var/run/byway-upcheck-ok`, `-fail` | time of the last check that reached GitHub, and the response code of a failed one; `byway doctor` uses them to see whether the check gets through |
 | `/etc/byway/.github-noexec` | marker: the GitHub engine build does not run on this CPU |
 | `/etc/byway/before-import/` | copy of settings and lists from before `byway import` (mode 700, with the key) |
-| `/tmp/byway-dialbug` | result of the Go 1.27 dial-bug check for the engine file |
-| `/tmp/byway-engine-restore` | marker of an attempt to install a missing engine: the service once per boot, `byway watch` when it is over 15 minutes old |
-| `/tmp/byway-job.log`, `/var/run/byway-job.pid` | progress and PID of the panel's background job (`byway job`) |
+| `/var/run/byway-dialbug` | result of the Go 1.27 dial-bug check for the engine file |
+| `/var/run/byway-engine-restore` | marker of an attempt to install a missing engine: the service once per boot, `byway watch` when it is over 15 minutes old |
+| `/var/run/byway-job.log`, `byway-job.pid`, `byway-job.rc`, `byway-job.lock` | progress, PID, outcome code and lock of the panel's background job (`byway job`) |
+| `/var/run/byway-import.txt` | an export accepted by the panel; deleted after accepting (it holds the key) |
+| `/var/run/byway-mark` | the applied interception mark (hex only, not 0) |
 | `/var/run/byway.pid`, `byway.applied` | PID of the ujail wrapper (the engine is its child); applied-state snapshot for reload |
 | `/var/run/byway-caps.json` | engine capabilities for procd-ujail |
-| `/tmp/byway-hostcheck` | marker of the hourly server-address check (`wt_hosts`) |
+| `/var/run/byway-hostcheck` | marker of the hourly server-address check (`wt_hosts`) |
 | `/var/run/byway-plumb.pid`, `byway-nostart` | background start loop; "start failed, skip the loop" |
 | `<dnsmasq conf-dir>/byway-dns.conf` | dnsmasq pointed at the DNS inbound while interception is up |
 | `<dnsmasq conf-dir>/byway-block.conf` | name block under `closed` |

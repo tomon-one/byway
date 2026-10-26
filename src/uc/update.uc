@@ -2,12 +2,12 @@
 // автообновления, подпись выпуска, последний выпуск на GitHub, словари (lang).
 // Номер, репозиторий и ключ подписи -- от shell (BW_NUM, BW_REPO, BW_PUBKEY).
 
-const UP_MARK = '/tmp/byway-upcheck';         // когда спрашивали в прошлый раз
-const UP_OK = '/tmp/byway-upcheck-ok';        // проверка, дошедшая до GitHub
-const UP_FAIL = '/tmp/byway-upcheck-fail';    // код ответа неудачной проверки
-const UP_NEWVER = '/tmp/byway-newver';        // найденная версия, если новее
-const UP_RELNOTE = '/tmp/byway-relnote';      // первая строка описания выпуска
-const UP_AULOG = '/tmp/byway-autoupdate';     // чем кончилось ночное обновление
+const UP_MARK = '/var/run/byway-upcheck';         // когда спрашивали в прошлый раз
+const UP_OK = '/var/run/byway-upcheck-ok';        // проверка, дошедшая до GitHub
+const UP_FAIL = '/var/run/byway-upcheck-fail';    // код ответа неудачной проверки
+const UP_NEWVER = '/var/run/byway-newver';        // найденная версия, если новее
+const UP_RELNOTE = '/var/run/byway-relnote';      // первая строка описания выпуска
+const UP_AULOG = '/var/run/byway-autoupdate';     // чем кончилось ночное обновление
 const UP_PREVBIN = '/etc/byway/byway.prev';   // копия одного скрипта (до 0.3.0)
 const UP_PREVSET = '/etc/byway/prev.tgz';     // прежняя версия целиком для отката
 const UP_AUTRY = '/etc/byway/.au-try';        // когда пробовали обновиться; флеш
@@ -21,6 +21,9 @@ function up_read(f) { return rtrim(fs.readfile(f) ?? '', '\n'); }
 // «Не скачалось» чаще из-за туннеля: GitHub в списке byway, и при мёртвом
 // туннеле резолвер отдаёт подставной адрес.
 function up_nonet() {
+	if (clock_bad()) return clock_say();
+	if (NT_CERT)
+		return warnf('сертификат GitHub не прошёл проверку (curl 60): часы роутера показывают %s — если они неверны, дождаться синхронизации времени (NTP) или выставить его', trim(run([ 'date', '+%Y-%m-%d %H:%M' ]).out));
 	warn('  GitHub не ответил ни через туннель, ни напрямую, ни по адресам из DoH — проверить связь роутера и повторить');
 }
 
@@ -86,8 +89,11 @@ function up_latest() {
 			via = nt_gh_resolve();
 			if (!length(via)) break;
 		}
-		let r = run([ 'curl', '-sSL', '--max-time', '25', '-A', 'Mozilla/5.0', ...via, '-w', '\n%{http_code}', api ]).out;
-		let i = rindex(r, '\n');
+		let rr = run([ 'curl', '-sSL', '--max-time', '25', '-A', 'Mozilla/5.0', ...via, '-w', '\n%{http_code}', api ]);
+		// Код 60 -- сертификат не прошёл проверку: часто неверные часы (п2-14).
+		if (rr.code == 60) NT_CERT = true;
+		let r = rr.out;
+		let i = rpos(r, '\n');
 		code = i >= 0 ? substr(r, i + 1) : r;
 		body = i >= 0 ? substr(r, 0, i) : '';
 		if (code != '000') break;
@@ -119,7 +125,7 @@ function up_panel_full() { return index(fs.readfile(UP_PANEL_LANG) ?? '', '"Сл
 function up_lang_back(dir) {
 	if (fs.stat(dir + '/en.tsv')?.size) return;
 	if (u('lang') != 'en') return;
-	if (run([ 'uci', 'set', 'byway.main.lang=ru' ]).code == 0) run([ 'uci', 'commit', 'byway' ]);
+	if (run([ 'uci', 'set', 'byway.main.lang=ru' ]).code == 0) uci_commit('byway');
 }
 
 // Отказ переключения: каталог прочь, язык назад, сообщение и выход.
@@ -195,19 +201,21 @@ function cmd_lang(lw) {
 		}
 	}
 	if (u('lang') != lw && run([ 'uci', 'set', 'byway.main.lang=' + lw ]).code == 0)
-		run([ 'uci', 'commit', 'byway' ]);
+		uci_commit('byway');
 	// Итог -- уже на новом языке.
 	LANG = lw;
 	_dict = null;
 	sayf('язык: %s', lw);
 }
 
-// ── проверки связи (бывшие tunnel_ok, alive_ok, eng_idle, eng_wait) ───────
+// ── проверки связи ────────────────────────────────────────────────────────
 // Служба не работает (выключена или нет ключа): туннеля для проверки нет.
 function up_idle() {
 	if (u('enabled') != '1') return true;
 	let m = u('conn_mode');
-	if (m == 'urltest' || m == 'selector') return u('node_urls') === '';
+	// selector работает на node_url (сборка берёт его, outbound.uc), не на
+	// списке: без node_url туннеля нет и при полном списке (Ф9, п4-15).
+	if (m == 'urltest') return !length(ul('node_urls'));
 	if (m == 'outbound') return u('outbound_json') === '';
 	return u('node_url') === '';
 }
@@ -278,6 +286,26 @@ function up_snapshot() {
 // Вернуть архив прежней версии и перезапустить службу. Через каталог в памяти
 // и mv на место: запись поверх файла, который сейчас исполняется, портила бы
 // его чтение. Автозапуск -- заново по init прежней версии.
+// Ключи -- обратно в byway.main: версии до 0.4.0 про byway_key не знают, и
+// откат оставлял их без ключа (н1-10). Из byway_key -- прочь после записи,
+// чтобы повторное обновление перенесло ключ, заданный уже прежней версией.
+function up_keys_back() {
+	let c = cursor(), have = [];
+	for (let o in KEY_OPTS) if (c.get(KEY_PKG, 'main', o) != null) push(have, o);
+	if (!length(have)) return;
+	for (let o in have) c.set('byway', 'main', o, c.get(KEY_PKG, 'main', o));
+	if (!c.save() || !uci_commit('byway')) {
+		run([ 'uci', '-q', 'revert', 'byway' ]);
+		_cur = null;
+		warn('на флеше нет места: ключ не возвращён в настройки прежней версии — он в /etc/config/byway_key');
+		return;
+	}
+	c = cursor();
+	for (let o in have) c.delete(KEY_PKG, 'main', o);
+	if (!c.save() || !uci_commit(KEY_PKG)) run([ 'uci', '-q', 'revert', KEY_PKG ]);
+	_cur = null;
+}
+
 function up_restore() {
 	if (!fs.stat(UP_PREVSET)?.size) { warn('копии прежней версии нет'); return false; }
 	let r = up_tmpdir('byway-rollback');
@@ -290,7 +318,7 @@ function up_restore() {
 	for (let f in split(trim(run([ 'sh', '-c', 'cd "$1" && find . -type f', 'sh', r ]).out), '\n')) {
 		if (f === '') continue;
 		let d = substr(f, 1);
-		run([ 'mkdir', '-p', substr(d, 0, rindex(d, '/')) ]);
+		run([ 'mkdir', '-p', substr(d, 0, rpos(d, '/')) ]);
 		if (run([ 'cp', '-p', r + d, d + '.new' ]).code != 0 || !fs.rename(d + '.new', d)) bad = true;
 	}
 	up_rmrf(r);
@@ -300,6 +328,17 @@ function up_restore() {
 	// иначе браузер держит из кэша откаченную (install.sh, pkgs_update_time).
 	for (let db in [ '/lib/apk/db/installed', '/usr/lib/opkg/status' ])
 		if (fs.stat(db)) run([ 'touch', db ]);
+	// Версии до 0.4.0 уводят резолвер правкой UCI и про файлы byway в
+	// каталоге добавок dnsmasq не знают: оставленные, они держали dnsmasq на
+	// входе движка и после его остановки -- дом без DNS (Ф9, п2-33). Файлы --
+	// прочь, dnsmasq -- перечитать; версия новее заведёт их при старте.
+	if (index(fs.readfile('/usr/local/bin/byway') ?? '', KEY_PKG) < 0) up_keys_back();
+	let gone = false;
+	for (let n in [ DM_DNS, DM_BLOCK ]) {
+		let f = dm_file(n);
+		if (f !== '' && fs.stat(f)) { fs.unlink(f); gone = true; }
+	}
+	if (gone) pl_dns_restart();
 	for (let a in [ [ '/etc/init.d/byway', 'disable' ], [ '/etc/init.d/byway', 'enable' ],
 	                [ '/etc/init.d/rpcd', 'reload' ], [ '/etc/init.d/byway', 'restart' ] ])
 		run(a);
@@ -368,7 +407,7 @@ function cmd_update(...args) {
 	}
 	let lv = uto !== '' ? [ '200', uto ] : up_latest(), code = lv[0], nw = lv[1];
 	if (nw === '' || nw == code) {
-		if (code == '000') die('GitHub не ответил -- похоже, нет связи');
+		if (code == '000') { up_nonet(); die('GitHub не ответил -- похоже, нет связи'); }
 		if (code == '404') dief('на GitHub нет ни репозитория %s, ни его выпусков', getenv('BW_REPO'));
 		if (code == '403') die('GitHub ответил «слишком часто спрашиваете» -- подождать час');
 		dief('GitHub ответил %s, но версии в ответе нет', code);
@@ -378,7 +417,13 @@ function cmd_update(...args) {
 		fs.unlink(UP_NEWVER);
 		// Тег могут пересобрать на новом коммите под тем же номером: «новее
 		// нет» верно про номер, но не про файлы. Отсюда --force.
-		if (uf == '--force') {
+		// Выпуск на GitHub СТАРШЕ стоящего (стоит своя сборка или тег сняли):
+		// --force ставил старый со словами «версия та же» (Ф9, п3-69).
+		if (uf == '--force' && st_ver_gt(num, nw)) {
+			sayf('на GitHub выпуск %s — старше вашего %s; --force переставляет только ту же версию', nw, num);
+			say('  вернуть прежнюю версию: byway update --rollback');
+			return;
+		} else if (uf == '--force') {
 			sayf('версия та же (%s), но ставится заново -- так велит --force', num);
 		} else {
 			sayf('версия %s -- новее нет', num);
@@ -398,12 +443,15 @@ function cmd_update(...args) {
 	up_step(++st, total, _t('загрузка'));
 	if (nt_get([ '--max-time', '120', '-o', d + '/p.tar.gz',
 	             'https://github.com/' + getenv('BW_REPO') + '/archive/refs/tags/v' + nw + '.tar.gz' ]) != 0) {
+		// Причину -- вслух: при тишине на 443 byway молчал минуты и говорил
+		// только «не скачалось» (Ф9, п2-17).
+		up_nonet();
 		up_die(_t('не скачалось -- ничего не тронуто'));
 	}
 	if (run([ 'tar', 'xzf', d + '/p.tar.gz', '-C', d ]).code != 0) { up_die(_t('не распаковалось -- ничего не тронуто')); }
 	let src = split(trim(run([ 'find', d, '-maxdepth', '2', '-name', 'install.sh' ]).out), '\n')[0] ?? '';
 	if (src === '') { up_die(_t('в пакете нет install.sh -- ничего не тронуто')); }
-	let root = substr(src, 0, rindex(src, '/'));
+	let root = substr(src, 0, rpos(src, '/'));
 	if (nov) {
 		warn('--no-verify: подпись выпуска не проверяется');
 	} else {
@@ -412,7 +460,9 @@ function cmd_update(...args) {
 		up_step(++st, total, _t('проверка подписи выпуска'));
 		let r = up_verify(nw, root, d);
 		if (r == 0) say('подпись выпуска сошлась с ключом byway');
-		else if (r == 1) { warn('выпуск не поставлен -- ничего не тронуто; поставить без проверки подписи: byway update --no-verify'); up_exit(6); }
+		// 7 -- проверить нечем (подписи нет), 6 -- не сошлась: ночное
+		// обновление пишет их по-разному (Ф9, п3-70).
+		else if (r == 1) { warn('выпуск не поставлен -- ничего не тронуто; поставить без проверки подписи: byway update --no-verify'); up_exit(7); }
 		else { warn('архив не совпал с подписанным выпуском -- подменён или повреждён; ничего не тронуто, повторить позже'); up_exit(6); }
 	}
 
@@ -425,7 +475,10 @@ function cmd_update(...args) {
 	}
 	// Ставит install.sh: он один знает, что куда класть и что оставить.
 	up_step(++st, total, _t('установка'));
-	if (sys([ 'sh', '-c', 'cd "$1" && sh install.sh', 'sh', root ]) != 0) {
+	// Установка доводится до конца: обрыв ssh или Ctrl+C посередине оставлял
+	// смесь двух выпусков, а повтор говорил «новее нет» (Ф9, п1-6). Метка
+	// «идёт установка» держит каталог выпуска от уборки обёрткой (update.sh).
+	if (sys([ 'sh', '-c', 'trap "" HUP INT PIPE; : > /var/run/byway-update.inst; cd "$1" && sh install.sh; r=$?; rm -f /var/run/byway-update.inst; exit $r', 'sh', root ]) != 0) {
 		warn('установка оборвалась -- возврат прежней версии');
 		up_exit(up_restore() ? 3 : 4);
 	}

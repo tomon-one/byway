@@ -34,12 +34,21 @@ function mg_route_part(file, want) {
 }
 
 // Путь к склейке domains|subnets (собрать, если кэш негоден).
-function mg_path(kind) {
+// Склейка не собралась: soft -- null (перехват уходит в свой отказ), иначе
+// выход словами.
+function mg_bad(soft) {
+	if (!soft) die('склейка списков не собралась: в /tmp нет места? Рабочий конфиг не тронут');
+	return null;
+}
+
+function mg_path(kind, soft) {
 	let dom = kind != 'subnets';
 	let lists = getenv('BW_LISTS'), routes = getenv('BW_ROUTES'), presets = getenv('BW_PRESETS');
-	let out = dom ? '/tmp/byway-domains-all.lst' : '/tmp/byway-subnets-all.lst';
-	let pre = split(trim(u('preset')), /[ \t\n]+/);
-	if (pre[0] == '') pre = [];
+	let out = dom ? '/var/run/byway-domains-all.lst' : '/var/run/byway-subnets-all.lst';
+	// Имя готового списка -- только буквы, цифры, «_» и «-»: из настроек оно
+	// становилось путём, и склейка читала *.lst вне каталога пресетов (Ф9,
+	// п1-20). Чужое имя молча пропускается: так делает и cmd_presets.
+	let pre = filter(ul('preset'), (p) => _only(p, 'abcdefghijklmnopqrstuvwxyz0123456789_-'));
 	let rts = mg_routes();
 	let src = [ lists + (dom ? '/domains.lst' : '/subnets.lst') ];
 	for (let r in rts) push(src, routes + '/' + r + '.lst');
@@ -63,28 +72,42 @@ function mg_path(kind) {
 	// Сборка: текст -- в черновик, чистка и sort -u -- busybox (на роутере
 	// быстрее, и список не держится в памяти ucode).
 	let now = time();
+	// Склейка, не дописанная нехваткой места в /tmp, -- отказ сборки: прежде
+	// gen брал пустую или старую и затирал рабочий конфиг (Ф9, п2-6).
 	let tmp = trim(run([ 'mktemp', '/tmp/byway-merge.XXXXXX' ]).out);
-	if (tmp === '') return out;
-	let f = fs.open(tmp, 'w');
+	let f = tmp !== '' ? fs.open(tmp, 'w') : null;
+	if (!f) { if (tmp !== '') fs.unlink(tmp); return mg_bad(soft); }
+	// Без вложенной функции: захват переменных на ucode 22.03 ненадёжен.
+	let want = 0, got = 0, t;
 	let own = fs.readfile(src[0]);
-	if (own != null) f.write(own + '\n');
+	if (own != null) { t = own + '\n'; want += length(t); got += f.write(t) ?? 0; }
 	LJ_BAD = getenv('BW_BADLIST');
 	LJ_BF = null;
 	for (let r in rts) {
 		let part = mg_route_part(routes + '/' + r + '.lst', dom ? 'dom' : 'net');
-		if (length(part)) f.write(join('\n', part) + '\n');
+		if (length(part)) { t = join('\n', part) + '\n'; want += length(t); got += f.write(t) ?? 0; }
 	}
 	if (LJ_BF) { LJ_BF.close(); LJ_BF = null; }
 	for (let p in pre) {
-		let t = fs.readfile(presets + '/' + p + (dom ? '.lst' : '.sub'));
-		if (t != null) f.write(t + '\n');
+		let pt = fs.readfile(presets + '/' + p + (dom ? '.lst' : '.sub'));
+		if (pt != null) { t = pt + '\n'; want += length(t); got += f.write(t) ?? 0; }
 	}
 	f.close();
+	// Запись буферизована: f.write отвечает полной длиной и при полном /tmp,
+	// ошибка видна только по размеру файла. И место под итог sort -- до него:
+	// sort с перенаправлением о нехватке места молчит, и склейка выходила
+	// пустой, а при «Не пускать» -- «закрывать нечего» (Ф9, прогон 5).
+	let df = split(split(run([ 'df', '-k', '/var/run' ]).out, '\n')[1] ?? '', /[ \t]+/);
+	if (got != want || (fs.stat(tmp)?.size ?? -1) != want ||
+	    (df[3] != null && match(df[3], /^[0-9]+$/) && int(df[3]) * 1024 < want + 65536)) {
+		fs.unlink(tmp);
+		return mg_bad(soft);
+	}
 	let r = run([ 'sh', '-c', 'grep -vE "^[[:space:]]*(//|#|$)" "$1" | tr -d "\\r" | ' +
 	              'sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*$//" | sort -u > "$1.s" && mv "$1.s" "$2"',
 	              'sh', tmp, out ], true);
 	fs.unlink(tmp);
-	if (r.code != 0) { fs.unlink(tmp + '.s'); return out; }
+	if (r.code != 0) { fs.unlink(tmp + '.s'); return mg_bad(soft); }
 	fs.writefile(out + '.sig', now + '\n' + join('\n', sig) + '\n' + mg_stat(out));
 	return out;
 }

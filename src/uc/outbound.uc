@@ -10,26 +10,26 @@ const OB_STOP = '__byway_outbound_stop__';
 // разбора молчат, сообщения транспорта -- на экран).
 let OB_OUT = [], OB_QUIET_PARSE = false, OB_FATAL = null;
 
-// Сообщение -- записью { c: warn|warnf|die|dief, f, a, e: в stderr }; в тихом
+// Сообщение -- записью { c: warn|warnf|die|dief, f, a }; в тихом
 // прогоне (проба ключа автовыбора) копятся, отказ запоминается текстом для
 // «ключ пропущен».
-function ob_cmd(name, fmt, args, err) {
-	push(OB_OUT, { c: name, f: fmt, a: args, e: err });
+function ob_cmd(name, fmt, args) {
+	push(OB_OUT, { c: name, f: fmt, a: args });
 }
 function ob_warn(m)          { ob_cmd('warn', m, []); }
 function ob_warnf(m, ...a)   { ob_cmd('warnf', m, a); }
 function ob_die(m)           { OB_FATAL = _t(m); ob_cmd('die', m, []); raise(OB_STOP); }
 function ob_dief(m, ...a)    { OB_FATAL = _pf(_t(m), a); ob_cmd('dief', m, a); raise(OB_STOP); }
 
-// val_or: значение настройки по образцу, иначе умолчание с жалобой в stderr.
+// val_or: значение настройки по образцу, иначе умолчание с жалобой (как warnf).
 function ob_val_or(name, val, re, def, where) {
 	if (val === '') return def;
 	if (match(val, /[\x01-\x1f\x7f]/)) {
-		ob_cmd('warnf', 'настройка %s содержит управляющие знаки и не годится для %s, взято %s', [ name, where, def ], true);
+		ob_cmd('warnf', 'настройка %s содержит управляющие знаки и не годится для %s, взято %s', [ name, where, def ]);
 		return def;
 	}
 	if (match(val, re)) return val;
-	ob_cmd('warnf', 'настройка %s = «%s» не годится для %s, взято %s', [ name, val, where, def ], true);
+	ob_cmd('warnf', 'настройка %s = «%s» не годится для %s, взято %s', [ name, val, where, def ]);
 	return def;
 }
 
@@ -42,8 +42,10 @@ function ob_xrayv(fields) {
 	return fields == 2 ? (f[1] ?? '') : join(' ', slice(f, 0, 2));
 }
 
+// Частный -- только адрес IPv4: имя «10.example.com» проходило как частный, и
+// проверка «без TLS к публичному адресу» молчала (Ф9, п4-14).
 function ob_private(h) {
-	return match(h, /^(10\.|192\.168\.|127\.|169\.254\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[01]\.)/) != null;
+	return lj_v4_ok(h, false) && match(h, /^(10\.|192\.168\.|127\.|169\.254\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[01]\.)/) != null;
 }
 
 // streamSettings: транспорт по N.TYPE.
@@ -106,6 +108,20 @@ function ob_transport(N) {
 			try { e = json(N.EXTRA); } catch (err) { e = null; }
 			if (type(e) != 'object')
 				ob_die('параметр extra в ссылке -- не один объект JSON: он подставляется в конфиг как есть, и такая ссылка переписывает соседние поля, включая адрес сервера и защиту');
+			// downloadSettings -- второй сервер со своим адресом и защитой: те же
+			// предохранители, что у основного, и его адрес -- мимо перехвата
+			// (Ф9, п3-55).
+			let ds = e.downloadSettings;
+			if (type(ds) == 'object') {
+				let da = type(ds.address) == 'string' ? ds.address : '';
+				if (da !== '' && !lj_v4_ok(da, false) && !_domain_ok(da))
+					ob_dief('extra.downloadSettings: адрес «%s» не годится — нужен IPv4 или имя', da);
+				if ((ds.security ?? 'none') == 'none' && u('allow_insecure') != '1' && !ob_private(da || N.HOST))
+					ob_die('extra.downloadSettings без TLS к публичному адресу: трафик виден любому на пути. Нужна защита tls или reality; разрешить всё же: byway set allow_insecure on');
+				if (ds.tlsSettings?.allowInsecure && u('allow_insecure') != '1')
+					ob_die('extra.downloadSettings отключает проверку сертификата (allowInsecure): соединение может подменить любой на пути. Разрешить всё же: byway set allow_insecure on');
+				if (da !== '') N.DLHOST = da;
+			}
 			x.extra = e;
 		}
 		return { network: 'xhttp', xhttpSettings: x };
@@ -259,7 +275,8 @@ function ob_key(url, tag, prev_sni, prev_wshost) {
 		if (raw == '') ob_die('выбран свой конфиг, но он пуст');
 		let o = ob_raw(tag);
 		if (o == null) ob_die('свой конфиг — не один JSON-объект аутбаунда: проверить скобки и кавычки');
-		let lbl = u('conn_label');
+		// Без управляющих знаков: название печатает gen (Ф9, прогон 5).
+		let lbl = replace(u('conn_label'), /[\x01-\x1f\x7f]/g, '');
 		let N = { PROTO: 'raw', RAW: raw, LABEL: lbl != '' ? lbl : _t('свой конфиг'),
 		          TYPE: '-', SEC: '-', HOST: '-', PORT: '0' };
 		return { N: N, block: o, raw: true };
@@ -273,10 +290,9 @@ function ob_key(url, tag, prev_sni, prev_wshost) {
 		if (length(r.fatal) > 1) ob_dief(...r.fatal); else ob_die(r.fatal[0]);
 	}
 	let N = r.N;
-	// Схему и имя разбор кладёт прямо в вывод для sh, мимо N.
-	N.SCHEME = r.scheme;
+	// Имя -- из разбора, в N его нет.
 	N.LABEL = r.label;
-	// В ss sni и host не задаются: остаются прежние, как в shell.
+	// В ss sni и host не задаются: остаются прежние.
 	if (N.SNI == null) N.SNI = prev_sni;
 	if (N.WSHOST == null) N.WSHOST = prev_wshost;
 	if (N.ENC != '' && N.ENC != 'none' && ob_xver() < 250829)
@@ -290,21 +306,22 @@ function ob_key(url, tag, prev_sni, prev_wshost) {
 		ob_warnf('flow=%s с транспортом %s не работает: Xray-core примет конфиг и сломается в бою', N.FLOW, N.TYPE);
 	let ob = ob_outbound(N);
 
-	// mux: в поставке 0; с flow, своим мультиплексированием и wireguard -- нет.
+	// mux: в поставке 8; с flow, своим мультиплексированием и wireguard -- нет.
+	// Только vless и vmess: mux -- расширение Xray, и сервер socks, shadowsocks
+	// или trojan не на Xray рвёт такие соединения все до одного (Ф9, п3-50).
+	// Молча: при поставочном 8 это не выбор человека.
 	let mux = null;
 	let mc = ob_val_or('mux_concurrency', u('mux_concurrency'), /^[0-9]{1,3}$/, '0', _t('конфига движка'));
-	if (mc != '' && mc != '0') {
+	if (mc != '' && mc != '0' && (N.PROTO == 'vless' || N.PROTO == 'vmess')) {
 		if (N.FLOW != '')
 			ob_warnf('mux отключён: он не сочетается с flow=%s (Vision делит поток сам)', N.FLOW);
 		else if (N.TYPE == 'xhttp' || N.TYPE == 'grpc' || N.TYPE == 'hysteria')
 			ob_warnf('mux отключён: у транспорта %s своё мультиплексирование, второй слой поверх только вредит', N.TYPE);
-		else if (N.PROTO == 'wireguard')
-			ob_warn('mux к wireguard не применяется: у него нет потока, который можно делить');
 		else
 			mux = { enabled: true, concurrency: int(mc) };
 	}
 	// Метка на исходящих при «VPN для программ на роутере» (число -- из
-	// shell, self_mark_dec, до переноса перехвата).
+	// shell, ob_env_mark).
 	let sm = getenv('BW_SELFMARK');
 	if (u('router_via_vpn') == '1' && sm) st.sockopt = { mark: int(sm) };
 
@@ -348,11 +365,12 @@ function ob_proxies(skip, psni, pws) {
 				ob_warnf('свой конфиг: включено «VPN для программ на роутере», а метки в нём нет — если адрес сервера попадёт в списки, соединение движка к нему уйдёт в перехват по кругу; дописать в streamSettings поле sockopt.mark = %s', getenv('BW_SELFMARK') ?? '');
 		} else {
 			R.hosts = [ k.N.HOST ];
+			if (k.N.DLHOST) push(R.hosts, k.N.DLHOST);
 		}
 		return R;
 	}
-	let keys = split(trim(u('node_urls')), /[ \t\n]+/);
-	if (keys[0] == '') ob_die('выбран автовыбор, но ни одного ключа не добавлено');
+	let keys = ul('node_urls');
+	if (!length(keys)) ob_die('выбран автовыбор, но ни одного ключа не добавлено');
 	skip = ' ' + (skip ?? '') + ' ';
 	for (let ki = 0; ki < length(keys); ki++) {
 		if (index(skip, ' ' + ki + ' ') >= 0) continue;
@@ -377,6 +395,7 @@ function ob_proxies(skip, psni, pws) {
 		push(R.blocks, k.block);
 		push(R.keyidx, ki);
 		push(R.hosts, k.N.HOST);
+		if (k.N.DLHOST) push(R.hosts, k.N.DLHOST);
 		R.N = k.N;
 		R.n++;
 	}

@@ -23,8 +23,9 @@ function m_ask(t)  { print('  ', _t(t), ': '); return m_read(); }
 // раскладке. Принимается и «д».
 function m_yes(t) {
 	print('  \033[1;33m', _t(t), '\033[0m [y/N]: ');
-	let a = m_read();
-	return index('yYдД', substr(a, 0, 1)) >= 0 && a !== '';
+	// Словами: index по 'yYдД' сравнивал первый БАЙТ, и «н»/«нет» (тот же
+	// первый байт UTF-8, что у «д») читались как «да» (Ф9, п4-24).
+	return index([ 'y', 'Y', 'yes', 'Yes', 'YES', 'д', 'Д', 'да', 'Да', 'ДА' ], trim(m_read())) >= 0;
 }
 
 // Вывод команды byway с отступом.
@@ -33,10 +34,29 @@ function m_out(...a) {
 	for (let l in pl_lines(run([ 'env', 'BW_WRAP=74', m_self(), ...a ], true).out)) print('    ', l, '\n');
 }
 
+// Ключи -- в пакет byway_key, остальное -- в byway (Ф9, п1-12).
 function m_uci(...kv) {
-	for (let x in kv) run([ 'uci', 'set', 'byway.main.' + x ]);
-	run([ 'uci', 'commit', 'byway' ]);
+	let pk = {};
+	for (let x in kv) {
+		let p = opt_pkg(split(x, '=')[0]);
+		if (!pk[p]) {
+			if (p == KEY_PKG && !key_ensure()) { warn('на флеше нет места: настройка не записана, прежняя на месте'); return false; }
+			uci_fresh(p);
+		}
+		pk[p] = true;
+		run([ 'uci', 'set', p + '.main.' + x ]);
+	}
+	// Ключ -- первым: при нехватке места способ подключения не меняется без него.
+	// Отказ -- ложь: вызывающий не говорит «применено» (Ф9, прогон 5).
+	for (let p in [ KEY_PKG, 'byway' ])
+		if (pk[p] && !uci_commit(p)) {
+			run([ 'uci', '-q', 'revert', 'byway' ]);
+			_cur = null;
+			warn('на флеше нет места: настройка не записана, прежняя на месте');
+			return false;
+		}
 	_cur = null;
+	return true;
 }
 
 // Пересборка и перезапуск после правки: без неё настройка сохранена, но не
@@ -94,9 +114,10 @@ function m_connection() {
 				// Проверка до записи: неразобранный ключ в настройках оставит
 				// без туннеля и без понятной причины.
 				if (run([ m_self(), 'check', k ]).code == 0) {
-					m_uci('node_url=' + k, 'conn_mode=key');
-					print(_t('  \033[1;32mключ принят\033[0m\n'));
-					m_apply();
+					if (m_uci('node_url=' + k, 'conn_mode=key')) {
+						print(_t('  \033[1;32mключ принят\033[0m\n'));
+						m_apply();
+					}
 				} else {
 					print(_t('  \033[1;31mключ не разобран\033[0m, вот что говорит проверка:\n\n'));
 					for (let l in slice(pl_lines(run([ m_self(), 'check', k ], true).out), -6)) print('    ', l, '\n');
@@ -105,12 +126,16 @@ function m_connection() {
 			m_pause();
 		} else if (r == '3') {
 			print('\n');
+			// Тем же путём, что `byway key sub`: адрес пишется, только если
+			// подписка принята, ключи -- после разбора. Прежде отвергнутый адрес
+			// (http://, частный) записывался, а «Ключи выше» печаталось и без
+			// ключей (Ф9, п3-71).
 			let a = m_ask('Адрес подписки');
 			if (a !== '') {
-				m_uci('sub_url=' + a);
 				print('\n');
-				m_out('sub', a);
-				print(_t('\n  Ключи выше. Вписать нужный — пункт 2.\n'));
+				// Адрес -- файлом, не аргументом (н1-12).
+				if (put_file(PS_SUB_FILE, a + '\n', 0600)) m_out('key', 'sub');
+				else warn('в /var/run нет места — подписка не загружена');
 			}
 			m_pause();
 		} else if (r == '4') {
@@ -135,20 +160,17 @@ function m_mode() {
 		print('\n');
 		let r = m_ask('Выбор');
 		if (r == '1') {
-			m_uci('list_mode=lists');
-			m_apply();
+			if (m_uci('list_mode=lists')) m_apply();
 			m_pause();
 		} else if (r == '2') {
 			print('\n');
 			print(_t('  Через VPN пойдёт весь трафик, включая загрузки и обновления.\n'));
 			if (m_yes('Включить?')) {
-				m_uci('list_mode=all');
-				m_apply();
+				if (m_uci('list_mode=all')) m_apply();
 			}
 			m_pause();
 		} else if (r == '3') {
-			m_uci('ru_direct=' + (u('ru_direct') == '1' ? '0' : '1'));
-			m_apply();
+			if (m_uci('ru_direct=' + (u('ru_direct') == '1' ? '0' : '1'))) m_apply();
 			m_pause();
 		} else if (r == '0' || r === '') {
 			return;
@@ -236,10 +258,9 @@ function m_service() {
 		} else if (r == '2') {
 			print('\n');
 			print(_t('  Туннеля не станет, интернет продолжит работать напрямую.\n'));
-			if (m_yes('Остановить?')) {
-				sys([ '/etc/init.d/byway', 'stop' ]);
-				print(_t('\n  остановлена\n'));
-			}
+			// Как byway off: голый stop снимал службу с учёта procd, и
+			// «Включить» в панели потом её не поднимал (Ф9, п3-64, прогон 5).
+			if (m_yes('Остановить?')) sys([ m_self(), 'off' ]);
 			m_pause();
 		} else if (r == '3') {
 			print('\n');
@@ -349,7 +370,8 @@ function m_transfer() {
 				printf(_t('  Прежние сохраняются в %s/before-import/\n\n'), getenv('BW_LISTS'));
 				if (m_yes('Принять?')) {
 					print('\n');
-					if (sys([ m_self(), 'import', f ]) == 0) run([ '/etc/init.d/byway', 'restart' ]);
+					// import перезапускает службу сам: второй рестарт рвал туннель зря (Ф9, п3-19).
+					sys([ m_self(), 'import', f ]);
 				}
 			}
 			m_pause();

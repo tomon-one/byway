@@ -1,5 +1,5 @@
 # byway doctor и report -- в ucode (uc/doctor.uc). Здесь пути и номера,
-# которые пока живут в shell (обновление, списки, сторож), одним набором.
+# которые знает shell (метки обновления, списки, журнал сторожа), одним набором.
 
 diag_uc() {
     BW_NUM=$BYWAY_NUM BW_OUT=$OUT BW_CONF=$CONF BW_LISTS=$LISTS \

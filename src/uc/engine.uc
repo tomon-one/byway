@@ -154,7 +154,7 @@ function en_gen_tail() {
 // Без выхода по отказу: на пути «через память» он случается при
 // остановленной службе.
 function en_bin_set(p) {
-	if (run([ 'uci', 'set', 'byway.main.xray_bin=' + p ]).code != 0 || run([ 'uci', 'commit', 'byway' ]).code != 0)
+	if (run([ 'uci', 'set', 'byway.main.xray_bin=' + p ]).code != 0 || !uci_commit('byway'))
 		warnf('путь к движку не записался в настройки: byway set xray_bin %s', p);
 }
 
@@ -230,6 +230,10 @@ function en_side() {
 // Путь «через память», подготовка (процесс обёртки): архив прежней версии --
 // СЕЙЧАС, пока туннель жив; потом -- дочерний процесс без INT и HUP.
 function en_ram() {
+	// Ядро -- ссылка на флешку (как советует engine.md): удаление ссылки
+	// места на флеше не освобождает, и замена оставляла без обоих ядер (Ф9, п3-59).
+	if (fs.lstat(E.old)?.type == 'link')
+		dief('места на второе ядро нет, а прежнее — ссылка на %s: ссылка места не занимает, ничего не тронуто. Положить новое ядро рядом с прежним (на флешку) и указать путь: byway set xray_bin', fs.readlink(E.old) ?? '?');
 	if (substr(E.old, 0, 20) != '/usr/local/bin/xray-')
 		dief('места на второе ядро нет, а прежнее (%s) — из пакета; снять пакет вручную и поставить заново: byway core %s', E.old, E.nw);
 	en_stage(_f('места на второе ядро нет (свободно %s МБ) — замена через память', en_mb(E.free)));
@@ -417,7 +421,10 @@ function en_local(f) {
 	                         (substr(f, -3) == '.gz' ? '' : 'xray ') + '| sha256sum', 'sh', f ]).out, ' ')[0] ?? '');
 	sayf('своя сборка: %s, sha256 ядра %s', f, sum);
 	E.nw = _t('своя сборка');
-	E.new = '/usr/local/bin/xray-local-' + trim(run([ 'date', '+%Y%m%d%H%M' ]).out);
+	// С секундами: два вызова за минуту давали одно имя, и уборка прежнего
+	// ядра удаляла только что поставленное (Ф9, п4-37).
+	E.new = '/usr/local/bin/xray-local-' + trim(run([ 'date', '+%Y%m%d%H%M%S' ]).out);
+	if (E.new == E.old) dief('ядро %s уже стоит — повторить через секунду', E.new);
 	en_workdir();
 	if (en_mem_kb() < 40960) dief('памяти доступно %s МБ, для замены нужно не меньше 40 — ничего не тронуто', en_mb(en_mem_kb()));
 	en_go();
@@ -428,16 +435,29 @@ function cmd_engine(arg) {
 	arg ??= '';
 	if (substr(arg, 0, 1) == '/') { en_local(arg); return; }
 	let pf = getenv('BW_PKGFIX'), tested = getenv('BW_XTESTED');
-	if (run([ 'sh', '-c', 'command -v unzip' ]).code != 0) dief('нет unzip — поставить: %s unzip', pf);
-	if (run([ 'sh', '-c', 'command -v sha256sum' ]).code != 0) die('нет sha256sum — сверить архив нечем, замена не начата');
-	if (en_mips_nofpu())
+	let nofpu = en_mips_nofpu();
+	// Вопрос «есть ли новее» не требует ни unzip, ни сборки под процессор:
+	// на MIPS без FPU ядро стоит пакетом, unzip там нет, и проверка
+	// отвечала «поставить unzip», а после него -- отказом (Ф9, п2-10).
+	// Процессор -- раньше unzip: без FPU совет «поставить unzip» вёл к отказу
+	// следующим шагом (прогон 5).
+	if (nofpu && arg !== '' && arg != '--check')
 		dief('на этом процессоре сборки Xray-core с GitHub не запускаются — движок ставится и обновляется пакетом OpenWrt: %s xray-core', pf);
+	if (arg !== '' && arg != '--check') {
+		if (run([ 'sh', '-c', 'command -v unzip' ]).code != 0) dief('нет unzip — поставить: %s unzip', pf);
+		if (run([ 'sh', '-c', 'command -v sha256sum' ]).code != 0) die('нет sha256sum — сверить архив нечем, замена не начата');
+	}
 	E.asset = en_asset();
-	if (!E.asset) dief('неизвестно, какой файл выпуска брать для %s', en_uname());
+	if (!E.asset && arg !== '' && arg != '--check') dief('неизвестно, какой файл выпуска брать для %s', en_uname());
 	E.old = xray_bin();
 	E.ov = en_ver(E.old);
 
 	if (arg === '' || arg == '--check') {
+		if (nofpu) {
+			if (E.ov !== '') sayf('стоит Xray %s', E.ov);
+			sayf('на этом процессоре ядро ставится и обновляется пакетом OpenWrt: %s xray-core', pf);
+			return;
+		}
 		// Первым -- ответ «есть ли новее». Подробности -- не в --check (его
 		// зовёт панель).
 		let nv = en_top('any'), sv = en_top('stable');

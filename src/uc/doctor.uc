@@ -105,6 +105,9 @@ function dr_system() {
 		dwarn(_t('не OpenWrt'), _t('byway рассчитан на OpenWrt, на другом может не работать'));
 	}
 	dok(_f('архитектура: %s', trim(run([ 'uname', '-m' ]).out)));
+	if (clock_bad())
+		dbad(_f('часы роутера: %s', trim(run([ 'date', '+%Y-%m-%d %H:%M' ]).out)),
+		     _t('время не выставлено: загрузки по HTTPS не пройдут, ядро Xray может не запуститься. Проверить синхронизацию (Система → Время в LuCI, ntpd) и связь'));
 	// Отдельного /overlay может не быть (ram-профили, чистый ext4).
 	let mnt = fs.stat('/overlay') ? '/overlay' : '/';
 	let df = split(split(run([ 'df', '-k', mnt ]).out, '\n')[1] ?? '', /[ \t]+/);
@@ -114,6 +117,18 @@ function dr_system() {
 		dbad(_f('свободно на флеше: %s МБ', free), _t('меньше двух мегабайт: списки и конфиг могут не записаться'));
 	else
 		dok(_f('свободно на флеше: %s МБ', free));
+}
+
+// Задачи byway в crontab: строка-комментарий -- не задача, «byway status»
+// -- не «byway stat» (Ф9, п4-54). Счёт по каждой: watch, stat, pulse.
+function dr_cron() {
+	let c = { watch: 0, stat: 0, pulse: 0 };
+	for (let l in split(run([ 'crontab', '-l' ]).out, '\n')) {
+		if (substr(ltrim(l), 0, 1) == '#') continue;
+		for (let k in [ 'watch', 'stat', 'pulse' ])
+			if (match(l, regexp('byway ' + k + '([ \t>;&|]|$)'))) c[k]++;
+	}
+	return c;
 }
 
 function dr_needs() {
@@ -138,12 +153,7 @@ function dr_needs() {
 	else
 		dbad(_t('служба НЕ в автозапуске'), _t('сейчас работает, но после перезагрузки туннеля не будет: /etc/init.d/byway enable'));
 	// Задачи cron: сторож, учёт, обрезка журналов.
-	let cw = 0, cs = 0, cp = false;
-	for (let l in split(run([ 'crontab', '-l' ]).out, '\n')) {
-		if (index(l, 'byway watch') >= 0) cw++;
-		if (index(l, 'byway stat') >= 0) cs++;
-		if (index(l, 'byway pulse') >= 0) cp = true;
-	}
+	let cc = dr_cron(), cw = cc.watch, cs = cc.stat, cp = cc.pulse > 0;
 	if (cw > 0 && cs > 0) {
 		if (run([ 'pidof', 'crond' ]).code == 0)
 			dok(_t('задачи cron на месте, crond работает'));
@@ -199,6 +209,9 @@ function dr_updates() {
 	dr_head(_t('\nОбновления\n'));
 	let nvf = getenv('BW_NEWVER'), rnf = getenv('BW_RELNOTE'), num = getenv('BW_NUM');
 	let nv = trim(fs.readfile(nvf) ?? '');
+	// Метка старой находки (версия не новее этой) -- как её отсутствие: иначе
+	// раздел выходил пустым заголовком (Ф9, п4-29).
+	if (nv !== '' && !st_ver_gt(nv, num)) nv = '';
 	// Раздел не выходит пустым заголовком: пустота читается как «не прошла».
 	if (nv === '') {
 		let fl = dr_mtime(getenv('BW_UPFAIL')), okm = dr_mtime(getenv('BW_UPOK'));
@@ -247,7 +260,13 @@ function dr_updates() {
 			       tzn || _t('без ярлыка'), tzo, trim(run([ 'date', '+%z' ]).out) || '?', h, trim(run([ 'date', '+%H:%M' ]).out)));
 		// Провалившийся выпуск больше не ставится сам -- человек должен знать.
 		let af = trim(fs.readfile(getenv('BW_AUFAIL')) ?? '');
-		if (af !== '')
+		// Причина -- по итогу ночи: подпись не та или её нет -- не «не поднялся»,
+		// и --force тут не поможет (Ф9, п3-70, прогон 5).
+		let al = fs.readfile(getenv('BW_AULOG')) ?? '';
+		if (af !== '' && index(al, af) >= 0 && (index(al, 'подпис') >= 0 || index(al, 'signature') >= 0))
+			dwarn(_f('выпуск %s не поставлен: его подпись не сошлась или её нет — сам больше не ставится', af),
+			      _t('подождать исправленного выпуска; поставить без проверки подписи — только если доверяете источнику: byway update --no-verify'));
+		else if (af !== '')
 			dwarn(_f('выпуск %s не поднялся и больше не ставится сам', af),
 			      _t('если причина устранена — поставить вручную: byway update --force'));
 	}
@@ -261,8 +280,7 @@ function dr_config() {
 	// По режиму, не по node_url: автовыбор читает node_urls.
 	let mode = u('conn_mode');
 	if (mode == 'urltest') {
-		let k = trim(u('node_urls'));
-		let n = k === '' ? 0 : length(split(k, /[ \t\n]+/));
+		let n = length(ul('node_urls'));
 		if (n > 0) dok(_f('ключей для автовыбора: %s', n));
 		else dbad(_t('ключи для автовыбора не заданы'), _t('добавить на вкладке «Основное» либо: byway key sub АДРЕС'));
 	} else if (mode == 'outbound') {
@@ -271,7 +289,6 @@ function dr_config() {
 	} else {
 		let url = u('node_url');
 		if (url === '') dbad(_t('ключ не задан'), _t("вписать на вкладке «Основное» или: byway key 'ССЫЛКА'"));
-		else if (substr(url, 0, length('ЗАПОЛНИТЬ')) == 'ЗАПОЛНИТЬ') dbad(_t('ключ не заполнен'), _t('вписать настоящий ключ вместо заглушки'));
 		else dok(_f('ключ задан, режим: %s', mode));
 	}
 	// По объединённому списку: по своему файлу пустым объявлялся и список
@@ -298,18 +315,29 @@ function dr_config() {
 			let mk = st_mark(), ok = false;
 			let re = regexp('fwmark ' + mk + '(/' + mk + ')?[ \t]+lookup ' + ST_RT + '([ \t]|$)');
 			for (let l in split(run([ 'ip', '-6', 'rule', 'show' ]).out, '\n')) if (match(l, re)) ok = true;
-			if (ok) dok(_t('IPv6 поднят и заворачивается наравне с IPv4'));
+			// Защита dnsmasq от DNS-rebind (на OpenWrt включена по умолчанию)
+			// выбрасывает AAAA из пула fakeip6 (fc00::/18 -- частный ULA):
+			// по доменам IPv6 не заворачивается, хотя правило есть (Ф9, п3-68).
+			// Перебор без стрелки: захват на ucode 22.03/23.05 роняет программу.
+			let rb = false, dh = cursor().get_all('dhcp') ?? {};
+			for (let n in dh) if (dh[n]['.type'] == 'dnsmasq' && dh[n].rebind_protection != '0') rb = true;
+			if (ok && rb)
+				dwarn(_t('IPv6 включён, но защита dnsmasq от DNS-rebind отбрасывает подставные адреса IPv6'),
+				      _t('домены списка идут через VPN только по IPv4 (подсети IPv6 -- заворачиваются). Чтобы и по IPv6: выключить защиту (Сеть → DHCP и DNS → «Защита от DNS-rebind») -- решение за вами, она закрывает подмену адресов внутри сети'));
+			else if (ok) dok(_t('IPv6 поднят и заворачивается наравне с IPv4'));
 			else dbad(_t('IPv6 включён в настройках, но правила для него в ядре нет'), _t('переложить правила: byway plumb on'));
 		} else if (u('list_mode') == 'all') {
 			dwarn(_t('IPv6 поднят, а перехват только по IPv4'), _t('в режиме «всё через VPN» соединения по IPv6 идут мимо туннеля: выключить IPv6 на WAN либо вернуться к режиму по спискам'));
 		} else {
-			dwarn(_t('IPv6 поднят, а перехват только по IPv4'), _t('и домены, и подсети закрывают только IPv4: клиент, получивший AAAA, предпочтёт его и уйдёт напрямую. Выключить IPv6 на WAN -- либо помнить, что подсети сервиса его не покрывают'));
+			dwarn(_t('IPv6 поднят, а перехват только по IPv4'), _t('домены списка не задеты (AAAA на них роутер не отдаёт), но подсети закрывают только IPv4: устройство, узнавшее адрес сервиса не у роутера, уйдёт к нему по IPv6 напрямую. Выключить IPv6 на WAN -- либо помнить, что подсети сервиса его не покрывают'));
 		}
 	}
 	// Биты self_mark и mark не должны пересекаться: пакеты движка ушли бы на
 	// петлю при зелёных проверках.
 	if (u('router_via_vpn') == '1') {
-		let sm = u('self_mark') || '0x400000', mk = u('mark') || '0x100000';
+		// Метка -- действующая (st_mark): негодную перехват заменяет умолчанием,
+		// и сырое значение давало ложные тревоги (Ф9, п3-2, п3-9, прогон 5).
+		let sm = u('self_mark') || '0x400000', mk = st_mark();
 		if (ltrim(sm + mk, '0123456789abcdefABCDEFxX') === '' && (dr_num(sm) & dr_num(mk)) != 0)
 			dwarn(_f('self_mark %s пересекается битами с mark %s', sm, mk),
 			      _t('byway возьмёт другое значение сам (его видно в byway nft, строка «meta mark … return»); закрепить: byway set self_mark ЗНАЧЕНИЕ'));
@@ -319,7 +347,7 @@ function dr_config() {
 function dr_dns() {
 	dr_head(_t('\nПерехват и соседние службы\n'));
 	let pid = st_xray_pid();
-	let own = u('dns_listen') || '127.0.0.42';
+	let own = g_dns_listen(false);
 	if (index(dm_servers(), own) >= 0)
 		dok(_t('dnsmasq направлен на byway'));
 	else if (u('enabled') != '1' || pid === '')
@@ -332,8 +360,13 @@ function dr_dns() {
 		dwarn(_f('у dnsmasq в настройках свои серверы: %s', join(' ', fo)),
 		      _t('часть запросов уходит мимо byway, и сайты из списка открываются через раз — убрать: Сеть → DHCP и DNS → Перенаправления'));
 	// dnsmasq один на все мосты, перехват -- только на перечисленных: сеть
-	// вне списка получает fakeip и умирает на WAN.
+	// вне списка получает fakeip, и его разворачивает вход «напрямую».
 	let bwif = ' ' + u('interface') + ' ', lost = '', outside = '';
+	// Устройство из interface, которого нет (опечатка «br-lna»): перехвата у
+	// сети нет, а doctor винил настоящий мост (Ф9, п3-58, прогон 5).
+	for (let i in split(trim(u('interface')), /[ \t]+/))
+		if (i !== '' && !fs.stat('/sys/class/net/' + i))
+			dbad(_f('устройства %s из byway.main.interface нет', i), _t('опечатка или мост ещё не поднят: проверить имя (ip link) и поправить: byway set interface …'));
 	let dh = uci.cursor().get_all('dhcp') ?? {}, net = uci.cursor().get_all('network') ?? {}, secs = [];
 	for (let n in dh) if (dh[n]['.type'] == 'dhcp') push(secs, dh[n]);
 	secs = sort(secs, (a, b) => a['.index'] - b['.index']);
@@ -351,9 +384,11 @@ function dr_dns() {
 	if (u('list_mode') == 'all' && outside !== '')
 		dbad(_f('режим «всё через VPN», а эти сети идут мимо него целиком:%s', outside),
 		     _t('в этом режиме byway.main.interface -- граница ВСЕЙ защиты, а не только списков: что вне его, то мимо туннеля и мимо запрета «не пускать мимо VPN». Добавить устройства в byway.main.interface'));
+	// Подставной адрес у таких сетей byway разворачивает в имя и ведёт
+	// напрямую (Ф9, п1-18): список у них открывается, но мимо VPN.
 	else if (lost !== '')
 		dwarn(_f('сети с резолвером byway, но без перехвата:%s', lost),
-		      _t("их клиенты получат подставной адрес, до туннеля не дойдут и потеряют ВЕСЬ список. Лечится одним из двух: добавить сеть в byway.main.interface либо выдать ей свой DNS через dhcp_option '6,…'"));
+		      _t("сайты из списков у них открываются напрямую, мимо VPN. Нужен VPN и там -- добавить сеть в byway.main.interface; не нужен и подставные адреса ни к чему -- выдать ей свой DNS через dhcp_option '6,…'"));
 	else
 		dok(_t('перехват и резолвер согласованы по сетям'));
 	// Маршрут решает DNS: клиент со своим резолвером идёт мимо туннеля.
@@ -364,7 +399,7 @@ function dr_dns() {
 
 function dr_marks() {
 	// Чужое правило по той же метке -- дыра: удаление нашего её не закроет.
-	let mk = u('mark') || '0x100000', n = 0;
+	let mk = st_mark(), n = 0;
 	for (let l in split(run([ 'uci', 'show', 'firewall' ]).out, '\n'))
 		if (index(l, "mark='" + mk) >= 0) n++;
 	if (n > 1)
@@ -385,7 +420,7 @@ function dr_ls(dir, ext) {
 
 function dr_files() {
 	let routes = getenv('BW_ROUTES'), all = cursor().get_all('byway') ?? {}, secs = [];
-	let urls = split(trim(u('node_urls')), /[ \t\n]+/);
+	let urls = ul('node_urls');
 	for (let n in all) if (all[n]['.type'] == 'route') push(secs, all[n]);
 	secs = sort(secs, (a, b) => a['.index'] - b['.index']);
 	for (let s in secs) {
@@ -393,8 +428,8 @@ function dr_files() {
 		let rn = s['.name'], lb = s.label ?? '', has = false;
 		for (let k in urls) {
 			if (k === '') continue;
-			let h = index(k, '#');
-			if ((h < 0 ? '' : pk_pctd(substr(k, h + 1))) == lb) { has = true; break; }
+			// Мерка метки -- как у сборки (pk_label, Ф9, п4-78).
+			if (pk_label(k) == lb) { has = true; break; }
 		}
 		let st = fs.stat(routes + '/' + rn + '.lst');
 		if (!has)
@@ -451,12 +486,37 @@ function dr_rivals() {
 	}
 	// pbr уживается, если метки и таблицы не пересекаются.
 	if (run([ 'test', '-x', '/etc/init.d/pbr' ]).code == 0 && run([ '/etc/init.d/pbr', 'enabled' ]).code == 0)
-		dwarn(_t('рядом включён pbr'), _f('он тоже метит трафик и правит ip rule: его метки и таблицы не должны совпадать с меткой byway %s и таблицей %s', u('mark') || '0x100000', ST_RT));
+		dwarn(_t('рядом включён pbr'), _f('он тоже метит трафик и правит ip rule: его метки и таблицы не должны совпадать с меткой byway %s и таблицей %s', st_mark(), ST_RT));
+}
+
+// Негодные значения, которые перехват и сборка заменили умолчанием: работает
+// не то, что записано (Ф9, прогон 5: restart молчал, doctor читал сырое).
+function dr_rawvals() {
+	let mk = u('mark'), tp = u('tproxy_port'), lp = u('local_proxy_port'), dl = u('dns_listen');
+	if (mk !== '' && mk != st_mark() && sprintf('0x%x', hex(substr(mk, 2)) ?? 0) != st_mark())
+		dwarn(_f('настройка mark «%s» не годится — работает %s', mk, st_mark()), _t('метка -- шестнадцатеричная и не 0: byway set mark 0x100000'));
+	for (let p in [ [ 'tproxy_port', tp, '1602' ], [ 'local_proxy_port', lp, '1603' ] ])
+		if (p[1] !== '' && !g_port_ok(p[1]))
+			dwarn(_f('настройка %s «%s» не годится — работает %s', p[0], p[1], p[2]), _f('порт -- от 1 до 65535: byway set %s %s', p[0], p[2]));
+	if (dl !== '' && dl != g_dns_listen(false))
+		dwarn(_f('настройка dns_listen «%s» не годится — работает %s', dl, g_dns_listen(false)), _t('нужен адрес петли 127.x.x.x, кроме 127.0.0.1: byway set dns_listen 127.0.0.42'));
+	// Пулы и метка движка: сборка заменяет негодное умолчанием молча (н1-5).
+	let sm = u('self_mark'), fp = u('fakeip_pool'), fp6 = u('fakeip6_pool'), n = sm !== '' && match(sm, /^(0[xX][0-9a-fA-F]{1,8}|[0-9]{1,10})$/) ? pl_num(sm) : (sm === '' ? 1 : null);
+	if (n == null || n <= 0 || n > 4294967295)
+		dwarn(_f('настройка %s «%s» не годится — работает %s', 'self_mark', sm, '0x400000'), _t('метка -- число больше 0: byway set self_mark default'));
+	if (fp !== '' && (!match(fp, G_POOL_RE) || !g_pool_sane(fp, true)))
+		dwarn(_f('настройка %s «%s» не годится — работает %s', 'fakeip_pool', fp, '198.18.0.0/15'), _t('пул -- вне частных сетей, маска 8–30: byway set fakeip_pool default'));
+	if (fp6 !== '' && !g_pool6_ok(fp6))
+		dwarn(_f('настройка %s «%s» не годится — работает %s', 'fakeip6_pool', fp6, 'fc00::/18'), _t('пул -- в fc00::/7, маска 16–120: byway set fakeip6_pool default'));
 }
 
 function dr_ports() {
-	let tp = u('tproxy_port') || '1602', lp = u('local_proxy_port') || '1603';
-	let pairs = [ [ tp, _t('вход tproxy') ], [ lp, _t('прокси роутера') ] ];
+	// Порты -- действующие, как у сборки и nft: негодный там заменяется
+	// умолчанием, а doctor писал «порт 0» (Ф9, п3-17, прогон 5).
+	let tp = u('tproxy_port'), lp = u('local_proxy_port');
+	if (!g_port_ok(tp)) tp = '1602';
+	if (!g_port_ok(lp)) lp = '1603';
+	let pairs = [ [ tp, _t('вход tproxy') ], [ lp, _t('прокси роутера') ], [ g_direct_port(tp, lp), _t('вход «напрямую» для сетей вне interface') ] ];
 	let ns = split(run([ 'netstat', '-lnp' ]).out, '\n');
 	for (let pp in pairs) {
 		let who = {}, wl = [];
@@ -472,6 +532,20 @@ function dr_ports() {
 		else
 			dwarn(_f('%s (порт %s) занят: %s', pp[1], pp[0], ws), _t('сменить порт в настройках byway либо убрать чужую службу'));
 	}
+	// Адрес DNS движка: занятый чужим (alias на lo, второй dnsmasq) не даёт
+	// движку подняться, а doctor называл только «движок не работает» (Ф9, п3-57).
+	let dl = g_dns_listen(false), dw = {}, dwl = [];
+	let dre = regexp('[ \t]' + replace(dl, /\./g, '\\.') + ':53[ \t]');
+	for (let l in ns) {
+		if (!match(l, dre)) continue;
+		let f = split(trim(l), /[ \t]+/), w = f[length(f) - 1];
+		if (w != '-' && !dw[w]) { dw[w] = true; push(dwl, w); }
+	}
+	let dws = length(dwl) ? join(' ', sort(dwl)) + ' ' : '';
+	if (dws === '' || index(dws, 'xray') >= 0)
+		dok(_f('адрес DNS движка %s:53 свободен или занят byway', dl));
+	else
+		dbad(_f('адрес DNS движка %s:53 занят: %s', dl, dws), _t('движок не поднимется: сменить byway.main.dns_listen на другой адрес петли либо убрать чужую службу'));
 	let tbl = run([ 'nft', 'list', 'table', 'inet', ST_TABLE ]).code == 0;
 	// Заворот включён настройкой, работает цепочкой в ядре: спрашивать только
 	// при стоящем перехвате.
@@ -515,6 +589,7 @@ function dr_run() {
 	dr_marks();
 	dr_files();
 	dr_rivals();
+	dr_rawvals();
 	dr_ports();
 	print('\n');
 	if (DR_BAD == 0) say('окружение в порядке');
@@ -545,8 +620,12 @@ function rp_v(label, v) {
 
 // Вымарка адресов и имён: отчёт уходит постороннему.
 function rp_mask(s) {
+	// Путь после адреса (ws://…:443/путь) -- тоже часть ключа: на log_level
+	// info/debug движок печатает его в «failed to dial» (Ф9, п1-9, прогон 5).
+	s = replace(s, /(:\/\/[^ \/)"']*)\/[^ )"']*/g, (m, a) => a + '/…');
 	s = replace(s, /[0-9]{1,3}(\.[0-9]{1,3}){3}/g, 'x.x.x.x');
-	s = replace(s, /\[[0-9a-fA-F]*:[0-9a-fA-F:]*\]|[0-9a-fA-F]*::[0-9a-fA-F:]+/g, 'x::x');
+	// IPv6 и полный, без «::» (восемь групп) -- прогон 5.
+	s = replace(s, /\[[0-9a-fA-F]*:[0-9a-fA-F:]*\]|[0-9a-fA-F]*::[0-9a-fA-F:]+|[0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){7}/g, 'x::x');
 	return replace(s, /([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/g, _t('ИМЯ'));
 }
 
@@ -581,15 +660,18 @@ function cmd_report() {
 	dr_run();
 	print('\n');
 	rp_r(_t('== состояние =='));
+	ST_HIDE = true;
 	cmd_status();
+	ST_HIDE = false;
 	print('\n');
 	rp_r(_t('== проверка =='));
 	cmd_health();
 	print('\n');
 	rp_r(_t('== подключение (без значений) =='));
-	// В автовыборе разбирается первый ключ списка (node_url там нет).
+	// В автовыборе разбирается первый ключ списка (node_url там нет); при
+	// выборе вручную -- активный (node_url), а не первый (Ф9, п3-10).
 	let rk = '', mode = u('conn_mode');
-	if (mode == 'urltest' || mode == 'selector') rk = split(trim(u('node_urls')), /[ \t\n]+/)[0] ?? '';
+	if (mode == 'urltest') rk = ul('node_urls')[0] ?? '';
 	let N = hl_key(rk);
 	if (N) {
 		rp_v(_t('протокол'), N.PROTO);
@@ -606,8 +688,14 @@ function cmd_report() {
 		if (l === '') continue;
 		if (l == 'byway.main=byway') { rp_r(l); continue; }
 		let e = index(l, '='), k = substr(l, 0, e < 0 ? length(l) : e);
-		let kk = substr(k, rindex(k, '.') + 1);
-		if (index(RP_KEYS, kk) >= 0) rp_r(l);
+		let kk = substr(k, rpos(k, '.') + 1);
+		// Адрес DNS и имя подключения -- через вымарку: в адресе DoH бывает
+		// личный идентификатор, в имени -- что угодно (Ф9, п1-9).
+		if (index([ 'dns_upstream', 'dns_upstream2', 'dns_bootstrap', 'conn_label' ], kk) >= 0) {
+			let sc = match(substr(l, e + 1), /^'?([a-z+]+):\/\//);
+			print(k, '=', sc ? sc[1] + '://…' : _t('<скрыто>'), '\n');
+		}
+		else if (index(RP_KEYS, kk) >= 0) rp_r(l);
 		else print(_f('%s=<скрыто>\n', k));
 	}
 	print('\n');
@@ -628,7 +716,9 @@ function cmd_report() {
 	if (nt.code != 0) rp_r(_t('таблицы нет'));
 	else
 		for (let l in split(rtrim(nt.out, '\n'), '\n'))
-			if (!match(l, /^[ \t]*(elements|[0-9]+\.[0-9]+)/)) rp_r(l);
+			// Адрес в правиле (не набор «@…») -- это адреса серверов VPN в
+			// цепочке output: шапка обещает их не показывать (Ф9, п1-8).
+			if (!match(l, /^[ \t]*(elements|[0-9]+\.[0-9]+)/)) rp_r(index(l, 'daddr') >= 0 && index(l, '@') < 0 ? rp_mask(l) : l);
 	print('\n');
 	let mk = st_mark(), re = regexp('fwmark ' + mk + '(/' + mk + ')?[ \t]+lookup ' + ST_RT + '([ \t]|$)'), any = false;
 	for (let l in split(run([ 'ip', 'rule', 'show' ]).out, '\n')) if (match(l, re)) { rp_r(l); any = true; }
@@ -645,8 +735,8 @@ function cmd_report() {
 	let bl = [];
 	for (let l in split(run([ 'logread', '-e', 'byway' ]).out, '\n'))
 		if (l !== '' && !match(l, / cron\.[a-z]* crond\[/)) push(bl, l);
-	for (let l in rp_tail(bl, 30))
-		print(replace(replace(l, /[0-9]{1,3}(\.[0-9]{1,3}){3}/g, 'x.x.x.x'), /([A-Za-z0-9-]+\.)+[A-Za-z]{2,}/g, _t('ИМЯ')), '\n');
+	// Та же маска, что у журнала движка: адреса IPv6 прежде шли как есть (Ф9, п4-33).
+	for (let l in rp_tail(bl, 30)) print(rp_mask(l), '\n');
 	print('\n');
 	rp_r(_t('== системный журнал движка (последние 20) =='));
 	// Только жалобы движка: в строках обращений адрес каждого сайта.

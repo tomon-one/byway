@@ -1,5 +1,4 @@
-// Загрузки, которые обязаны пройти и при сломанном туннеле (бывшие net_get,
-// gh_resolve, doh_a из core/net.sh): прокси-вход, потом напрямую, потом адреса
+// Загрузки, которые обязаны пройти и при сломанном туннеле: прокси-вход, потом напрямую, потом адреса
 // GitHub из DoH.
 
 // Адрес имени по DoH, запросом К АДРЕСУ, не к имени: при сломанном туннеле
@@ -31,12 +30,22 @@ function nt_gh_resolve() {
 }
 
 // curl с доводами args; итог -- код выхода последней попытки (0 -- удача).
+// NT_CERT -- хоть одна попытка отказала проверкой сертификата (curl 60): по
+// ней часы называются причиной и тогда, когда они позже порога clock_bad, а
+// сертификат GitHub ещё «не действует» (Ф9, п2-14, прогон 5).
+let NT_CERT = false;
 function nt_get(args) {
 	let px = u('local_proxy_port') || '1603';
 	let base = [ 'curl', '-fsSL', '-A', 'Mozilla/5.0' ];
-	if (run([ ...base, '--proxy', 'http://127.0.0.1:' + px, ...args ]).code == 0) return 0;
-	if (run([ ...base, ...args ]).code == 0) return 0;
+	let c = run([ ...base, '--proxy', 'http://127.0.0.1:' + px, ...args ]).code;
+	if (c == 0) return 0;
+	if (c == 60) NT_CERT = true;
+	c = run([ ...base, ...args ]).code;
+	if (c == 0) return 0;
+	if (c == 60) NT_CERT = true;
 	let res = nt_gh_resolve();
 	if (!length(res)) return 1;
-	return run([ ...base, ...res, ...args ]).code;
+	c = run([ ...base, ...res, ...args ]).code;
+	if (c == 60) NT_CERT = true;
+	return c;
 }

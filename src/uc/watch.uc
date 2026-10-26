@@ -1,11 +1,11 @@
 // Сторож из cron (бывший service/watch.sh): возврат ядра, починка перехвата,
 // обновление списков и byway по расписанию, журнал состояния; pulse раз в
-// минуту. Не перенесённое (update, engine, gen) и перехват (у него замок) --
-// отдельным вызовом byway (BW_SELF).
+// минуту. Сборка (gen), обновление, замена ядра и перехват (у него замок) --
+// отдельным вызовом byway (BW_SELF): у каждого свой замок и своя ловушка.
 
-const WT_LAST = '/tmp/byway-watch.last';
+const WT_LAST = '/var/run/byway-watch.last';
 // Сколько проверок подряд не нашлось движка; в tmpfs, после перезагрузки с 0.
-const WT_NOPID = '/tmp/byway-nopid';
+const WT_NOPID = '/var/run/byway-nopid';
 // Состояние прогона: pid, tab, rul, rt, dm, fk, healed.
 let W = {};
 
@@ -15,9 +15,11 @@ function wt_byway(...a) { return run([ wt_self(), ...a ], true); }
 function wt_reload() { run([ '/etc/init.d/byway', 'reload' ]); }
 
 // Файл свежее n минут (как `find -mmin -n`).
+// Метка «из будущего» (часы шагнули назад после неверной даты) -- не
+// свежая: иначе проверки замирали до той даты (Ф9, п2-13).
 function wt_fresh(f, n) {
 	let s = fs.stat(f);
-	return s != null && time() - s.mtime < n * 60;
+	return s != null && s.mtime <= time() + 60 && time() - s.mtime < n * 60;
 }
 function wt_touch(f) { run([ 'touch', f ]); }
 function wt_read(f) { return rtrim(fs.readfile(f) ?? '', '\n'); }
@@ -61,6 +63,9 @@ function wt_registered() {
 function wt_mins(s) {
 	s = replace(lc(s), ' ', '');
 	if (s === '' || s == '0') return 0;
+	// Длинное число давало NaN, и «не чаще раза в 30 минут» не срабатывало
+	// (Ф9, п4-13).
+	if (length(s) > 12) return -1;
 	if (_only(s, '0123456789')) return int(s);
 	let n = 0, v = 0;
 	for (let i = 0; i < length(s); i++) {
@@ -76,7 +81,7 @@ function wt_mins(s) {
 }
 
 // ── прогон ────────────────────────────────────────────────────────────────
-// Копия одного скрипта от автообновления 0.2.4: нужна ей полчаса, потом лишняя.
+// Копия одного скрипта от автообновления 0.2.4: нужна ей в первый час, потом лишняя.
 function wt_prevbin() {
 	if (fs.stat(UP_PREVBIN) && !wt_fresh(UP_PREVBIN, 60)) fs.unlink(UP_PREVBIN);
 }
@@ -87,10 +92,13 @@ function wt_restore() {
 	wt_prevbin();
 	let alt = false;
 	for (let f in fs.lsdir('/usr/local/bin') ?? [])
-		if (substr(f, 0, 5) == 'xray-' && (fs.stat('/usr/local/bin/' + f)?.mode & 73)) alt = true;
-	if (u('enabled') == '1' && !alt && !x_ok(xray_bin()) &&
-	    !wt_fresh('/tmp/byway-engine-restore', 15)) {
-		fs.writefile('/tmp/byway-engine-restore', '');
+		// *.new -- недописанная копия замены через память (Ф9, п2-34).
+		if (substr(f, 0, 5) == 'xray-' && substr(f, -4) != '.new' && (fs.stat('/usr/local/bin/' + f)?.mode & 73)) alt = true;
+	// При невыставленных часах ядро может падать само по себе, а загрузка
+	// всё равно не пройдёт проверку сертификата.
+	if (u('enabled') == '1' && !alt && !clock_bad() && !x_ok(xray_bin()) &&
+	    !wt_fresh('/var/run/byway-engine-restore', 15)) {
+		fs.writefile('/var/run/byway-engine-restore', '');
 		logt('byway watch: ядра нет -- byway core restore в фоне');
 		system([ 'sh', '-c', '( "$1" engine restore 2>&1 | sed "s/$(printf "\\033")\\[[0-9;]*m//g" | logger -t byway ) </dev/null >/dev/null 2>&1 &',
 		         'sh', wt_self() ]);
@@ -155,16 +163,16 @@ function wt_engine_back() {
 	// Подъём уже идёт (старт службы снимает метку в начале plumb on, запрет --
 	// в конце): второй ждал бы замка и писал ложное «не поднялся».
 	if (wt_plumb_busy()) return;
-	if (u('enabled') != '1') {
-		wt_byway('plumb', 'unblock');
-	} else if (!fs.stat(PL_BLOCK) && wt_byway('plumb', 'on').code == 0) {
-		logt('движок вернулся -- перехват поднят');
-		W.healed = '(healed)';
-	} else if (wt_byway('plumb', 'on').code == 0) {
-		logt('движок вернулся -- перехват поднят, запрет «не пускать мимо VPN» снят');
+	if (u('enabled') != '1') { wt_byway('plumb', 'unblock'); return; }
+	// Одна попытка; про запрет -- только если он стоял (Ф9, п3-66).
+	let blk = fs.stat(PL_BLOCK) != null;
+	if (wt_byway('plumb', 'on').code == 0) {
+		if (blk) logt('движок вернулся -- перехват поднят, запрет «не пускать мимо VPN» снят');
+		else logt('движок вернулся -- перехват поднят');
 		W.healed = '(healed)';
 	} else {
-		logt('движок вернулся, но перехват не поднялся -- запрет «не пускать мимо VPN» остаётся');
+		if (blk) logt('движок вернулся, но перехват не поднялся -- запрет «не пускать мимо VPN» остаётся');
+		else logt('движок вернулся, но перехват не поднялся');
 		W.healed = '(failed)';
 	}
 }
@@ -175,17 +183,33 @@ function wt_engine_back() {
 // человеком, снявшим туннель.
 function wt_heal() {
 	W.healed = '';
+	// Движок пропадал (метка промахов) -- при открытой модели engine_gone
+	// снял перехват без запрета. Вернуть его -- возврат, а не починка, и
+	// guard=0 его не отменяет: иначе, если возврат первым увидел сторож, а
+	// не pulse, перехвата не было до рестарта (Ф9, п3-65).
+	let was_gone = fs.stat(WT_NOPID) != null;
 	if (W.pid === '' && u('enabled') == '1' && !wt_down_held() && wt_registered()) {
 		wt_engine_gone();
 		if (W.healed == '(nodns)') wt_parts();
 	} else {
 		fs.unlink(WT_NOPID);
 	}
-	if (W.pid !== '' && fs.stat(PL_BLOCK)) wt_engine_back();
+	// Снимок -- заново после подъёма: по старому проверка ниже повторяла
+	// plumb on и писала ложное «правил нет» (н1-21).
+	if (W.pid !== '' && fs.stat(PL_BLOCK)) {
+		wt_engine_back();
+		wt_parts();
+	} else if (W.pid !== '' && was_gone && u('enabled') == '1' && !wt_down_held() && !pl_has_table(PL_TABLE)) {
+		wt_engine_back();
+		wt_parts();
+	}
 	if (W.pid !== '' && u('enabled') == '1' && u('guard') != '0' && !wt_down_held()) {
 		// Пропавший маршрут чинится тем же plumb on: иначе помеченный пакет
 		// уходит в WAN с настоящим адресом, а проверки зелёные.
-		if (!W.tab || !W.rul || !W.rt || !wt_dns_ours()) {
+		// Без каталога добавок dnsmasq резолвер byway не уводит вовсе (doctor
+		// об этом говорит): «чинить» его каждые пять минут -- запись на флеш
+		// впустую (Ф9, п4-38).
+		if (!W.tab || !W.rul || !W.rt || (!wt_dns_ours() && dm_confdir() !== '')) {
 			logt('byway watch: правил перехвата нет при работающем движке -- восстановление');
 			W.healed = wt_byway('plumb', 'on').code == 0 ? '(healed)' : '(failed)';
 			wt_parts();
@@ -213,7 +237,7 @@ function wt_lists() {
 
 // Проверка новой версии, без установки: установка рвёт туннель в
 // невыбранный момент. Промежуток случайный, 12-36 ч: запрос к GitHub в одно
-// время суток выделялся бы в трафике. В UPMARK -- минуты до следующей
+// время суток выделялся бы в трафике. В UP_MARK -- минуты до следующей
 // проверки, mtime -- время прошлой.
 function wt_upcheck() {
 	if (u('update_check') == '0') return;
@@ -255,7 +279,7 @@ function wt_upcheck() {
 
 // Установка с проверкой туннеля и откатом на копию -- cmd_update; здесь итог
 // по коду. Час -- не отметка «пробовали сегодня»: внутри часа условие истинно
-// 12 раз. Повторы гасят AUTRY (раз в сутки) и AUFAIL (проваливавшийся номер
+// 12 раз. Повторы гасят UP_AUTRY (раз в сутки) и UP_AUFAIL (проваливавшийся номер
 // второй раз не ставим).
 function wt_au_install(au, y, h) {
 	if (au === '' || y < 2020 || h != dr_au_hour() || wt_read(UP_AUFAIL) == au || wt_fresh(UP_AUTRY, 1440)) return;
@@ -276,10 +300,21 @@ function wt_au_install(au, y, h) {
 		fs.writefile(UP_AULOG, _f('ОТКАТ НЕ УДАЛСЯ: на диске %s, копия в %s\n', au, UP_PREVSET));
 		logf('автообновление: ОТКАТ НЕ УДАЛСЯ -- копия в %s, вернуть: byway update --rollback', UP_PREVSET);
 	} else if (rc == 5) {
+		fs.writefile(UP_AULOG, _f('НЕ ПОСТАВЛЕНО %s: копия для отката не сделалась (место на флеше?), %s\n', au, when));
 		logf('автообновление: копия для отката не сделалась -- установка ОТМЕНЕНА (место на /overlay?)');
-	} else if (rc == 6) {
-		logf('автообновление: подпись выпуска %s не сошлась -- не ставится', au);
+	} else if (rc == 6 || rc == 7) {
+		// Подпись не та или её нет: тот же выпуск ночью снова не встанет --
+		// не повторяем, а в сводке и doctor -- след (Ф9, п3-70).
+		fs.writefile(UP_AUFAIL, au + '\n');
+		if (rc == 6) {
+			fs.writefile(UP_AULOG, _f('НЕ ПОСТАВЛЕНО %s: архив не совпал с подписанным выпуском, %s\n', au, when));
+			logf('автообновление: подпись выпуска %s не сошлась -- не ставится', au);
+		} else {
+			fs.writefile(UP_AULOG, _f('НЕ ПОСТАВЛЕНО %s: у выпуска нет подписи, %s\n', au, when));
+			logf('автообновление: у выпуска %s нет подписи -- не ставится', au);
+		}
 	} else {
+		fs.writefile(UP_AULOG, _f('НЕ ПОСТАВЛЕНО %s: не скачалось, %s\n', au, when));
 		logf('автообновление: %s не скачалось, работает прежняя', au);
 	}
 }
@@ -293,7 +328,8 @@ function wt_autoupdate() {
 	// Выдержка: не раньше трёх суток после первого обнаружения; метка
 	// важности снимает. Возраст -- по записанной дате, не по mtime: ntpd
 	// переводит часы скачком после старта.
-	let bake = !(substr(note, 0, 5) == 'ВАЖНО' || substr(note, 0, 8) == 'CRITICAL' || substr(note, 0, 1) == '!');
+	// Длина -- в байтах, как у substr: «ВАЖНО» -- десять (Ф9, п4-2).
+	let bake = !(substr(note, 0, length('ВАЖНО')) == 'ВАЖНО' || substr(note, 0, 8) == 'CRITICAL' || substr(note, 0, 1) == '!');
 	let age = 0, sv = wt_read(UP_SEENF);
 	if (substr(sv, 0, length(au) + 1) == au + ' ') {
 		let st = substr(sv, length(au) + 1);
@@ -302,7 +338,7 @@ function wt_autoupdate() {
 	}
 	if (bake && age < 259200) au = '';
 	// Только внутри минорной версии: 0.1.x -> 0.1.y само, 0.1 -> 0.2 нет.
-	let minor = (v) => rindex(v, '.') < 0 ? v : substr(v, 0, rindex(v, '.'));
+	let minor = (v) => rpos(v, '.') < 0 ? v : substr(v, 0, rpos(v, '.'));
 	if (au !== '' && minor(au) != minor(num)) au = '';
 	// Правленое руками не трогаем; суммы нет -- версия неизвестна.
 	if (au !== '') {
@@ -344,8 +380,8 @@ function wt_a_all(name, res) {
 // DNS через туннель: адрес сервера вписан в конфиг при сборке. Раз в час
 // сверяем с внешним резолвером; сменился -- пересборка и reload.
 function wt_hosts() {
-	if (u('dns_route') != 'tunnel' || wt_fresh('/tmp/byway-hostcheck', 60)) return;
-	fs.writefile('/tmp/byway-hostcheck', '');
+	if (u('dns_route') != 'tunnel' || wt_fresh('/var/run/byway-hostcheck', 60)) return;
+	fs.writefile('/var/run/byway-hostcheck', '');
 	let c = null;
 	try { c = json(fs.readfile(getenv('BW_OUT')) ?? 'null'); } catch (e) { c = null; }
 	let ch = '';
@@ -385,7 +421,8 @@ function cmd_watch() {
 	} else {
 		let op = split(substr(prev, 4), ' ')[0];
 		if (op != (W.pid || 'none')) {
-			why = '(restart)';
+			// Движка нет -- это остановка, а не перезапуск (Ф9, п3-12).
+			why = W.pid === '' ? '(down)' : '(restart)';
 			// Респавн procd не зовёт plumb on, кэш dnsmasq не сбрасывает
 			// никто, а таблица fakedns живёт в памяти Xray. HUP не рвёт резолв.
 			if (W.pid !== '' && W.fk == 'yes') {
@@ -401,8 +438,7 @@ function cmd_watch() {
 	fs.writefile(WT_LAST, cur);
 	let all = pl_lines(fs.readfile(lf));
 	if (length(filter(all, (l) => l !== '')) > 200) {
-		fs.writefile(lf + '.n', join('\n', slice(all, -200)) + '\n');
-		fs.rename(lf + '.n', lf);
+		put_file(lf, join('\n', slice(all, -200)) + '\n');
 	}
 }
 

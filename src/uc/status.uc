@@ -4,10 +4,13 @@
 
 const ST_TABLE = 'byway';
 const ST_RT = '100';
-const ST_BLOCK = '/tmp/byway-blocked';
+const ST_BLOCK = '/var/run/byway-blocked';
+
+// Отчёт byway report: строки status без имён ключа и подключения.
+let ST_HIDE = false;
 
 // ── общее ─────────────────────────────────────────────────────────────────
-// Действующий пул без жалоб (eff_pool в config/addr.sh): негодная настройка --
+// Действующий пул без жалоб (g_pool_ok, gen.uc): негодная настройка --
 // умолчание, как у правил nft.
 function st_pool() {
 	let p = u('fakeip_pool');
@@ -16,7 +19,7 @@ function st_pool() {
 	return g_pool_ok(p) ? p : '198.18.0.0/15';
 }
 
-// Адрес IPv4 в пуле a.b.c.d/len (вместо образца fakeip_re).
+// Адрес IPv4 в пуле a.b.c.d/len: числом, а не образцом.
 function st_ip_num(a) {
 	let o = split(a, '.');
 	if (length(o) != 4) return null;
@@ -35,10 +38,12 @@ function st_in_pool(a, pool) {
 	return int(n / span) == int(b / span);
 }
 
-// Метка обвязки так, как её печатает ip rule (eff_mark).
+// Метка обвязки так, как её печатает ip rule (pl_mark, plumb.uc).
 function st_mark() {
 	let m = u('mark');
-	if (!match(m, /^0x[0-9a-fA-F]{1,8}$/)) m = '0x100000';
+	// Ноль -- тоже негодная: `fwmark 0/0` ловит весь трафик роутера, и
+	// правило firewall с ней открывает input со всех зон (Ф9, п1-1).
+	if (!match(m, /^0x[0-9a-fA-F]{1,8}$/) || hex(substr(m, 2)) == 0) m = '0x100000';
 	return sprintf('0x%x', hex(substr(m, 2)));
 }
 
@@ -62,12 +67,12 @@ function st_xray_pid() {
 function st_age(p) {
 	let up = split(fs.readfile('/proc/uptime') ?? '', ' ')[0];
 	let st = fs.readfile('/proc/' + p + '/stat') ?? '';
-	let i = rindex(st, ') ');
+	let i = rpos(st, ') ');
 	if (!up || i < 0) return 999999;
 	return int(up) - int(int(split(substr(st, i + 2), ' ')[19]) / 100);
 }
 
-// Первый домен списка, который можно спросить у резолвера (plain_domains).
+// Первый домен списка, который можно спросить у резолвера (lj_plain).
 function st_plain_first(file) {
 	let f = fs.open(file, 'r'), l;
 	if (!f) return '';
@@ -95,7 +100,7 @@ function st_fake_of(d, pool) {
 	return '';
 }
 
-// Сравнение версий вида 1.2.3 (ver_gt).
+// Сравнение версий вида 1.2.3.
 function st_ver_gt(a, b) {
 	let x = split(replace(a, /[^0-9]+/g, ' '), ' '), y = split(replace(b, /[^0-9]+/g, ' '), ' ');
 	for (let i = 0; i < 3; i++) {
@@ -106,11 +111,11 @@ function st_ver_gt(a, b) {
 }
 
 // Ядро на Go 1.27 без -tags http2legacy и с x/net старше v0.60.0: XHTTP
-// открывает соединение на каждый ждущий запрос (Xray#6797). Кэш -- тот же
-// /tmp/byway-dialbug, что у eng_dial_bug в update/engine.sh.
+// открывает соединение на каждый ждущий запрос (Xray#6797). Кэш --
+// /var/run/byway-dialbug; пишет и читает только эта функция.
 function st_dial_bug(x) {
 	let k = rtrim(run([ 'ls', '-lni', x ]).out, '\n');
-	let c = split(fs.readfile('/tmp/byway-dialbug') ?? '', '\n');
+	let c = split(fs.readfile('/var/run/byway-dialbug') ?? '', '\n');
 	if (k !== '' && c[0] == k) return c[1] == '1';
 	let v = split(run([ x, 'version' ]).out, '\n')[0];
 	let bug = false;
@@ -118,7 +123,7 @@ function st_dial_bug(x) {
 	    (index(v, '(go1.27.') >= 0 || index(v, '(go1.27 ') >= 0 || index(v, '(go1.27)') >= 0))
 		bug = run([ 'grep', '-q', 'http2legacy', x ]).code != 0 &&
 		      run([ 'grep', '-qE', 'golang\\.org/x/net.v(0\\.([6-9][0-9]|[1-9][0-9][0-9])|[1-9][0-9]*)\\.', x ]).code != 0;
-	fs.writefile('/tmp/byway-dialbug', k + '\n' + (bug ? '1' : '0') + '\n');
+	fs.writefile('/var/run/byway-dialbug', k + '\n' + (bug ? '1' : '0') + '\n');
 	return bug;
 }
 
@@ -131,11 +136,11 @@ function cmd_status(arg) {
 	print(_f('конфиг      %s\n', cst ? _f('%s байт', cst.size) : _t('НЕТ')));
 	// Транспорт, режим, ключи -- одним grep по конфигу: в нём списки на
 	// сотни тысяч строк, и разбор строками в ucode дольше.
-	let tags = 0, nproxy = 0, net = '', sec = '', mux = '', xh = false;
+	let tags = 0, net = '', sec = '', mux = '', xh = false;
 	if (cst) {
 		for (let m in split(run([ 'grep', '-oE',
 		    '"tag": "proxy[^"]*"|"network": "[a-z0-9]*"|"security": "[a-z]*"|"concurrency": [0-9]*', out ]).out, '\n')) {
-			if (substr(m, 0, 13) == '"tag": "proxy') { nproxy++; if (substr(m, 13, 1) == '-') tags++; }
+			if (substr(m, 0, 13) == '"tag": "proxy' && substr(m, 13, 1) == '-') tags++;
 			else if (substr(m, 0, 10) == '"network":') { net = substr(m, 12, length(m) - 13); if (net == 'xhttp') xh = true; }
 			else if (substr(m, 0, 11) == '"security":') sec = substr(m, 13, length(m) - 14);
 			else if (substr(m, 0, 14) == '"concurrency":' && mux === '') mux = trim(substr(m, 14));
@@ -153,17 +158,18 @@ function cmd_status(arg) {
 		print(_f('транспорт   %s / %s%s\n', net || '?', sec || '?', mux !== '' ? ', mux=' + mux : ''));
 		// Метка -- из ссылки: в конфиг Xray её не пишет. Строка -- всегда, когда
 		// ключ задан: панель судит по её наличию.
+		// В отчёте (ST_HIDE) -- без имён: метка и conn_label бывают личными (н1-4).
 		let url = u('node_url');
 		if (url !== '') {
-			let h = index(url, '#');
-			let lb = h < 0 ? '' : pk_pctd(substr(url, h + 1));
-			print(_f('ключ        %s\n', lb || _t('без имени')));
+			print(_f('ключ        %s\n', ST_HIDE ? _t('<скрыто>') : pk_label(url) || _t('без имени')));
 		} else if (mode == 'outbound') {
-			print(_f('ключ        %s\n', u('conn_label') || _t('свой конфиг')));
+			print(_f('ключ        %s\n', ST_HIDE ? _t('<скрыто>') : replace(u('conn_label'), /[\x01-\x1f\x7f]/g, '') || _t('свой конфиг')));
 		}
 	}
 	// Режим меняют через uci без пересборки: остаток автовыбора рвал соединения.
-	if (cst && ((mode == 'urltest') != (nproxy > 1)))
+	// Автовыбор -- по тегам proxy-N, не по числу аутбаундов: из одного
+	// ключа он тоже собирается, и счёт давал ложное «другой режим» (Ф9, п4-5).
+	if (cst && ((mode == 'urltest') != (tags > 0)))
 		print(_t('ВНИМАНИЕ    конфиг собран для другого режима, применить: /etc/init.d/byway reload\n'));
 	// Запрет виден только по файлу: health при нём зелёный.
 	if (fs.stat(ST_BLOCK)) {
@@ -289,8 +295,7 @@ function hl_connect_ms(h, p) {
 // vpn при автовыборе: все ключи разом, в фоне (по очереди десяток не уложился
 // бы в 20 с панели).
 function hl_urltest() {
-	let keys = split(trim(u('node_urls')), /[ \t\n]+/);
-	if (keys[0] == '') keys = [];
+	let keys = ul('node_urls');
 	let hn = length(keys), hu = 0, targets = [];
 	for (let k in keys) {
 		let N = hl_key(k);
@@ -322,7 +327,8 @@ function hl_urltest() {
 // Формат «ключ<таб>состояние<таб>подробность», состояния ok/warn/fail: панель
 // красит, не разбирая текст.
 function cmd_health() {
-	let lp = u('local_proxy_port') || '1603';
+	let lp = u('local_proxy_port');
+	if (!g_port_ok(lp)) lp = '1603';
 	let probe = getenv('BW_PROBE');
 	// 1. Служба. Молодой процесс -- warn: Xray поднимается ~15 с. Отличает
 	// слепок applied (service_started пишет его раз за запуск): процесс молод,
@@ -371,7 +377,15 @@ function cmd_health() {
 	// заворачивает всегда. Потолок 5 с: шаги 2-4 укладываются в 20 с панели.
 	let c = trim(run([ 'curl', '-s', '-o', '/dev/null', '--max-time', '5', '-w', '%{http_code}',
 	                   '--proxy', 'http://127.0.0.1:' + lp, 'https://' + probe + '/' ]).out);
+	// Прокси-вход и fakedns живут и без обвязки: без таблицы, правила и
+	// маршрута трафик дома идёт мимо туннеля, а проверка была зелёной (Ф9,
+	// п2-32). Имена -- как в uc/plumb.uc (PL_TABLE, PL_RT): он собран позже.
+	let m = st_mark();
+	let plumbed = run([ 'nft', 'list', 'table', 'inet', 'byway' ]).code == 0 &&
+		match(run([ 'ip', 'rule', 'show' ]).out, regexp('fwmark ' + m + '(/' + m + ')?[[:space:]]+lookup 100([[:space:]]|$)')) != null &&
+		index(run([ 'ip', 'route', 'show', 'table', '100' ]).out, 'local default') >= 0;
 	if ((c || '000') == '000') hl_fail('tunnel', _t('трафик не проходит'));
+	else if (!plumbed) hl_fail('tunnel', _t('перехвата нет: трафик дома идёт мимо туннеля'));
 	else print(_t('tunnel\tok\tтрафик проходит\n'));
 
 	// 4. Резолвер: домен-проба обязан получить fakeip. Две попытки: кэш

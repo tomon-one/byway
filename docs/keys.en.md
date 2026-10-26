@@ -72,8 +72,10 @@ refused with "vmess aid is not a number"), `net` (transport, default tcp),
 `type` (`http` for tcp, header type for kcp; `none` means no header), `host`
 (Host header, defaults to the address), `path` (default `/`), `tls` (the value
 `tls` turns TLS on), `sni` (defaults to `host`, then to the address), `scy`
-(VMess encryption: `auto`, `aes-128-gcm`, `chacha20-poly1305`, `none`, `zero`;
-anything else is refused), `alpn` and `fp`. With `net=grpc` the service name is
+(VMess encryption: `auto`, `aes-128-gcm`, `chacha20-poly1305`; anything else,
+`none` and `zero` included, is not supported by Xray-core and becomes `auto` with a
+warning), `alpn` and `fp`. An `aid` above 0 is not supported either (AEAD only):
+byway warns that an old-style vmess server will not answer. With `net=grpc` the service name is
 taken from `path` — that is where clients put it; without `path` it is empty.
 
 For other fields byway warns with the same line as for other keys.
@@ -90,7 +92,8 @@ is accepted. The second is the same in plain text, fully percent-decoded. The
 old form, with the whole link wrapped in base64
 (`ss://BASE64(method:password@address:port)#Name`), is parsed as well. The
 address is split off at the last `@`, so an `@`
-in the password is fine. The transport is always tcp, the security `none`.
+in the password is fine. A link with no password (just a method name) is
+refused. The transport is always tcp, the security `none`.
 
 Parameters after `?` other than `plugin` are not carried over; byway warns about
 them with the same line as for other keys.
@@ -174,11 +177,11 @@ described above.
 |---|---|---|
 | `type` | transport | `tcp` |
 | `security` | `tls`, `reality`, `none` | `none` |
-| `sni` | server name for TLS and Reality | server address |
+| `sni` | server name for TLS and Reality | `host`, else server address |
 | `fp` | TLS client fingerprint | `chrome` |
 | `alpn` | comma-separated list | — |
 | `path` | path for ws, httpupgrade, xhttp, tcp+http | `/` |
-| `host` | Host header | server address |
+| `host` | Host header | `sni`, else server address |
 | `headerType` | `http` for tcp; header type for kcp | — |
 | `seed` | kcp | — |
 | `serviceName` | grpc | empty |
@@ -201,7 +204,8 @@ Parameter values are fully percent-decoded: `path=%2F%3Fed%3D2048` (the way
 v2rayN writes early data) goes into the config as `/?ed=2048`. A quote, a
 backslash or a control character after decoding means a refusal (see
 "Suspicious links"). The exception is `extra`: only `%2F %3A %2C %20 %3D %26`
-and the braces and quotes `%7B %7D %22 %5B %5D` are decoded in it.
+and the braces and quotes `%7B %7D %22 %5B %5D` are decoded in it. A lone `%`
+not followed by two hex digits stays `%`: the password `100%` is not damaged.
 
 ## Transports
 
@@ -261,8 +265,8 @@ or `true` (the same for `insecure`) is handled as follows:
 `pcs`, `pinSHA256` and `vcn` themselves need engine 26.3.27 or newer.
 
 `allow_insecure` is meant for your own server with a self-signed certificate.
-The option is not in the panel, only in the console; `byway export` includes
-it:
+In the panel it is on the Advanced tab ("Allow insecure keys"); in the console
+use the command below. `byway export` includes it:
 
 ```sh
 byway set allow_insecure on
@@ -376,6 +380,16 @@ The method is the "Connection method" field on the Overview tab (`conn_mode`).
 | Several, automatic | `urltest` | every key in the "Keys" list (`node_urls`) |
 | Custom config | `outbound` | the JSON object in "Outbound config" (`outbound_json`) |
 
+The key (`node_url`, `node_urls`), the subscription address (`sub_url`) and the
+custom config (`outbound_json`) are kept apart from the other settings, in
+`/etc/config/byway_key` with mode 600: `uci get byway_key.main.node_url`. Panel
+access to them is a separate group, `luci-app-byway-key`: an rpcd user with
+only the `luci-app-byway` group manages lists and settings but neither sees nor
+changes the key, and exports and imports without it. byway moves old values
+from `/etc/config/byway` itself on the first command; a key written there over
+one that is already set is not accepted — byway says so and removes it. To
+change the key, use `byway key` or the panel.
+
 **Subscription.** The address is an `https://` URL where the service
 publishes its list of keys, usually as base64. "Load the list of keys"
 downloads it, and the panel decodes it and shows the keys. Types byway cannot
@@ -385,7 +399,10 @@ lines with other schemes are not listed at all. All usable keys go into the
 download goes through byway's local proxy inbound and, if that fails,
 directly; an address pointing at the router itself or into a private network
 is refused, and so is an address with `[…]` (IPv6). The response may be up to
-4 MB, with at most three redirects. A subscription over `http://` is not
+4 MB, with at most three redirects, each checked before the request (not into
+the local network, and only to `https://`). Every key is parsed the way a key
+typed by hand is: bad ones are skipped with a warning, the rest go into the
+list. A subscription over `http://` is not
 accepted: "a subscription
 over http:// is not accepted: anyone on the path can replace the keys in it —
 https:// is needed". byway does not refresh the subscription on its own: the

@@ -7,7 +7,7 @@
 #
 #     byway-uninstall            снять byway, настройки и списки оставить
 #     byway-uninstall --purge    снять всё, включая ключ и списки
-#     DRY_RUN=1 byway-uninstall  показать, что было бы сделано, не делая
+#     byway-uninstall --dry-run  показать, что было бы сделано, не делая (или DRY_RUN=1)
 #
 # Порядок здесь важнее содержания. byway уводит dnsmasq на свой DNS-вход, и
 # если сначала удалить программу, а потом спохватиться, дом останется с
@@ -30,6 +30,9 @@ t() {
     [ "$LANG_EN" = 1 ] || { printf %s "$1"; return 0; }
     case "$1" in
       "── 1. Сеть возвращается в исходное ──") printf %s "── 1. The network goes back to how it was ──" ;;
+      "byway-uninstall [--purge | --dry-run]: снять byway; --purge — и настройки с ключом; --dry-run — только показать") printf %s "byway-uninstall [--purge | --dry-run]: remove byway; --purge also removes the settings and the key; --dry-run only shows what would happen" ;;
+      "непонятный довод:") printf %s "unknown argument:" ;;
+      "было бы:") printf %s "would be:" ;;
       "программы byway уже нет — остатки убираются по одному") printf %s "the byway program is already gone — removing its leftovers one by one" ;;
       "сетевые правила byway не сняты с первой попытки -- повтор через 5 секунд") printf %s "byway's network rules were not removed on the first try -- retrying in 5 seconds" ;;
       "сетевые правила byway (nft, маршрут) НЕ сняты — уйдут при перезагрузке роутера: reboot") printf %s "byway's network rules (nft, route) were NOT removed — they go away when the router reboots: reboot" ;;
@@ -50,7 +53,8 @@ t() {
       "── 6. Настройки и списки ──") printf %s "── 6. Settings and lists ──" ;;
       "удалены, включая ключ VPN") printf %s "removed, the VPN key included" ;;
       "── 6. Настройки и списки ОСТАВЛЕНЫ ──") printf %s "── 6. Settings and lists are KEPT ──" ;;
-      "    /etc/config/byway и /etc/byway/ на месте") printf %s "    /etc/config/byway and /etc/byway/ are still there" ;;
+      "файлы настроек byway не удалились: /etc/config/byway, /etc/config/byway_key") printf %s "byway settings files were not removed: /etc/config/byway, /etc/config/byway_key" ;;
+      "    /etc/config/byway, byway_key и /etc/byway/ на месте") printf %s "    /etc/config/byway, byway_key and /etc/byway/ are still there" ;;
       "    удалить вместе с ключом: byway-uninstall --purge") printf %s "    remove them together with the key: byway-uninstall --purge" ;;
       "это был сухой прогон — на роутере ничего не изменилось") printf %s "that was a dry run — nothing on the router changed" ;;
       "Готово. byway удалён, интернет идёт напрямую.") printf %s "Done. byway is removed, traffic goes direct." ;;
@@ -69,7 +73,14 @@ t() {
     esac
 }
 
-_say()  { printf '\033[1;32m[*]\033[0m %s\n' "$1"; }
+# Сухой прогон: итоги -- с пометкой, а не прошедшим временем, будто всё уже
+# сделано (Ф9, п3-49). Заголовки шагов -- как есть.
+_say()  {
+    case "${DRY:-0}:$1" in
+        1:──*|0:*) printf '\033[1;32m[*]\033[0m %s\n' "$1" ;;
+        *) printf '\033[1;32m[*]\033[0m \033[2m%s\033[0m %s\n' "$(t 'было бы:')" "$1" ;;
+    esac
+}
 _warn() { printf '\033[1;33m[!]\033[0m %s\n' "$1"; }
 say()  { _say  "$(t "$1")"; }
 warn() { _warn "$(t "$1")"; }
@@ -77,6 +88,24 @@ sayf()  { _f=$(t "$1"); shift; _say  "$(printf "$_f" "$@")"; }
 warnf() { _f=$(t "$1"); shift; _warn "$(printf "$_f" "$@")"; }
 
 DRY=${DRY_RUN:-0}
+PURGE=0
+# Незнакомый довод -- отказ: --help, -h и привычный --dry-run запускали
+# настоящее удаление (Ф9, п4-85).
+# Все доводы, а не только первый: «--purge --dry-run» выполнял настоящее
+# удаление с ключом -- второй довод молча пропускался (Ф9, прогон 5).
+for _arg in "$@"; do
+    case "$_arg" in
+        --purge) PURGE=1 ;;
+        --dry-run) DRY=1 ;;
+        -h|--help)
+            printf '%s\n' "$(t 'byway-uninstall [--purge | --dry-run]: снять byway; --purge — и настройки с ключом; --dry-run — только показать')"
+            exit 0 ;;
+        *)
+            _warn "$(t 'непонятный довод:') $_arg"
+            printf '%s\n' "$(t 'byway-uninstall [--purge | --dry-run]: снять byway; --purge — и настройки с ключом; --dry-run — только показать')"
+            exit 1 ;;
+    esac
+done
 
 # Всё, что меняет систему, идёт ЧЕРЕЗ do_ и только через него. Второй ветки
 # «а если прогон не сухой» здесь нет намеренно: 2026-09-04 такая ветка
@@ -107,8 +136,6 @@ command -v apk  >/dev/null 2>&1 && PKG=apk
 PKG_DEL=del
 [ "$PKG" = opkg ] && PKG_DEL=remove
 
-PURGE=0
-[ "${1:-}" = "--purge" ] && PURGE=1
 
 # Канарейка Firefox: dns_up byway дописывает её в server рядом со своим адресом.
 CANARY=/use-application-dns.net/
@@ -143,7 +170,9 @@ if [ -x /usr/local/bin/byway ]; then
     # может не сделать ничего и вернуть единицу -- например на занятом замке
     # обвязки. Тогда правила nft, маршрут и резолвер оставались висеть, а
     # удаление докладывало об успехе. Найдено третьим аудитом 2026-09-07.
-    if [ "${DRY_RUN:-0}" = "1" ]; then
+    # По DRY, а не по DRY_RUN: флаг --dry-run ставит только DRY, и «сухой»
+    # прогон флагом снимал перехват по-настоящему (Ф9, прогон 5).
+    if [ "$DRY" = "1" ]; then
         do_ /usr/local/bin/byway plumb off
     elif /usr/local/bin/byway plumb off >/dev/null 2>&1; then
         :
@@ -255,23 +284,39 @@ else
     # Метку берём из настройки, а не зашитую: она настраивается, и с чужим
     # значением удаление искало бы не своё правило -- оставило бы своё висеть
     # и в следующий раз попыталось бы снять соседское.
+    # Форма -- как у byway (st_mark): ip rule печатает метку строчными без
+    # ведущих нулей, и сырая «0x00100000» не находила своё правило (Ф9,
+    # п4-86). И та, с которой правило заведено (/var/run/byway-mark), если
+    # метку с тех пор сменили. IPv6 -- тоже: прежде оставался (п4-32).
     _mk=$(uci -q get byway.main.mark 2>/dev/null || true)
-    _mk=${_mk:-0x100000}
-    for _i in 1 2 3 4 5; do
-        ip rule show 2>/dev/null |
-            grep -qE "fwmark $_mk(/$_mk)?[[:space:]]+lookup 100([[:space:]]|$)" || break
-        do_ ip rule del fwmark "$_mk/$_mk" lookup 100
-        [ "$DRY" = "1" ] && break
+    _mk=$(printf '0x%x' "${_mk:-0x100000}" 2>/dev/null || true)
+    case "$_mk" in 0x0|'') _mk=0x100000 ;; esac
+    _mo=$(cat /var/run/byway-mark 2>/dev/null || true)
+    for _m in $_mk $_mo; do
+        for _f in "" -6; do
+            for _i in 1 2 3 4 5; do
+                ip $_f rule show 2>/dev/null |
+                    grep -qE "fwmark $_m(/$_m)?[[:space:]]+lookup 100([[:space:]]|$)" || break
+                do_ ip $_f rule del fwmark "$_m/$_m" lookup 100
+                [ "$DRY" = "1" ] && break
+            done
+        done
     done
     # Точечно, а не flush. Таблица общая: flush стирал бы и `local default`
     # соседа по tproxy, и у него ложился бы весь трафик -- при удалении
     # ЧУЖОЙ программы. Свой маршрут один и известен.
-    # И маршрут -- только если он поставлен byway (метка route.sh): таблицу 100
-    # соседа по tproxy сносить нельзя.
-    if [ -e /tmp/byway-route-mine ]; then
+    # И маршрут -- только если он поставлен byway (метка PL_RT_MINE в
+    # uc/plumb.uc): таблицу 100 соседа по tproxy сносить нельзя. До 0.4.0
+    # метка лежала в /tmp -- обновлённый без перезагрузки держит её там (н1-22).
+    if [ -e /var/run/byway-route-mine ] || [ -e /tmp/byway-route-mine ]; then
         do_ ip route del local default dev lo table 100
-        do_ rm -f /tmp/byway-route-mine
+        do_ rm -f /var/run/byway-route-mine /tmp/byway-route-mine
     fi
+    if [ -e /var/run/byway-route-mine6 ] || [ -e /tmp/byway-route-mine6 ]; then
+        do_ ip -6 route del local ::/0 dev lo table 100
+        do_ rm -f /var/run/byway-route-mine6 /tmp/byway-route-mine6
+    fi
+    do_ rm -f /var/run/byway-mark
 fi
 
 # Проверяем, а не верим на слово: остаться без DNS дороже лишней проверки.
@@ -333,7 +378,10 @@ if [ -x /etc/init.d/byway ]; then
     # Журнал обращений в памяти: до перезагрузки занимал бы её зря.
     do_ rm -rf /var/run/byway
     # Часть byway на ucode, вырезанная из программы, и её байткод.
-    do_ rm -f /var/run/byway.uc /var/run/byway.ucc
+    do_ rm -f /var/run/byway.uc /var/run/byway.ucc /var/run/byway.ucc.try
+    # Рабочие файлы и метки в памяти (склейки списков, проверки, метки
+    # перехвата): программы больше нет, держать их до перезагрузки незачем.
+    do_ rm -rf /var/run/byway-* /var/run/byway.applied /var/run/byway.pid /var/run/byway.nft /tmp/byway-pkg.log
     say "остановлена и снята с автозапуска"
 fi
 # Пользователь, от которого работал движок: строки дописал user_add в конец,
@@ -367,9 +415,13 @@ fi
 
 echo
 say "── 4. Правило firewall ──"
+# Свой блок -- вырезкой из файла, а не uci commit: тот переписывает файл
+# целиком и стирает комментарии человека (Ф9, п3-41).
 if [ -n "$(uci -q get firewall.bywaytproxy 2>/dev/null || true)" ]; then
-    do_ uci delete firewall.bywaytproxy
-    do_ uci commit firewall
+    # Конец блока -- первая строка не option/list с начала строки, а не
+    # следующий config: комментарии человека после блока пропадали вместе с
+    # ним. Пустые строки перед блоком -- тоже его (установщик их ставит).
+    do_ sh -c "awk '/^config[ \t]/ { s = (\$0 ~ /^config[ \t]+rule[ \t]+.?bywaytproxy.?[ \t]*\$/); if (s) while (n > 0 && b[n] == \"\") n-- } s && \$0 != \"\" && \$0 !~ /^[ \t]/ && \$0 !~ /^config[ \t]/ { s = 0 } !s { b[++n] = \$0 } END { for (i = 1; i <= n; i++) print b[i] }' /etc/config/firewall > /etc/config/firewall.bw-new && mv /etc/config/firewall.bw-new /etc/config/firewall"
     do_ /etc/init.d/firewall reload
     say "правило для гостевой сети убрано"
 fi
@@ -402,7 +454,8 @@ for c in /tmp/luci-indexcache*; do
         : > "$c"
     fi
 done
-do_ /etc/init.d/rpcd restart
+# reload: права перечитываются, сессии LuCI живы (Ф9, п3-40).
+do_ /etc/init.d/rpcd reload
 say "программа и панель удалены"
 
 # Пути из keep-списка прошивки. Каталог /usr/local/bin/ НЕ убираем: там могут
@@ -446,10 +499,19 @@ if [ "$PURGE" = "1" ]; then
     # ⚠️ Путь к движку читаем ДО удаления настроек: ниже они исчезнут.
     _xb=$(uci -q get byway.main.xray_bin 2>/dev/null || true)
     do_ rm -rf /etc/byway
-    do_ uci -q delete byway
-    do_ rm -f /etc/config/byway
-    do_ uci commit byway
-    say "удалены, включая ключ VPN"
+    # Файл -- прочь; несохранённая правка в /tmp/.uci -- тоже, иначе её унёс
+    # бы следующий чужой commit и воскресил настройки. «uci delete» и commit
+    # здесь не делали ничего: пакет без секций (Ф9, п4-87).
+    # revert -- ДО rm: uci без файла пакета дельту не снимает, и она
+    # оживала с новым файлом (Ф9, п4-87).
+    do_ uci -q revert byway
+    do_ uci -q revert byway_key
+    do_ rm -f /etc/config/byway /etc/config/byway_key
+    if [ "$DRY" != "1" ] && { [ -e /etc/config/byway ] || [ -e /etc/config/byway_key ]; }; then
+        warn "файлы настроек byway не удалились: /etc/config/byway, /etc/config/byway_key"
+    else
+        say "удалены, включая ключ VPN"
+    fi
     # ── движок ─────────────────────────────────────────────────────────
     #
     # Удаляем ТОЛЬКО то, что положил сам byway: файлы вида
@@ -482,7 +544,7 @@ if [ "$PURGE" = "1" ]; then
     fi
 else
     say "── 6. Настройки и списки ОСТАВЛЕНЫ ──"
-    say "    /etc/config/byway и /etc/byway/ на месте"
+    say "    /etc/config/byway, byway_key и /etc/byway/ на месте"
     say "    удалить вместе с ключом: byway-uninstall --purge"
 fi
 

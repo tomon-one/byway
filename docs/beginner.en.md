@@ -48,7 +48,7 @@ through it.
 2. Paste the install line and press Enter:
 
    ```sh
-   sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.3.0/install.sh)"
+   sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/install.sh)"
    ```
 
    If `raw.githubusercontent.com` is unreachable, there is a line through a
@@ -69,7 +69,8 @@ Open `http://192.168.1.1` (or your router's address) in a browser, log in and
 choose *Services → Byway*.
 
 1. **The "Overview" tab.** At the top is the "Getting started" block. Paste the
-   key into the "Key" field and press "Save & Apply" at the bottom of the page.
+   key into the "Key" field, tick "Enable" (byway is off after installing) and
+   press "Save & Apply" at the bottom of the page.
    If the service gave a subscription address, choose the "Loaded from a
    subscription" connection mode, press "Load the list of keys" and tick the
    one you need.
@@ -128,9 +129,9 @@ go around the VPN. This is the "If the VPN does not come up" setting on the
 the VPN. Fix the VPN by the dots above first; if you need the internet right
 now, choose "Go direct".
 
-**After an update the panel looks odd or shows errors.** The browser shows the
-old panel from its cache. Reload the page without the cache: Ctrl+Shift+R (on
-a Mac — Cmd+Shift+R).
+**After an update the panel looks odd or shows errors.** The browser may show the
+old panel from its cache. Reload the page (F5); if that does not help, reload
+without the cache: Ctrl+Shift+R (on a Mac — Cmd+Shift+R).
 
 None of this fits — the "Maintenance" tab → "Check the environment": byway
 checks the router and writes how to fix each fault it finds.

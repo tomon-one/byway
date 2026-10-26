@@ -6,7 +6,8 @@
 
 /* Общее для всех вкладок byway.
 
-   Здесь НЕТ ни одной строки оформления, и это решение, а не упущение.
+   Здесь НЕТ своей таблицы стилей, и это решение, а не упущение: только
+   цвет и отступы прямо у элементов вывода (line, pretty).
    Прежняя редакция держала свой <style> на полсотни правил: сдвигала
    подписи, перекладывала описания, гасила значок вопроса, ловила
    перерисовку секций наблюдателем. Каждое из этих правил боролось с темой
@@ -63,6 +64,16 @@ return baseclass.extend({
 	   в браузере это мусор вида [1;32m. */
 	plain: function (s) { return (s || '').replace(/\x1b\[[0-9;]*m/g, ''); },
 
+	/* Метка ключа той же меркой, что у byway (pk_pctd): раскрываются только
+	   %XX, одиночный «%» остаётся, NUL и управляющие пропадают. Иначе панель и
+	   сборка называли ключ по-разному, и направление не находило ключ по
+	   метке (Ф9, п4-65, п4-78). */
+	pctd: function (s) {
+		var t = (s || '').replace(/%(?![0-9a-fA-F]{2})/g, '%25');
+		try { t = decodeURIComponent(t); } catch (e) { t = s || ''; }
+		return t.replace(/[\x00-\x1f\x7f]/g, '');
+	},
+
 	/* Вывод byway для человека (владелец 2026-10-18: «разбросано, выделить
 	   итог цветом, компактнее»). Метки [ ok ] [ ?? ] [ !! ] (doctor) и [*] [!]
 	   [x] -- цветным значком; «== конец» задачи и пустые строки подряд --
@@ -93,32 +104,32 @@ return baseclass.extend({
 		if (!mono) {
 			/* Заголовок раздела (doctor): строка без отступа и без метки. */
 			if (/^\S/.test(l) && !/^\[/.test(l))
-				return E('div', { 'style': 'font-weight:bold;margin-top:.2em' }, l);
+				return E('div', { 'style': 'font-weight:bold;margin-top:.2em' }, [ l ]);
 			/* Подсказка к неисправности -- глубокий отступ без метки. */
 			if (/^ {5,}\S/.test(l))
-				return E('div', { 'style': 'opacity:.75;padding-left:2.6em;font-size:95%' }, l.trim());
+				return E('div', { 'style': 'opacity:.75;padding-left:2.6em;font-size:95%' }, [ l.trim() ]);
 		}
 		var m = l.match(/^(\s*)\[\s*(ok|\?\?|!!|\*|!|x)\s*\]\s?(.*)$/);
 		var ind = '', body = l, mark = null;
 		if (m) {
 			ind = m[1]; body = m[3];
-			mark = { 'ok': [ '✓', C.ok ], '??': [ '!', C.warn ], '!': [ '!', C.warn ],
+			mark = { 'ok': [ '✓', C.ok ], '*': [ '•', C.ok ], '??': [ '!', C.warn ], '!': [ '!', C.warn ],
 			         '!!': [ '✗', C.bad ], 'x': [ '✗', C.bad ] }[m[2]] || null;
 		}
-		var row = E('div', {}, ind);
+		var row = E('div', {}, [ ind ]);
 		if (mark)
 			row.appendChild(E('span', { 'style': 'color:' + mark[1] + ';font-weight:bold;display:inline-block;width:1.3em' }, mark[0]));
 		var sum = body.match(/(\d+)\D+?(\d+)/);
 		if (/^(работают|\d+ of \d+ work)/.test(body) && sum) {
 			var a = +sum[1], b = +sum[2];
 			row.appendChild(E('span', { 'style': 'font-weight:bold;color:' +
-				(a === b ? C.ok : a ? C.warn : C.bad) }, body));
+				(a === b ? C.ok : a ? C.warn : C.bad) }, [ body ]));
 		} else if (m && m[2] === '!!' || m && m[2] === 'x') {
-			row.appendChild(E('span', { 'style': 'color:' + C.bad }, body));
+			row.appendChild(E('span', { 'style': 'color:' + C.bad }, [ body ]));
 		} else if (m && m[2] === '!') {
-			row.appendChild(E('span', { 'style': 'color:' + C.warn }, body));
+			row.appendChild(E('span', { 'style': 'color:' + C.warn }, [ body ]));
 		} else if (/^(окружение в порядке|the environment is fine)$/.test(body)) {
-			row.appendChild(E('span', { 'style': 'font-weight:bold;color:' + C.ok }, body));
+			row.appendChild(E('span', { 'style': 'font-weight:bold;color:' + C.ok }, [ body ]));
 		} else {
 			row.appendChild(document.createTextNode(body));
 		}
@@ -153,14 +164,14 @@ return baseclass.extend({
 			rows.map(function (r) {
 				return E('tr', {}, [
 					E('td', { 'style': td + ';color:' + (r.ok ? C.ok : C.bad) + ';font-weight:bold' }, r.ok ? '✓' : '✗'),
-					E('td', { 'style': td }, r.name || '—'),
-					E('td', { 'style': td + ';opacity:.7' }, r.tr),
-					E('td', { 'style': td + ';opacity:.7' }, r.srv),
+					E('td', { 'style': td }, [ r.name || '—' ]),
+					E('td', { 'style': td + ';opacity:.7' }, [ r.tr ]),
+					E('td', { 'style': td + ';opacity:.7' }, [ r.srv ]),
 					E('td', { 'style': td + ';color:' + (r.ok ? C.ok : C.bad), 'title': r.ip }, [
 						r.st,
-						r.more.length ? E('div', { 'style': 'color:inherit;opacity:.75;font-size:90%;white-space:pre-wrap' }, r.more.join('\n')) : ''
+						r.more.length ? E('div', { 'style': 'color:inherit;opacity:.75;font-size:90%;white-space:pre-wrap' }, [ r.more.join('\n') ]) : ''
 					]),
-					E('td', { 'style': td + ';opacity:.7;white-space:nowrap' }, r.t)
+					E('td', { 'style': td + ';opacity:.7;white-space:nowrap' }, [ r.t ])
 				]);
 			}));
 		/* пустые строки между ключами больше не нужны */
@@ -240,24 +251,47 @@ return baseclass.extend({
 	job: function (args, box) {
 		var self = this;
 		self.say(box, _('запуск…'));
+		return self.jobRun(args, function (out) {
+			self.say(box, out.trim() || _('запуск…'));
+		}).then(function (r) {
+			/* Отказ без отказа на запуске (роутер перестал отвечать) -- тоже
+			   итогом: блок оставался на «запуск…» (Ф9, п4-75, прогон 5). */
+			if (r.start || r.code !== 0) self.say(box, (r.out || '').trim() || _('не получилось'));
+		});
+	},
+
+	/* Задача целиком: запуск, опрос, итог { code, out, start }. code -- 0,
+	   если задача удалась; start -- отказ на запуске (идёт другая задача).
+	   Сборку и перезапуск службы панель зовёт так же: прямой вызов rpcd
+	   убивает через 30 секунд, и restart, оборванный между stop и start,
+	   оставлял дом без DNS (Ф9, п2-8). each -- ход по мере чтения. */
+	jobRun: function (args, each) {
+		var self = this;
 		return fs.exec(self.BYWAY, [ 'job' ].concat(args)).then(function (r) {
-			if (r.code !== 0) {
-				self.say(box, self.plain((r.stdout || '') + (r.stderr || '')).trim());
-				return;
-			}
+			if (r.code !== 0)
+				return { code: r.code, start: true,
+					out: self.plain((r.stdout || '') + (r.stderr || '')) };
+			/* Ошибок запроса подряд -- не больше двадцати (минута): опрос
+			   крутился вечно и молча, если роутер перестал отвечать (Ф9,
+			   п4-75). */
+			var fails = 0;
 			return new Promise(function (done) {
 				(function poll() {
 					fs.exec(self.BYWAY, [ 'job', 'log' ]).then(function (l) {
+						fails = 0;
 						/* Предупреждения и сведения Xray (строки с датой) человеку
 						   ничего не говорят: «WebSocket устарел» под итогом пробы
 						   читается как поломка. Ошибки остаются. */
-						var out = (l.stdout || '').split('\n').filter(function (x) {
+						var out = self.plain(l.stdout || '').split('\n').filter(function (x) {
 							return !/^\s*\d{4}\/\d\d\/\d\d \d\d:\d\d:\d\d\S* \[(Warning|Info|Debug)\]/.test(x);
 						}).join('\n');
-						self.say(box, out.trim() || _('запуск…'));
+						if (each) each(out);
 						if (l.code === 3) setTimeout(poll, 3000);
-						else done();
-					}).catch(function () { setTimeout(poll, 3000); });
+						else done({ code: l.code, out: out.replace(/\n*== \S+\s*$/, '') });
+					}).catch(function () {
+						if (++fails < 20) return setTimeout(poll, 3000);
+						done({ code: 1, out: _('Роутер не отвечает на запросы панели — ход задачи не виден. Обновите страницу позже.') });
+					});
 				})();
 			});
 		});
@@ -294,8 +328,8 @@ return baseclass.extend({
 	   reload службы ещё собирает тот же конфиг. */
 	genReport: function (failText) {
 		var self = this;
-		return fs.exec(BYWAY, [ 'gen' ]).then(function (r) {
-			var out = self.plain((r.stdout || '') + (r.stderr || ''));
+		return self.jobRun([ 'gen' ]).then(function (r) {
+			var out = r.out;
 			if (r.code !== 0) {
 				ui.addNotification(null, [
 					E('p', {}, [ failText ]),

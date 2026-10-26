@@ -17,7 +17,7 @@ cmd_probe() {
     trap '_pp=$(cat /var/run/byway/probe.pid 2>/dev/null || true)
           [ -z "$_pp" ] || kill "$_pp" 2>/dev/null || true
           rm -f /var/run/byway/probe.pid 2>/dev/null || true
-          for _pf in /tmp/byway-probe.json /tmp/byway-probe.log /tmp/byway-probe.out; do
+          for _pf in /var/run/byway-probe.json /var/run/byway-probe.log /var/run/byway-probe.out; do
               [ ! -f "$_pf" ] || : > "$_pf"
           done' EXIT INT TERM
     pr_env

@@ -26,6 +26,8 @@ var RESTARTING = false;
    загруженные из подписки ключи не появлялись ни в списке, ни в выборе,
    пока страницу не сохранишь и не откроешь заново. */
 var KEYS_OPT = null;
+/* Пакет UCI с ключами (Ф9, п1-12). */
+var KP = 'byway_key';
 var REPAINT_ACTIVE = null;
 
 /* remove() для полей, которые прячутся зависимостью: скрытое значение
@@ -104,6 +106,10 @@ var BYWAY = '/usr/local/bin/byway';
 
 function plain(s) { return (s || '').replace(/\x1b\[[0-9;]*m/g, ''); }
 
+/* Адрес подписки -- файлом root, не аргументом: аргументы видны всем в
+   /proc/PID/cmdline (н1-12). byway sub забирает и стирает его. */
+var SUBF = '/var/run/byway-sub.url';
+
 function run(args) {
 	return fs.exec(BYWAY, args).then(function (r) {
 		return plain((r.stdout || '') + (r.stderr || ''));
@@ -131,29 +137,30 @@ var SUPPORTED = [ 'vless', 'vmess', 'trojan', 'ss', 'socks', 'hysteria2', 'hy2',
 var KNOWN = SUPPORTED.concat([ 'ssr', 'hysteria', 'hysteria2', 'hy2', 'tuic',
                                'wireguard', 'warp' ]);
 
+/* Метка -- после ПЕРВОЙ решётки, мерка bwui.pctd (как у byway). */
+function pctd(s) { return bwui.pctd(s); }
+
 function parseKeys(text) {
 	var out = [];
 	/* По СТРОКАМ, а не по любому пробелу. Подписка -- один ключ на строку, а
 	   метка после решётки сплошь и рядом с пробелами: «#Node 2 EU». Разбор
 	   по пробелам резал такую метку на первом же и терял хвост ключа. */
 	(text || '').split(/[\r\n]+/).forEach(function (raw) {
-		var line = (raw || '').trim();
+		var line = (raw || '').trim().replace(/^\ufeff/, '');
 		var m0 = line.match(/^([a-z0-9+.-]+):\/\//i);
 		if (!m0) return;
 		var scheme = m0[1].toLowerCase();
 		if (KNOWN.indexOf(scheme) < 0) return;
-		var label = '';
 		var h = line.indexOf('#');
-		if (h >= 0) {
-			try { label = decodeURIComponent(line.slice(h + 1)); }
-			catch (e) { label = line.slice(h + 1); }
-		}
+		var label = h >= 0 ? pctd(line.slice(h + 1)) : '';
 		var ty = line.match(/[?&]type=([a-z]+)/);
 		var se = line.match(/[?&]security=([a-z]+)/);
 		out.push({
 			url: line,
 			label: label || _('(без имени)'),
-			ok: SUPPORTED.indexOf(scheme) >= 0,
+			/* Как у byway: схема строчными, адрес IPv6 в скобках не разбирается
+			   (Ф9, п4-67). */
+			ok: SUPPORTED.indexOf(m0[1]) >= 0 && !/:\/\/([^@\/?#]*@)?\[/.test(line),
 			kind: scheme + (ty ? ' · ' + ty[1] : '') + (se ? ' · ' + se[1] : '')
 		});
 	});
@@ -164,9 +171,10 @@ function parseKeys(text) {
    только неотличимые простыни. */
 function keyLabel(url) {
 	var h = (url || '').indexOf('#');
-	if (h < 0) return url.slice(0, 40) + '…';
-	try { return decodeURIComponent(url.slice(h + 1)); }
-	catch (e) { return url.slice(h + 1); }
+	/* Без имени -- схема и сервер: первые сорок знаков были частью uuid или
+	   пароля (Ф9, п4-66). */
+	if (h < 0) return keyShort(url);
+	return pctd(url.slice(h + 1));
 }
 
 /* Подписка обновила ключи. Тот же ключ -- тот же сервер: схема, учётная
@@ -180,8 +188,20 @@ function keyLabel(url) {
    2026-10-18). Значение не меняется -- только видимый текст. */
 function keyShort(u) {
 	var b = (u || '').split('#')[0];
-	var m = b.match(/^([a-z0-9+.-]+):\/\/(?:[^@\/?]*@)?([^\/?#]+)/i);
 	var name = (u || '').indexOf('#') >= 0 ? keyLabel(u) : '';
+	/* vmess и ss в base64: сервер -- из раскодированного, иначе в списке
+	   стояли пароль и uuid (Ф9, п4-1, п4-80). */
+	var v = b.match(/^(vmess|ss):\/\/([A-Za-z0-9+\/=_-]+)$/i);
+	if (v) {
+		var d = maybeDecode(v[2].replace(/-/g, '+').replace(/_/g, '/'));
+		var j = null;
+		try { j = JSON.parse(d); } catch (e) { j = null; }
+		if (j && j.add) return v[1] + '://…@' + j.add + ':' + (j.port || '') + (name || j.ps ? ' · ' + (name || pctd(String(j.ps))) : '');
+		var sm = d.match(/@([^@\/?#]+)$/);
+		if (sm) return v[1] + '://…@' + sm[1] + (name ? ' · ' + name : '');
+		return v[1] + '://…' + (name ? ' · ' + name : '');
+	}
+	var m = b.match(/^([a-z0-9+.-]+):\/\/(?:[^@\/?]*@)?([^\/?#]+)/i);
 	if (!m) return b.length > 60 ? b.slice(0, 60) + '…' : b;
 	return m[1] + '://…@' + m[2] + (name ? ' · ' + name : '');
 }
@@ -217,11 +237,13 @@ function sameKey(a, b) {
 }
 
 function takeSubKeys(good) {
-	uci.set('byway', 'main', 'node_urls', good);
-	var cur = uci.get('byway', 'main', 'node_url') || '';
-	var fresh = good.filter(function (k) { return sameKey(k, cur); })[0];
+	uci.set(KP, 'main', 'node_urls', good);
+	var cur = uci.get(KP, 'main', 'node_url') || '';
+	/* Сперва точное совпадение: при нескольких ключах одного сервера активный
+	   подменялся первым из них (Ф9, п4-64). */
+	var fresh = good.indexOf(cur) >= 0 ? cur : good.filter(function (k) { return sameKey(k, cur); })[0];
 	if (fresh && fresh !== cur)
-		uci.set('byway', 'main', 'node_url', fresh);
+		uci.set(KP, 'main', 'node_url', fresh);
 	if (KEYS_OPT) {
 		var el = KEYS_OPT.getUIElement('main');
 		if (el) el.setValue(good);
@@ -238,7 +260,7 @@ var SubRefresh = form.DummyValue.extend({
 		var btn = E('button', {
 			'class': 'btn cbi-button-action',
 			'click': ui.createHandlerFn(this, function () {
-				var url = (uci.get('byway', 'main', 'sub_url') || '').trim();
+				var url = (uci.get(KP, 'main', 'sub_url') || '').trim();
 				note.innerHTML = '';
 				if (!url) {
 					note.appendChild(E('em', {}, [ _('Подписка не задана: её адрес вписывается в способе «Загрузка из подписки».') ]));
@@ -246,7 +268,7 @@ var SubRefresh = form.DummyValue.extend({
 				}
 				if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
 				note.appendChild(E('span', { 'class': 'spinning' }, [ _('Список загружается…') ]));
-				return run([ 'sub', url ]).then(function (body) {
+				return fs.write(SUBF, url + '\n', 384).then(function () { return run([ 'sub' ]); }).then(function (body) {
 					var good = parseKeys(maybeDecode(body))
 						.filter(function (x) { return x.ok; })
 						.map(function (x) { return x.url; });
@@ -295,7 +317,7 @@ function advice(seen) {
 	if (f('vpn'))
 		out.push(_('Связи с сервером VPN нет: ключ вставлен не целиком, устарел, или сервер выключен либо заблокирован. Нажмите «Проверить ключ» ниже; если и там «НЕ РАБОТАЕТ», возьмите свежий ключ у сервиса VPN.'));
 	else if (f('tunnel'))
-		out.push(_('Сервер отвечает, но трафик через него не идёт. Чаще всего ключ устарел или в нём ошибка (пароль, идентификатор): нажмите «Проверить ключ» ниже и при неудаче возьмите новый ключ у сервиса VPN.'));
+		out.push(_('Сервер отвечает, но трафик через него не идёт. Чаще всего ключ устарел или в нём ошибка (пароль, идентификатор): нажмите «Проверить ключ» ниже и при неудаче возьмите новый ключ у сервиса VPN. Ключ работает — нажмите «Перезапустить»: перехват мог быть снят.'));
 	/* Без связи с сервером DNS проверять нечем -- это следствие, не причина. */
 	if (f('dns') && !out.length)
 		out.push(_('Резолвер byway не отвечает, и сайты из списков не откроются. Нажмите «Перезапустить»; не помогло — «Обслуживание» → «Проверить окружение».'));
@@ -324,9 +346,13 @@ function healthBox(text) {
 	}).concat(tips));
 }
 
-/* Ключ ещё не задан -- в сохранённых настройках, по способу подключения. */
+/* Ключ ещё не задан -- в сохранённых настройках, по способу подключения.
+   Без права на ключ (пакет byway_key не прочитан) -- по сводке status: иначе
+   такой пользователь всегда видел «С чего начать» без советов (н1-14). */
+var KEYREAD = true, STATUS = '';
 function noKey() {
-	var g = function (o) { return uci.get('byway', 'main', o); };
+	if (!KEYREAD) return connName(STATUS).indexOf(_('(ключ не задан)')) === 0;
+	var g = function (o) { return uci.get([ 'node_url', 'node_urls', 'sub_url', 'outbound_json' ].indexOf(o) >= 0 ? KP : 'byway', 'main', o); };
 	/* В режимах нескольких ключей byway работает и на одиночном ключе, если
 	   список пуст: «нет ключа» -- только когда пусто и там, и там. */
 	if ((g('conn_mode') || 'key') === 'outbound') return !(g('outbound_json') || '').trim();
@@ -390,7 +416,7 @@ var SubPicker = form.DummyValue.extend({
 					url = (self.section.formvalue(section_id, 'sub_url') || '').trim();
 				} catch (e) { url = ''; }
 				if (!url)
-					url = (uci.get('byway', 'main', 'sub_url') || '').trim();
+					url = (uci.get(KP, 'main', 'sub_url') || '').trim();
 
 				if (!url) {
 					listBox.innerHTML = '';
@@ -404,7 +430,7 @@ var SubPicker = form.DummyValue.extend({
 				listBox.innerHTML = '';
 				listBox.appendChild(E('span', { 'class': 'spinning' },
 					_('Список загружается…')));
-				return run([ 'sub', url ]).then(function (body) {
+				return fs.write(SUBF, url + '\n', 384).then(function () { return run([ 'sub' ]); }).then(function (body) {
 					var keys = parseKeys(maybeDecode(body));
 					listBox.innerHTML = '';
 					if (!keys.length) {
@@ -418,7 +444,7 @@ var SubPicker = form.DummyValue.extend({
 							    : _('Ключей не пришло. Либо адрес неверен, либо ответ не успел прийти — вторая причина вероятнее, если подписка обычно работает.') ]));
 						return;
 					}
-					var cur = uci.get('byway', 'main', 'node_url') || '';
+					var cur = uci.get(KP, 'main', 'node_url') || '';
 
 					/* Складываем ВСЕ пригодные ключи разом. Тогда режимы
 					   «выбрать вручную» и «автовыбор» получают их готовыми,
@@ -430,11 +456,11 @@ var SubPicker = form.DummyValue.extend({
 					   будет новый; переименованный активный ключ -- с новым
 					   именем. */
 					takeSubKeys(good);
-					cur = uci.get('byway', 'main', 'node_url') || '';
+					cur = uci.get(KP, 'main', 'node_url') || '';
 					listBox.appendChild(E('div', {
 						'style': 'margin-bottom:.5em;opacity:.75'
-					}, _('Найдено ключей: ') + keys.length +
-					   _('. Нужный отмечается ниже:')));
+					}, [ _('Найдено ключей: ') + keys.length +
+					   _('. Нужный отмечается ниже:') ]));
 
 					keys.forEach(function (k, i) {
 						var id = 'bwkey' + i;
@@ -447,7 +473,7 @@ var SubPicker = form.DummyValue.extend({
 							'checked': (k.url === cur) ? 'checked' : null
 						});
 						radio.addEventListener('change', function () {
-							uci.set('byway', 'main', 'node_url', k.url);
+							uci.set(KP, 'main', 'node_url', k.url);
 							uci.set('byway', 'main', 'conn_mode', 'sub');
 						});
 						listBox.appendChild(E('div', {
@@ -467,7 +493,7 @@ var SubPicker = form.DummyValue.extend({
 										'style': 'display:inline-block;min-width:16em'
 									})),
 								E('span', { 'style': 'opacity:.6' },
-									k.kind + (k.ok ? '' : _(' — byway такое не умеет')))
+									[ k.kind + (k.ok ? '' : _(' — byway такое не умеет')) ])
 							])
 						]));
 					});
@@ -490,7 +516,10 @@ return view.extend({
 		return Promise.all([
 			uci.load('byway'),
 			run([ 'health' ]),
-			run([ 'status', '--short' ])
+			run([ 'status', '--short' ]),
+			/* Ключи -- своим пакетом byway_key (Ф9, п1-12): роль «только
+			   чтение» его не видит, и поля ключей тогда не рисуются. */
+			L.resolveDefault(uci.load(KP), null).then(function (r) { return r != null; })
 		]);
 	},
 
@@ -505,6 +534,8 @@ return view.extend({
 	},
 
 	render: function (data) {
+		KEYREAD = !!data[3];
+		STATUS = data[2] || '';
 		setTitle();
 		bwui.afterApply(_('Ключ не принят — работает прежняя настройка.'));
 
@@ -538,6 +569,8 @@ return view.extend({
 		/* Без заголовка: крупное «byway» с подписью только отодвигало
 		   проверку вниз (владелец 2026-10-16). */
 		var m = new form.Map('byway');
+		var HASKEY = !!data[3];
+		if (HASKEY) m.chain(KP);
 		var s = m.section(form.NamedSection, 'main', 'byway');
 		s.addremove = false;
 		s.anonymous = true;
@@ -556,7 +589,7 @@ return view.extend({
 			o.cfgvalue = function () {
 				return E('div', { 'style': 'line-height:1.6' }, [
 					E('div', {}, [ _('1. Вставьте ключ в поле «Ключ» ниже. Ключ — ссылка вида vless://…, trojan://… или ss://…; её выдаёт сервис VPN: в письме, в личном кабинете или в боте. Если сервис дал адрес подписки (https://…), выберите способ подключения «Загрузка из подписки».') ]),
-					E('div', {}, [ _('2. Нажмите «Сохранить и применить» внизу страницы.') ]),
+					E('div', {}, [ _('2. Поставьте галочку «Включить» ниже и нажмите «Сохранить и применить» внизу страницы: в поставке byway выключен.') ]),
 					E('div', {}, [ _('3. Через полминуты нажмите «Проверить сейчас»: все четыре точки должны стать зелёными.') ]),
 					E('div', { 'style': 'opacity:.75' }, [ _('Что пускать через VPN, задаёт вкладка «Списки»: свои сайты и готовые списки на выбор.') ]),
 					E('div', { 'style': 'opacity:.75' }, [ E('a', { 'href': 'https://github.com/tomon-one/byway/blob/main/docs/' + (lang.lang() === 'en' ? 'beginner.en.md' : 'beginner.md'), 'target': '_blank', 'rel': 'noopener' }, [ _('Подробно, по шагам и со словарём терминов — byway простыми словами') ]) ])
@@ -586,13 +619,15 @@ return view.extend({
 			/* Перезапуск СЛУЖБЫ, а не подъём обвязки. Прежде звалась
 			   plumb on: она ставит правила поверх работающего движка, но
 			   остановленную службу не запускает -- то есть кнопка не делала
-			   ничего ровно в том случае, ради которого её и нажимают. */
-			return fs.exec('/etc/init.d/byway', [ 'restart' ]).then(function (r) {
-				if (r && r.code !== 0) {
+			   ничего ровно в том случае, ради которого её и нажимают.
+			   Через задачу byway job: прямой вызов rpcd убивает через 30
+			   секунд, и restart, оборванный между stop и start, оставлял
+			   дом без DNS до перезагрузки (Ф9, п2-8). */
+			return bwui.jobRun([ 'restart' ]).then(function (r) {
+				if (r.code !== 0) {
 					ui.hideModal();
 					ui.addNotification(null, E('p', {},
-						_('Перезапустить не удалось: ') +
-						plain((r.stderr || '') + (r.stdout || ''))), 'error');
+						[ _('Перезапустить не удалось: ') + r.out.trim() ]), 'error');
 					RESTARTING = false;
 					return refresh();
 				}
@@ -606,21 +641,11 @@ return view.extend({
 					return refresh();
 				});
 			}).catch(function (e) {
-				/* Обрыв по времени -- НЕ отказ. Запрос панели живёт около
-				   двадцати секунд, а перезапуск на роутере идёт своим ходом
-				   и после обрыва продолжается. Называть это «не удалось»
-				   значит врать: туннель в этот момент как раз поднимается. */
-				var slow = /timed out|timeout/i.test(String(e));
 				ui.hideModal();
-				ui.addNotification(null, E('p', {}, slow
-					? _('Перезапуск идёт дольше, чем панель готова ждать. На роутере он продолжается — проверка обновится сама.')
-					: _('Перезапустить не удалось: ') + e), slow ? 'info' : 'error');
-				return new Promise(function (ok) {
-					window.setTimeout(ok, 15000);
-				}).then(function () {
-					RESTARTING = false;
-					return refresh();
-				});
+				ui.addNotification(null, E('p', {},
+					[ _('Перезапустить не удалось: ') + e ]), 'error');
+				RESTARTING = false;
+				return refresh();
 			});
 		};
 
@@ -645,9 +670,13 @@ return view.extend({
 
 		var urlOpt = o = s.option(form.TextValue, 'node_url', _('Ключ'),
 			_('Ссылка от сервиса VPN целиком, вида vless://… или trojan://…. Текст после знака # станет названием подключения.'));
+		/* Зависимость -- полным путём: без него LuCI ищет conn_mode в byway_key
+		   и считает поле неактивным, правка не записывается. */
+		o.uciconfig = KP;
+		if (!HASKEY) o.readonly = true;
 		o.rows = 3;
 		o.monospace = true;
-		o.depends('conn_mode', 'key');
+		o.depends('byway.main.conn_mode', 'key');
 		/* LuCI удаляет значение опции, если она скрыта зависимостью. Здесь это
 		   означало: выбрал «Загрузка из подписки» -- и панель стёрла ключ,
 		   который сама же дала выбрать. Ключ хранится один на все режимы.
@@ -661,8 +690,10 @@ return view.extend({
 
 		o = s.option(form.Value, 'sub_url', _('Адрес подписки'),
 			_('Ссылка https://… от сервиса VPN, по которой он отдаёт список ключей. Сам ключ сюда не вставляют: для него способ «Один ключ».'));
+		o.uciconfig = KP;
+		if (!HASKEY) o.readonly = true;
 		o.placeholder = 'https://example.com/sub/abcdef';
-		o.depends('conn_mode', 'sub');
+		o.depends('byway.main.conn_mode', 'sub');
 		o.remove = keepHidden;
 
 		o = s.option(SubPicker, '_pick', _('Ключ из подписки'));
@@ -672,9 +703,13 @@ return view.extend({
 		   так что обычно вписывать руками не придётся. */
 		var keysOpt = s.option(form.DynamicList, 'node_urls', _('Ключи'),
 			_('По одному ключу на строку. Кнопка «Обновить ключи из подписки» заполняет их сама.'));
-		keysOpt.depends('conn_mode', 'selector');
-		keysOpt.depends('conn_mode', 'urltest');
-		keysOpt.remove = function () {};
+		keysOpt.uciconfig = KP;
+		if (!HASKEY) keysOpt.readonly = true;
+		keysOpt.depends('byway.main.conn_mode', 'selector');
+		keysOpt.depends('byway.main.conn_mode', 'urltest');
+		/* Скрытое (режим «один ключ») не стираем, видимое и очищенное --
+		   стираем: заглушка не давала очистить список (Ф9, п4-70). */
+		keysOpt.remove = keepHidden;
 		keysOpt.renderWidget = function () {
 			var w = form.DynamicList.prototype.renderWidget.apply(this, arguments);
 			return Promise.resolve(w).then(shortenKeys);
@@ -698,7 +733,7 @@ return view.extend({
 			var live = null;
 			try { live = keysOpt.formvalue('main'); } catch (e) { live = null; }
 			if (live && live.length) return live;
-			return L.toArray(uci.get('byway', 'main', 'node_urls'));
+			return L.toArray(uci.get(KP, 'main', 'node_urls'));
 		}
 
 		/* Выбор активного ключа сделан ОТДЕЛЬНЫМ виджетом, а не второй опцией
@@ -722,7 +757,7 @@ return view.extend({
 					_('Ключи добавляются выше или загружаются из подписки.')));
 				return;
 			}
-			var cur = uci.get('byway', 'main', 'node_url') || '';
+			var cur = uci.get(KP, 'main', 'node_url') || '';
 			stored.forEach(function (k, i) {
 				var id = 'bwsel' + i;
 				var radio = E('input', {
@@ -731,7 +766,7 @@ return view.extend({
 					'checked': (k === cur) ? 'checked' : null
 				});
 				radio.addEventListener('change', function () {
-					uci.set('byway', 'main', 'node_url', k);
+					uci.set(KP, 'main', 'node_url', k);
 				});
 				box.appendChild(E('div', { 'style': 'padding:.25em 0' }, [
 					radio,
@@ -745,9 +780,11 @@ return view.extend({
 		   по ссылке. У podkop это называлось Outbound Config. */
 		o = s.option(form.TextValue, 'outbound_json', _('Конфиг аутбаунда'),
 			_('Для опытных: кусок настроек Xray-core для исходящего соединения (outbound) — protocol, settings, при нужде streamSettings. Тег byway подставит сам.'));
+		o.uciconfig = KP;
+		if (!HASKEY) o.readonly = true;
 		o.rows = 10;
 		o.monospace = true;
-		o.depends('conn_mode', 'outbound');
+		o.depends('byway.main.conn_mode', 'outbound');
 		o.remove = keepHidden;
 
 		o = s.option(form.Value, 'conn_label', _('Название подключения'),
@@ -776,7 +813,7 @@ return view.extend({
 					if (mode === 'key' || mode === 'sub') {
 						var u = '';
 						if (mode === 'key') { try { u = (urlOpt.formvalue('main') || '').trim(); } catch (e) { u = ''; } }
-						if (!u) u = (uci.get('byway', 'main', 'node_url') || '').trim();
+						if (!u) u = (uci.get(KP, 'main', 'node_url') || '').trim();
 						if (!u) { bwui.say(box, _('Ключ не задан — проверять нечего.')); return; }
 						args.push(u);
 					} else if (mode === 'selector' || mode === 'urltest') {

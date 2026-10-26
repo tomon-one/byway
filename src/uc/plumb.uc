@@ -2,10 +2,11 @@
 // DNS-вход Xray, запрет «не пускать мимо VPN». Замок и снятие по сигналу --
 // у shell (plumb/plumb.sh): ucode сигналов не ловит.
 //
-// Внешние программы (nft, ip, uci, dnsmasq) -- теми же командами, что прежде:
-// правка UCI dhcp и firewall -- через uci, не курсором. Дельта dhcp остаётся
-// некоммиченной, как от `uci set`, и курсор 22.03 с save() по имени пакета
-// молча не пишет (см. uc/transfer.uc).
+// Внешние программы (nft, ip, uci, dnsmasq) -- командами: правка UCI dhcp и
+// firewall -- через uci, не курсором (курсор 22.03 с save() по имени пакета
+// молча не пишет, см. uc/transfer.uc). UCI dhcp byway с 0.4.0 не меняет:
+// ветки с PL_DHCP0 -- уборка наследия 0.3.0 (снимок dnssave, свой адрес в
+// server); firewall -- свой блок текстом (pl_fw_set) и reload.
 
 const PL_TABLE = 'byway';
 const PL_BTABLE = 'byway_block';
@@ -13,11 +14,14 @@ const PL_BTABLE = 'byway_block';
 // to table ID' (2026-09-03).
 const PL_RT = '100';
 // Отметка «маршрут завёл byway», в памяти: маршрут перезагрузку не переживает.
-const PL_RT_MINE = '/tmp/byway-route-mine';
-const PL_RT_MINE6 = '/tmp/byway-route-mine6';
-const PL_BLOCK = '/tmp/byway-blocked';
-const PL_DOWN = '/tmp/byway-plumb-down';
-const PL_DNSSEC = 'dhcp.@dnsmasq[0]';
+const PL_RT_MINE = '/var/run/byway-route-mine';
+const PL_RT_MINE6 = '/var/run/byway-route-mine6';
+// Метка, с которой заведено правило ip rule: после смены mark правило со
+// старой меткой оставалось навсегда (Ф9, п1-2). /var/run -- каталог root.
+const PL_MARK_SET = '/var/run/byway-mark';
+const PL_BLOCK = '/var/run/byway-blocked';
+const PL_DOWN = '/var/run/byway-plumb-down';
+const PL_DHCP0 = 'dhcp.@dnsmasq[0]';
 // NXDOMAIN на use-application-dns.net выключает DoH у Firefox (иначе он идёт
 // мимо byway); `server=/имя/` без адреса даёт NXDOMAIN.
 const PL_CANARY = '/use-application-dns.net/';
@@ -35,9 +39,7 @@ const PL_RESERVED = '0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.
 // туннель.
 const PL_RESERVED6 = '::1/128, ::/128, ::ffff:0:0/96, fe80::/10, ff00::/8, fc00::/7';
 // Умолчание -- константа Xray (fakedns.go, FakeIPv6Pool).
-const PL_POOL6_DEF = 'fc00::/18';
 
-const PL_HEX = '0123456789abcdefABCDEF';
 
 // ── общее ─────────────────────────────────────────────────────────────────
 function pl_where() { return _t('правил nft'); }
@@ -46,7 +48,7 @@ function pl_where() { return _t('правил nft'); }
 function pl_v6on() { return u('ipv6') == '1'; }
 
 // Адрес DNS-входа с умолчанием: поле в панели можно очистить.
-function pl_dns_addr() { return u('dns_listen') || '127.0.0.42'; }
+function pl_dns_addr() { return g_dns_listen(false); }
 
 // Строки вывода без последнего перевода строки; пустой вывод -- пусто.
 function pl_lines(s) {
@@ -72,15 +74,32 @@ function pl_quiet(argv) { return run(argv).code; }
 function pl_dns_restart() { run([ 'sh', '-c', 'trap "" HUP INT PIPE; exec /etc/init.d/dnsmasq restart >/dev/null 2>&1' ]); }
 function pl_has_table(t) { return run([ 'nft', 'list', 'table', 'inet', t ]).code == 0; }
 
-// Действующая метка (eff_mark): как печатает ip rule show -- строчными, без
+// dnsmasq при старте пишет свой конфиг в /tmp: без места он не встаёт, и дом
+// остаётся без DNS вовсе. При нехватке dnsmasq не перезапускаем и его файлы
+// не трогаем -- работающий отвечает по-прежнему, сторож повторит позже
+// (Ф9, прогон 5; решение Tomon 2026-10-24). Не узнали места -- не мешаем.
+const PL_TMP_MIN = 256;
+function pl_tmp_short(what) {
+	let df = split(split(run([ 'df', '-k', '/tmp' ]).out, '\n')[1] ?? '', /[ \t]+/);
+	let free = df[3] ?? '';
+	if (free === '' || ltrim(free, '0123456789') !== '' || int(free) >= PL_TMP_MIN) return false;
+	warnf('в /tmp свободно %s КБ — dnsmasq не перезапущен: без места он не встаёт, и дом остался бы без DNS. %s Освободить место: df -h /tmp', free, what);
+	return true;
+}
+
+// Действующая метка (pl_mark): как печатает ip rule show -- строчными, без
 // ведущих нулей. loud -- жаловаться на негодную настройку.
 function pl_mark(loud) {
 	if (!loud) return st_mark();
 	let m = g_val_or('mark', u('mark'), /^0x[0-9a-fA-F]{1,8}$/, '0x100000', pl_where());
+	if (hex(substr(m, 2)) == 0) {
+		warnf('настройка %s = «%s» не годится для %s, взято %s', 'mark', m, pl_where(), '0x100000');
+		m = '0x100000';
+	}
 	return sprintf('0x%x', hex(substr(m, 2)));
 }
 
-// Мосты (eff_ifs): имена через пробел.
+// Мосты (pl_ifs): имена через пробел.
 function pl_ifs(loud) {
 	let re = /^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$/, v = u('interface');
 	if (loud) return g_val_or('interface', v, re, 'br-lan', pl_where());
@@ -89,19 +108,6 @@ function pl_ifs(loud) {
 
 // "a", "b" для набора nft.
 function pl_iflist(ifs) { return join(', ', map(split(ifs, ' '), (i) => '"' + i + '"')); }
-
-// Число из строки, как арифметика оболочки: 0x -- шестнадцатеричное, ведущий
-// ноль -- восьмеричное; негодное -- null.
-function pl_num(s) {
-	if (substr(s, 0, 2) == '0x' || substr(s, 0, 2) == '0X') return hex(substr(s, 2));
-	if (length(s) > 1 && substr(s, 0, 1) == '0') {
-		if (ltrim(s, '01234567') !== '') return null;
-		let n = 0;
-		for (let i = 1; i < length(s); i++) n = n * 8 + int(substr(s, i, 1));
-		return n;
-	}
-	return int(s);
-}
 
 // Метка на исходящих сокетах движка (sockopt.mark), не та же, что у обвязки.
 // Цепочка output ловит по адресу назначения, а движок на том же хосте: пакет,
@@ -119,7 +125,13 @@ function pl_self_mark(quiet) {
 	}
 	let n = pl_num(s);
 	if (n == null || n > 4294967295 || n <= 0) {
-		if (!quiet) warnf('self_mark %s не влезает в 32 бита -- взято умолчание 0x400000', s);
+		// Причина -- своя: 0 и «09» (ведущий ноль -- восьмеричное) в 32 бита
+		// влезают, они просто не годятся (Ф9, п4-12).
+		if (!quiet) {
+			if (n == null) warnf('self_mark %s -- не число (ведущий ноль читается восьмеричным) -- взято умолчание 0x400000', s);
+			else if (n <= 0) warnf('self_mark 0 не годится: метки у сокетов движка не будет -- взято умолчание 0x400000');
+			else warnf('self_mark %s не влезает в 32 бита -- взято умолчание 0x400000', s);
+		}
 		s = '0x400000';
 		n = 0x400000;
 	}
@@ -147,56 +159,10 @@ function pl_subs() { return getenv('BW_SUBNETS') ?? mg_path('subnets'); }
 function pl_doms() { return getenv('BW_MERGED') ?? mg_path('domains'); }
 
 // ── наборы адресов ────────────────────────────────────────────────────────
-// Пробелы вырезаются целиком, и внутри строки: «1.2.3.4 /24» -- это
-// 1.2.3.4/24 (как gsub в прежнем awk).
-function pl_squeeze(l) {
-	if (index(l, ' ') >= 0 || index(l, '\t') >= 0 || index(l, '\r') >= 0 ||
-	    index(l, '\x0b') >= 0 || index(l, '\x0c') >= 0 || index(l, '\n') >= 0)
-		l = replace(l, /[ \t\r\n\x0b\x0c]/g, '');
-	return l;
-}
-
-// a.b.c.d или a.b.c.d/n с цифрами в каждой части (без проверки величины).
-function pl_v4_form(l) {
-	let s = index(l, '/'), a = s < 0 ? l : substr(l, 0, s);
-	if (s >= 0 && (substr(l, s + 1) === '' || !_only(substr(l, s + 1), '0123456789'))) return null;
-	let o = split(a, '.');
-	if (length(o) != 4) return null;
-	for (let x in o) if (x === '' || !_only(x, '0123456789')) return null;
-	return { o: o, p: s < 0 ? null : substr(l, s + 1) };
-}
-
-// IPv6 разбирается ЦЕЛИКОМ, а не «не больше восьми групп»: «2001:db8:»,
-// «1:::2» и пустая группа посреди адреса уходили в elements, и ядро
-// отвергало весь документ -- с ветками по доменам и по IPv4 (таблица inet
-// одна на оба семейства). Четвёртый аудит, заход 3.
-function pl_v6_ok(l) {
-	let s = index(l, '/'), e = s < 0 ? l : substr(l, 0, s);
-	if (s >= 0) {
-		// Пустая длина после «/» прежде проходила (ядро отвергало набор).
-		let p = substr(l, s + 1);
-		if (p === '' || !_only(p, '0123456789') || _numgt(p, 128)) return false;
-	}
-	if (e === '' || !_only(e, PL_HEX + ':') || index(e, ':') < 0) return false;
-	let c = 0, t = e, j;
-	while ((j = index(t, '::')) >= 0) { c++; t = substr(t, j + 2); }
-	if (c > 1) return false;
-	if (c == 1) {
-		let p = index(e, '::'), ng = 0;
-		for (let h in [ substr(e, 0, p), substr(e, p + 2) ]) {
-			if (h === '') continue;
-			let g = split(h, ':');
-			for (let x in g) if (x === '' || length(x) > 4) return false;
-			ng += length(g);
-		}
-		// «::» обязано сжимать хотя бы одну группу.
-		return ng <= 7;
-	}
-	let g = split(e, ':');
-	if (length(g) != 8) return false;
-	for (let x in g) if (x === '' || length(x) > 4) return false;
-	return true;
-}
+// Мерка адресов -- lj_v4_ok и lj_v6_ok (uc/lists.uc), одна со сборкой.
+// Пробелы внутри строки прежде вырезались («1.2.3.4 /24» -- 1.2.3.4/24), а
+// сборка такую строку отбрасывала: подсеть была в перехвате и не была в
+// конфиге (Ф9, п4-11). Теперь снимаются только по краям, как у сборки.
 
 // Элементы наборов из файла списка: v4 и v6 через запятую; отвергнутое -- в
 // bad4/bad6 (это IPv6 -- не порча для v4, и наоборот). Пропускается только
@@ -207,19 +173,10 @@ function pl_elements(file) {
 	let f = fs.open(file, 'r'), l;
 	if (!f) return r;
 	while ((l = f.read('line')) != null && l !== '') {
-		l = pl_squeeze(l);
+		l = trim(l, WS);
 		if (l === '' || substr(l, 0, 1) == '#' || substr(l, 0, 2) == '//') continue;
-		let f4 = pl_v4_form(l);
-		if (index(l, ':') < 0) {
-			let ok = f4 != null;
-			if (ok) {
-				for (let x in f4.o) if (_numgt(x, 255)) ok = false;
-				if (f4.p != null && _numgt(f4.p, 32)) ok = false;
-			}
-			push(ok ? r.v4 : r.bad4, l);
-		}
-		// Форма v4 -- не наша (её судит набор v4).
-		if (f4 == null) push(pl_v6_ok(l) ? r.v6 : r.bad6, l);
+		if (index(l, ':') < 0) push(lj_v4_ok(l, true) ? r.v4 : r.bad4, l);
+		else push(lj_v6_ok(l) ? r.v6 : r.bad6, l);
 	}
 	f.close();
 	return r;
@@ -237,12 +194,7 @@ function pl_bad(lines) {
 // (DNS туннелем) и закрепления /etc/hosts -- без запросов в сеть. Программам
 // роутера они идут мимо метки: адрес сервера в подсетях списка увёл бы в
 // туннель пробы связи с ним самим (health, probe).
-function pl_v4_ok(a) {
-	let f = pl_v4_form(a);
-	if (f == null || f.p != null) return false;
-	for (let x in f.o) if (_numgt(x, 255)) return false;
-	return true;
-}
+function pl_v4_ok(a) { return lj_v4_ok(a, false); }
 function pl_vpn_ips() {
 	let c = null;
 	try { c = json(fs.readfile(getenv('BW_OUT') ?? '') ?? 'null'); } catch (e) { c = null; }
@@ -253,7 +205,7 @@ function pl_vpn_ips() {
 		for (let v in [ ...(st.vnext ?? []), ...(st.servers ?? []), st ])
 			if (type(v?.address) == 'string') push(names, v.address);
 		for (let pe in st.peers ?? [])
-			if (type(pe?.endpoint) == 'string') push(names, substr(pe.endpoint, 0, rindex(pe.endpoint, ':')));
+			if (type(pe?.endpoint) == 'string') push(names, substr(pe.endpoint, 0, rpos(pe.endpoint, ':')));
 	}
 	let hosts = c.dns?.hosts ?? {}, pins = {};
 	for (let l in pl_lines(fs.readfile('/etc/hosts'))) {
@@ -271,20 +223,26 @@ function pl_vpn_ips() {
 // ── набор правил перехвата ────────────────────────────────────────────────
 // Трафик доверенных мостов к пулу fakeip и подсетям списка уходит в
 // tproxy-вход Xray, остальное не трогается. Своя таблица, а не правила в fw4:
-// откат -- `nft delete table inet byway`, fw4 чужие таблицы не сносит.
+// откат -- `nft delete table inet byway`; перезагрузка firewall её не трогает,
+// а `firewall stop` сносит все таблицы (её поднимает сторож).
 // `tproxy ip to :порт` без адреса: форма с 127.0.0.1 требует route_localnet=1.
 // Метка ставится через `or`: троттлинг метит трафик 0x2, присваивание затёрло
 // бы её; ip rule поэтому сверяет по маске.
 function pl_ruleset() {
 	let pool = st_pool(), mark = pl_mark(true);
 	let port = g_val_or('tproxy_port', u('tproxy_port'), /^[0-9]{1,5}$/, '1602', pl_where());
+	// Та же мерка, что у сборки: порт 0 давал «tproxy to :0» (Ф9, п3-17).
+	if (!g_port_ok(port)) port = '1602';
 	let ifl = pl_iflist(pl_ifs(true));
 	let el = pl_elements(pl_subs());
 	pl_bad(el.bad4);
 	pl_bad(el.bad6);
 	let nets = join(', ', el.v4), nets6 = join(', ', el.v6);
-	let pool6 = g_val_or('fakeip6_pool', u('fakeip6_pool'), /^[0-9a-fA-F:]+\/[0-9]{1,3}$/, PL_POOL6_DEF, pl_where());
+	let pool6 = g_pool6(G_POOL6_DEF, pl_where());
 	let v6 = pl_v6on(), all = u('list_mode') == 'all';
+	let lport = g_val_or('local_proxy_port', u('local_proxy_port'), /^[0-9]{1,5}$/, '1603', pl_where());
+	if (!g_port_ok(lport)) lport = '1603';
+	let dport = g_direct_port(port, lport);
 	let tp4 = 'counter tproxy ip to :' + port + ' meta mark set meta mark or ' + mark + ' accept';
 	let tp6 = 'counter tproxy ip6 to :' + port + ' meta mark set meta mark or ' + mark + ' accept';
 	let sm = null;
@@ -308,12 +266,13 @@ function pl_ruleset() {
 	// Свои адреса роутера движку закрыты (Д-3, 2026-10-04): гость через имя,
 	// разрешённое в публичный адрес WAN или глобальный v6, доходил до служб
 	// роутера на 0.0.0.0. Движок узнаём по uid процесса (не от root), иначе по
-	// self_mark (её ставит direct при router_via_vpn=1). Петля и порт 53 вне
+	// self_mark (её ставит direct при router_via_vpn=1 и у движка от root:
+	// прежде от root без router_via_vpn запрета не было, Ф9, п1-17). Петля и порт 53 вне
 	// правила: Go-резолвер движка ходит на 127.0.0.1 за адресом сервера.
 	let eng = '', pid = pl_xray_pid();
 	let euid = pid !== '' ? match(fs.readfile('/proc/' + pid + '/status') ?? '', /\nUid:[ \t]+([0-9]+)/) : null;
 	if (euid && euid[1] != '0') eng = 'meta skuid ' + euid[1];
-	else if (u('router_via_vpn') == '1') { sm ??= pl_self_mark(false); eng = 'meta mark ' + sm.s; }
+	else if (u('router_via_vpn') == '1' || euid) { sm ??= pl_self_mark(false); eng = 'meta mark ' + sm.s; }
 	let localchain = '';
 	if (eng !== '')
 		localchain = '\n\tchain engine_local {\n\t\ttype filter hook output priority filter; policy accept;' +
@@ -375,6 +334,21 @@ function pl_ruleset() {
 	let quic = u('block_quic') != '0' ?
 		'\n\t\tmeta mark & ' + mark + ' == ' + mark + ' udp dport 443 @th,64,8 & 0xc0 == 0xc0 @th,72,32 { 0x00000001, 0x6b3343cf } counter reject' : '';
 
+	// Сети вне interface (Ф9, п1-18): dnsmasq один на все мосты и отдаёт им
+	// подставные адреса списка, а перехвата у них нет -- сайты списка у них
+	// не открывались вовсе. Теперь -- на вход «напрямую»: движок возвращает
+	// имя и идёт без туннеля. Только с частных адресов: из WAN пул не нужен
+	// (у v6 -- ULA и link-local, н1-25; клиент с глобальным адресом получит
+	// отказ по v6 и уйдёт на v4 -- тот же вход).
+	// Не завернулось (движок упал) -- брось: пул наружу не нужен никогда.
+	let others = 'iifname != { "lo", ' + ifl + ' }';
+	let direct = '\t\t' + others + ' ip saddr @privnets ip daddr @fakeip meta l4proto { tcp, udp } counter tproxy ip to :' + dport +
+		' meta mark set meta mark or ' + mark + ' accept\n' +
+		(v6 ? '\t\t' + others + ' ip6 saddr { fc00::/7, fe80::/10 } ip6 daddr @fakeip6 meta l4proto { tcp, udp } counter tproxy ip6 to :' + dport +
+		       ' meta mark set meta mark or ' + mark + ' accept\n' : '') +
+		'\t\t' + others + ' ip daddr @fakeip counter drop\n' +
+		(v6 ? '\t\t' + others + ' ip6 daddr @fakeip6 counter drop\n' : '');
+
 	// Прелюдия table/delete: `nft -f` доливает в существующую таблицу (и
 	// `nft -c` давал «interval overlaps» на сужении пула); снятие и укладка --
 	// одна транзакция. `elements = {  }` -- синтаксическая ошибка, набор без
@@ -393,14 +367,15 @@ function pl_ruleset() {
 		'\tset subnets {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\t' +
 		(nets !== '' ? 'elements = { ' + nets + ' }' : '') + '\n\t}' + v6sets + '\n' +
 		'\tchain prerouting {\n\t\ttype filter hook prerouting priority mangle; policy accept;\n' +
-		(rlo ? '\t\tiif lo meta mark & ' + mark + ' != ' + mark + ' return\n\t\tiifname != { "lo", ' + ifl + ' } return\n' :
+		(rlo ? '\t\tiif lo meta mark & ' + mark + ' != ' + mark + ' return\n' : '') + direct +
+		(rlo ? '\t\tiifname != { "lo", ' + ifl + ' } return\n' :
 		       '\t\tiifname != { ' + ifl + ' } return\n') +
 		'\t\tip daddr @privnets return' + v6pre + '\n' +
 		'\t\tmeta l4proto { tcp, udp } socket transparent 1 meta mark set meta mark or ' + mark + ' accept\n' +
 		'\t\t' + lcatch + v6catch + miss + '\n\t}\n' +
 		'\tchain input {\n\t\ttype filter hook input priority filter - 10; policy accept;\n' +
 		'\t\tiif lo return' + quic + '\n' +
-		'\t\tmeta l4proto { tcp, udp } th dport ' + port + ' counter drop\n\t}\n' +
+		'\t\tmeta l4proto { tcp, udp } th dport { ' + port + ', ' + dport + ' } counter drop\n\t}\n' +
 		rchain + localchain + '\n}\n';
 }
 
@@ -443,13 +418,25 @@ function pl_try(argv) {
 
 // ip rule: помеченное -- в локальную таблицу, иначе tproxy-сокет пакета не
 // увидит. Ложь -- маршрут не заведён.
+// Снять правила ip rule (v4 и v6) с этой меткой.
+function pl_rules_del(m) {
+	let re = pl_rule_re(m);
+	while (pl_has_rule([], re))
+		if (pl_quiet([ 'ip', 'rule', 'del', 'fwmark', m + '/' + m, 'lookup', PL_RT ]) != 0) break;
+	// Без проверки ipv6: настройку могли выключить после подъёма.
+	while (pl_has_rule([ '-6' ], re))
+		if (pl_quiet([ 'ip', '-6', 'rule', 'del', 'fwmark', m + '/' + m, 'lookup', PL_RT ]) != 0) break;
+}
+
 function pl_route_up() {
 	let rt = pl_lines(run([ 'ip', 'route', 'show', 'table', PL_RT ]).out);
 	// Чужие маршруты не трогаем, но говорим: наложение непредсказуемо.
 	if (length(filter(rt, (l) => substr(l, 0, 20) != 'local default dev lo')))
 		warnf('в таблице маршрутизации %s есть чужие маршруты -- byway их не трогает', PL_RT);
-	let m = pl_mark(false), re = pl_rule_re(m);
+	let m = pl_mark(false), re = pl_rule_re(m), old = trim(fs.readfile(PL_MARK_SET) ?? '');
+	if (old !== '' && old != m) pl_rules_del(old);
 	if (!pl_has_rule([], re) && !pl_try([ 'ip', 'rule', 'add', 'fwmark', m + '/' + m, 'lookup', PL_RT ])) return false;
+	fs.writefile(PL_MARK_SET, m + '\n');
 	// Отметка «маршрут наш»: формой от чужого не отличить.
 	if (!length(filter(rt, (l) => substr(l, 0, 13) == 'local default'))) {
 		if (!pl_try([ 'ip', 'route', 'add', 'local', 'default', 'dev', 'lo', 'table', PL_RT ])) return false;
@@ -462,7 +449,9 @@ function pl_route_up() {
 		// `ip -6 route show table 100` при существующем маршруте молчит (22.03.7,
 		// 2026-09-08).
 		let six = pl_lines(run([ 'ip', '-6', 'route', 'list', 'table', 'all' ]).out);
-		if (!length(filter(six, (l) => substr(l, 0, 27 + length(PL_RT)) == 'local default dev lo table ' + PL_RT))) {
+		// С пробелом после номера: иначе «table 100» совпадало и с «table
+		// 1000» чужого маршрута, и свой не заводился (Ф9, п4-43).
+		if (!length(filter(six, (l) => substr(l + ' ', 0, 28 + length(PL_RT)) == 'local default dev lo table ' + PL_RT + ' '))) {
 			if (!pl_try([ 'ip', '-6', 'route', 'add', 'local', '::/0', 'dev', 'lo', 'table', PL_RT ])) return false;
 			fs.writefile(PL_RT_MINE6, '');
 		}
@@ -471,9 +460,10 @@ function pl_route_up() {
 }
 
 function pl_route_down() {
-	let m = pl_mark(false), re = pl_rule_re(m);
-	while (pl_has_rule([], re))
-		if (pl_quiet([ 'ip', 'rule', 'del', 'fwmark', m + '/' + m, 'lookup', PL_RT ]) != 0) break;
+	let m = pl_mark(false), old = trim(fs.readfile(PL_MARK_SET) ?? '');
+	pl_rules_del(m);
+	if (old !== '' && old != m) pl_rules_del(old);
+	fs.unlink(PL_MARK_SET);
 	// Убирается только свой маршрут (по отметке, не по форме): таблицу мог
 	// занять другой tproxy, и flush сломал бы соседа.
 	if (fs.stat(PL_RT_MINE)) {
@@ -485,9 +475,6 @@ function pl_route_down() {
 		// до 0.1.4 отметки нет): говорим, только когда в таблице есть чужое.
 		warnf('маршрут в таблице %s оставлен: его завёл не byway', PL_RT);
 	}
-	// Без проверки ipv6: настройку могли выключить после подъёма.
-	while (pl_has_rule([ '-6' ], re))
-		if (pl_quiet([ 'ip', '-6', 'rule', 'del', 'fwmark', m + '/' + m, 'lookup', PL_RT ]) != 0) break;
 	if (fs.stat(PL_RT_MINE6)) {
 		pl_quiet([ 'ip', '-6', 'route', 'del', 'local', '::/0', 'dev', 'lo', 'table', PL_RT ]);
 		fs.unlink(PL_RT_MINE6);
@@ -499,7 +486,7 @@ function pl_route_down() {
 // server на вход, no-resolv (без него dnsmasq шлёт запрос и провайдеру, и
 // часть доменов получает настоящий адрес) и канарейка. Файл в памяти и уходит
 // с перезагрузкой; UCI dnsmasq не трогается.
-function pl_servers() { return pl_words(pl_uci_get(PL_DNSSEC + '.server')); }
+function pl_servers() { return pl_words(pl_uci_get(PL_DHCP0 + '.server')); }
 
 // HUP чистит кэш и перечитывает hosts, не роняя сокеты; файлы каталога
 // добавок dnsmasq читает только при старте. Сброс после рестарта движка
@@ -511,9 +498,13 @@ function pl_dns_loaded(f) {
 	let st = fs.stat(f), bt = match(fs.readfile('/proc/stat') ?? '', /\nbtime ([0-9]+)/);
 	if (!st || !bt) return false;
 	for (let p in pl_words(run([ 'pgrep', '-x', 'dnsmasq' ]).out)) {
-		let s = fs.readfile('/proc/' + p + '/stat') ?? '', i = rindex(s, ') ');
+		let s = fs.readfile('/proc/' + p + '/stat') ?? '', i = rpos(s, ') ');
 		if (i < 0) continue;
-		if (int(bt[1]) + int(int(split(substr(s, i + 2), ' ')[19]) / 100) >= st.mtime) return true;
+		// btime и старт процесса -- целые секунды, сумма отстаёт от настоящего
+		// старта до двух секунд: файл, записанный ДО перезапуска dnsmasq,
+		// выглядел новее процесса, и второй подъём перезапускал dnsmasq вместо
+		// сигнала -- секунды без DNS (стенд uci-cron-check, 22.03.7, 2026-10-24).
+		if (int(bt[1]) + int(int(split(substr(s, i + 2), ' ')[19]) / 100) + 2 >= st.mtime) return true;
 	}
 	return false;
 }
@@ -539,12 +530,12 @@ function pl_dns_legacy() {
 	pl_quiet([ 'uci', '-q', 'revert', 'dhcp' ]);
 	let cur = pl_servers();
 	if (index(cur, ours) >= 0) {
-		pl_quiet([ 'uci', '-q', 'delete', PL_DNSSEC + '.server' ]);
+		pl_quiet([ 'uci', '-q', 'delete', PL_DHCP0 + '.server' ]);
 		let seen = [];
 		for (let s in pl_words(pl_save_read('server'))) {
 			if (index(seen, s) >= 0) continue;
 			push(seen, s);
-			pl_try([ 'uci', 'add_list', PL_DNSSEC + '.server=' + s ]);
+			pl_try([ 'uci', 'add_list', PL_DHCP0 + '.server=' + s ]);
 		}
 		// Доменные записи, появившиеся после снимка, возвращаем; без снимка --
 		// всё, кроме своего адреса и канарейки.
@@ -552,14 +543,14 @@ function pl_dns_legacy() {
 		for (let s in cur) {
 			if (s == PL_CANARY || s == ours || index(seen, s) >= 0 || (snap && substr(s, 0, 1) != '/')) continue;
 			push(seen, s);
-			pl_try([ 'uci', 'add_list', PL_DNSSEC + '.server=' + s ]);
+			pl_try([ 'uci', 'add_list', PL_DHCP0 + '.server=' + s ]);
 		}
 		// Без снимка noresolv снимается, только если резолвить стало нечем: он
 		// мог стоять у человека и до byway, вместе с его апстримами.
-		if (pl_save_read('noresolv') == '1') pl_try([ 'uci', 'set', PL_DNSSEC + '.noresolv=1' ]);
+		if (pl_save_read('noresolv') == '1') pl_try([ 'uci', 'set', PL_DHCP0 + '.noresolv=1' ]);
 		else if (snap || !length(filter(seen, (x) => substr(x, 0, 1) != '/')))
-			pl_quiet([ 'uci', '-q', 'delete', PL_DNSSEC + '.noresolv' ]);
-		pl_try([ 'uci', 'commit', 'dhcp' ]);
+			pl_quiet([ 'uci', '-q', 'delete', PL_DHCP0 + '.noresolv' ]);
+		if (!uci_commit('dhcp')) warn('на флеше нет места: настройки dnsmasq не записаны, прежние на месте');
 	}
 	fs.unlink(sv);
 	return true;
@@ -578,17 +569,22 @@ function pl_dns_up(defer) {
 	if (length(fo))
 		warnf('у dnsmasq в настройках свои серверы (%s): часть запросов уйдёт мимо byway, и сайты из списка будут открываться через раз — убрать: Сеть → DHCP и DNS → Перенаправления', join(' ', fo));
 	let t = 'server=' + l + '\nno-resolv\nserver=' + PL_CANARY + '\n';
-	if (fs.readfile(f) != t) {
-		fs.writefile(f + '.new', t);
-		fs.rename(f + '.new', f);
-	} else if (!leg && pl_dns_loaded(f)) {
+	let same = fs.readfile(f) == t;
+	if (same && !leg && pl_dns_loaded(f)) {
 		pl_dns_flush();
 		return true;
+	}
+	if (pl_tmp_short(_t('DNS дома пока не переведён на byway.'))) return false;
+	if (!same) {
+		fs.writefile(f + '.new', t);
+		fs.rename(f + '.new', f);
 	}
 	if (!defer) pl_dns_restart();
 	return true;
 }
 
+// Порога места здесь нет (узкий аудит, н1-18): снятие файла места не просит,
+// а dnsmasq, оставленный на мёртвом движке, -- дом без DNS.
 function pl_dns_down() {
 	let leg = pl_dns_legacy(), f = dm_file(DM_DNS), had = f !== '' && fs.stat(f) != null;
 	if (had) fs.unlink(f);
@@ -662,6 +658,9 @@ function pl_block_intact() {
 function pl_block_off() {
 	let d = dm_confdir();
 	if (d !== '' && fs.stat(d + '/' + DM_BLOCK)) {
+		// Запрет -- целиком до освобождения места: снятый наполовину
+		// (подсети открыты, имена закрыты) хуже стоящего.
+		if (pl_tmp_short(_t('Запрет «не пускать мимо VPN» остаётся, пока место не освободится.'))) return;
 		fs.unlink(d + '/' + DM_BLOCK);
 		pl_dns_restart();
 	}
@@ -687,7 +686,7 @@ function pl_block_conf(src, file) {
 	return { n: n, all: lj_count(src) };
 }
 
-// Итог -- число закрытых доменов.
+// Итог -- число закрытых доменов; -1 -- не закрыты: в /tmp нет места.
 function pl_block_dns() {
 	let d = dm_confdir();
 	if (d === '') {
@@ -703,6 +702,10 @@ function pl_block_dns() {
 		warnf('«не пускать мимо VPN»: %s записей списка нельзя закрыть по имени (keyword:, regexp: и подобные) — они останутся ОТКРЫТЫМИ', all - n);
 	// Синтаксис -- до подмены: битый файл не даст dnsmasq подняться.
 	if (pl_quiet([ 'cmp', '-s', bf + '.new', bf ]) == 0) {
+		fs.unlink(bf + '.new');
+	} else if (pl_tmp_short(_t('Домены списка не закрыты по имени.'))) {
+		// Файл мог лечь не целиком: место кончилось при записи.
+		n = -1;
 		fs.unlink(bf + '.new');
 	} else if (pl_quiet([ 'dnsmasq', '--test', '-C', bf + '.new' ]) == 0) {
 		fs.rename(bf + '.new', bf);
@@ -738,7 +741,8 @@ function pl_block_on() {
 	if (all) {
 		// Остаток режима списков (имена) здесь не нужен.
 		let d = dm_confdir();
-		if (d !== '' && fs.stat(d + '/' + DM_BLOCK)) {
+		if (d !== '' && fs.stat(d + '/' + DM_BLOCK) &&
+		    !pl_tmp_short(_t('Прежний запрет по именам остаётся, пока место не освободится.'))) {
 			fs.unlink(d + '/' + DM_BLOCK);
 			pl_dns_restart();
 		}
@@ -757,7 +761,10 @@ function pl_block_on() {
 		}
 		return;
 	}
-	let ndom = pl_block_dns(), nnet = false;
+	let ndom = pl_block_dns(), nnet = false, short = ndom < 0;
+	// Не закрыли из-за места -- без отметки «сделано»: следующий вызов
+	// (сторож, plumb off --keep-block) повторит.
+	if (short) { ndom = 0; fs.unlink(PL_BLOCK + '.sig'); }
 	let el = pl_elements(subs);
 	pl_bad(el.bad4);
 	if (v6) pl_bad(el.bad6);
@@ -774,7 +781,7 @@ function pl_block_on() {
 		fs.writefile(PL_BLOCK, 'lists\n');
 		fs.writefile(PL_BLOCK + '.parts', (ndom > 0 ? 'conf\n' : '') + (nnet ? 'table\n' : ''));
 		warnf('туннеля нет, и доступ к списку закрыт: доменов %s, подсети %s', ndom, nnet ? _t('да') : _t('нет'));
-	} else {
+	} else if (!short) {
 		fs.writefile(PL_BLOCK, 'none\n');
 		fs.unlink(PL_BLOCK + '.parts');
 		warn('«не пускать мимо VPN» включено, но закрывать нечего: списки пусты — трафик идёт НАПРЯМУЮ');
@@ -809,23 +816,42 @@ function pl_mod_hint() {
 
 // Правило firewall byway-tproxy сверяется с меткой (нет -- заводится): после
 // смены метки зона с input REJECT (гостевая) перестаёт пропускать помеченный
-// трафик. Сверка -- до укладки своей таблицы: перезагрузка firewall сносит
-// ruleset целиком.
+// трафик. Сверка -- до укладки своей таблицы: перезагрузка firewall (start
+// делает flush только таблицы fw4), а его остановка (`firewall stop`) сносит
+// все таблицы.
+// Свой блок в /etc/config/firewall -- текстом, а не uci commit: тот
+// переписывает файл целиком, и комментарии человека пропадали (Ф9, п3-41).
+// Прежний блок вырезается, новый -- в конец; запись -- put_file.
+function pl_fw_set(mm) {
+	let f = '/etc/config/firewall', t = fs.readfile(f);
+	if (t == null) return false;
+	// Конец блока -- первая строка не option/list с начала строки: комментарии
+	// человека после блока прежде пропадали вместе с ним (Ф9, п3-41, прогон 5).
+	let out = [], skip = false;
+	for (let l in split(t, '\n')) {
+		if (match(l, /^config[ \t]/)) {
+			skip = match(l, /^config[ \t]+rule[ \t]+'?bywaytproxy'?[ \t]*$/) != null;
+			if (skip) while (length(out) && out[length(out) - 1] === '') pop(out);
+		} else if (skip && l !== '' && !match(l, /^[ \t]/)) skip = false;
+		if (!skip) push(out, l);
+	}
+	return put_file(f, rtrim(join('\n', out), '\n') + '\n\nconfig rule \'bywaytproxy\'\n\toption name \'byway-tproxy\'\n' +
+		'\toption src \'*\'\n\toption proto \'all\'\n\toption mark \'' + mm + '\'\n\toption target \'ACCEPT\'\n');
+}
+
 function pl_fwrule() {
 	let m = pl_mark(false), mm = m + '/' + m, r = pl_uci_get('firewall.bywaytproxy.mark');
 	if (pl_uci_get('firewall.bywaytproxy') === '') {
-		for (let kv in [ '=rule', '.name=byway-tproxy', '.src=*', '.proto=all', '.mark=' + mm, '.target=ACCEPT' ])
-			pl_quiet([ 'uci', '-q', 'set', 'firewall.bywaytproxy' + kv ]);
-		pl_try([ 'uci', 'commit', 'firewall' ]);
-		pl_quiet([ '/etc/init.d/firewall', 'reload' ]);
-		say('правила firewall для помеченного трафика не было — заведено заново');
+		if (pl_fw_set(mm)) {
+			pl_quiet([ '/etc/init.d/firewall', 'reload' ]);
+			say('правила firewall для помеченного трафика не было — заведено заново');
+		} else warn('на флеше нет места: правило firewall не записано, прежнее на месте');
 		r = mm;
 	}
 	if (r !== '' && r != mm) {
 		sayf('метка сменилась (%s -> %s) — правило firewall переписывается', r, mm);
-		pl_quiet([ 'uci', '-q', 'set', 'firewall.bywaytproxy.mark=' + mm ]);
-		pl_try([ 'uci', 'commit', 'firewall' ]);
-		pl_quiet([ '/etc/init.d/firewall', 'reload' ]);
+		if (pl_fw_set(mm)) pl_quiet([ '/etc/init.d/firewall', 'reload' ]);
+		else warn('на флеше нет места: правило firewall не записано, прежнее на месте');
 	}
 }
 
@@ -833,17 +859,17 @@ function pl_fwrule() {
 // любой правки: dns_up уводит весь резолв на его вход с noresolv. Проба --
 // домен из склейки: FakeDNS отвечает локально, без WAN.
 function pl_wait(l) {
+	// Списка нет -- спрашиваем пробный домен: сборка кладёт его в fakedns
+	// всегда. Ответ из пула доказывает, что отвечает движок, а не кто-то на
+	// том же адресе: при dns_listen=127.0.0.1 «ответ» давал сам dnsmasq, и
+	// резолвер дома уводился в петлю на себя (Ф9, п1-3).
 	let probe = st_plain_first(pl_doms()), pool = st_pool(), gone = 0;
+	if (probe === '') probe = getenv('BW_PROBE') ?? 'example.com';
 	for (let i = 0; i < 15; i++) {
-		if (probe !== '') {
-			for (let x in pl_lines(run([ 'nslookup', probe, l ]).out)) {
-				if (substr(x, 0, 7) != 'Address') continue;
-				let w = pl_words(x);
-				if (st_in_pool(w[length(w) - 1], pool)) return true;
-			}
-		} else if (run([ 'nslookup', 'example.com', l ]).code == 0) {
-			// Списка нет -- достаточно, что резолвер отвечает.
-			return true;
+		for (let x in pl_lines(run([ 'nslookup', probe, l ]).out)) {
+			if (substr(x, 0, 7) != 'Address') continue;
+			let w = pl_words(x);
+			if (st_in_pool(w[length(w) - 1], pool)) return true;
 		}
 		// Процесса движка нет пять проб подряд -- он падает при старте. Пять, а
 		// не один: на холодной загрузке procd поднимает движок не сразу.
@@ -862,10 +888,11 @@ function pl_wait(l) {
 
 // Отказ подъёма: резолвер -- провайдеру, запрет -- по настройке. На пути stop
 // --keep-dns dnsmasq остаётся на нас, и без правил дом получал бы подставные
-// адреса без перехвата.
+// адреса без перехвата. Запрет -- раньше резолвера, как в pl_off: иначе в
+// окно между ними сайты списка открывались мимо VPN (узкий аудит, н1-24).
 function pl_fail() {
-	pl_dns_down();
 	pl_block_on();
+	pl_dns_down();
 	return 1;
 }
 
@@ -875,10 +902,18 @@ function pl_on() {
 	// сторожа запертым.
 	fs.unlink(PL_DOWN);
 	let l = pl_dns_addr();
+	// Склейка не собралась (нет места в /tmp) -- отказ подъёма, а не выход
+	// посередине мимо уборки (Ф9, п2-6, п2-19). dnsmasq не трогаем: при
+	// полном /tmp он не пишет свой конфиг и после перезапуска не встаёт.
+	if ((getenv('BW_SUBNETS') == null && mg_path('subnets', true) == null) ||
+	    (getenv('BW_MERGED') == null && mg_path('domains', true) == null)) {
+		warn('склейка списков не собралась: в /tmp нет места? Перехват не включён');
+		return 1;
+	}
 	if (!pl_wait(l)) {
 		// Закрыть до сообщения: между ними страница ушла бы мимо туннеля.
-		pl_dns_down();
 		pl_block_on();
+		pl_dns_down();
 		warnf('Xray-core не отвечает на %s:53 — перехват не включён, dnsmasq возвращён провайдеру', l);
 		return 1;
 	}
@@ -888,8 +923,11 @@ function pl_on() {
 	fs.unlink(PL_NFT);
 	let f = fs.open(PL_NFT, 'w', 0600);
 	if (!f) { warnf('не записан %s', PL_NFT); return pl_fail(); }
-	f.write(rules);
+	// Обрезанный нехваткой места в /tmp файл nft принимал как пустой набор,
+	// и выходило «перехват включён» без таблицы (Ф9, п2-19).
+	let w = f.write(rules);
 	f.close();
+	if (w !== length(rules)) { fs.unlink(PL_NFT); warnf('не записан %s', PL_NFT); return pl_fail(); }
 	let c = run([ 'nft', '-c', '-f', PL_NFT ], true);
 	if (c.code != 0) {
 		print(c.out);
@@ -948,6 +986,10 @@ function pl_off(flags) {
 	pl_quiet([ 'nft', 'delete', 'table', 'inet', PL_TABLE ]);
 	pl_route_down();
 	let kd = index(flags, '--keep-dns') >= 0;
+	// Запрет, который не встал раньше (не было места в /tmp), -- до возврата
+	// резолвера провайдеру: иначе сайты списка открылись бы мимо VPN.
+	// Стоящий pl_block_on не трогает.
+	if (index(flags, '--keep-block') >= 0) pl_block_on();
 	if (kd) pl_dns_flush();
 	else pl_dns_down();
 	// Запрет снимается вместе с обвязкой (иначе `plumb off` выглядел бы
@@ -961,13 +1003,18 @@ function pl_off(flags) {
 // bw_uc plumb on|off|close|unblock [флаги]. close -- закрыть, не поднимая
 // обвязку (старт службы при on_failure=closed: иначе после перезагрузки запрет
 // встаёт лишь после ожидания движка, а dnsmasq уже отдаёт настоящие адреса).
-// unblock -- снять запрет (сторож: служба выключена); servers -- резолверы
-// из файла byway в dnsmasq через пробел, нет -- none (сторож).
+// unblock -- снять запрет (сторож: служба выключена).
 function cmd_plumb(what, ...flags) {
-	if (what == 'servers') { print(length(dm_servers()) ? join(' ', dm_servers()) : 'none', '\n'); return; }
 	if (what == 'on') exit(pl_on());
-	if (what == 'off') exit(pl_off(flags));
+	if (what == 'off') {
+		// Неизвестный флаг -- отказ: «--keep-dsn» молча снимал и резолвер (Ф9, п3-23).
+		for (let f in flags)
+			if (index([ '--service', '--keep-dns', '--keep-block' ], f) < 0)
+				dief('byway plumb off [--keep-dns] [--keep-block] — неизвестно: %s', f);
+		exit(pl_off(flags));
+	}
 	if (what == 'close') { pl_block_on(); return; }
 	if (what == 'unblock') { pl_block_off(); return; }
-	die('byway plumb on|off|close');
+	// Служебные подкоманды -- все, что принимаются (Ф9, п3-27).
+	die('byway plumb on|off|close|unblock');
 }

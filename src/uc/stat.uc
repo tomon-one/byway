@@ -4,7 +4,8 @@
 // Xray пишет строку в момент приёма, до сниффинга: в ней адрес из пула, не
 // имя (`accepted tcp:198.19.14.63:443 [tproxy-in -> proxy]`). FakeDNS отдаёт
 // домену один адрес до рестарта Xray -- раз за PID строится таблица адрес ->
-// имя. Подсети идут по настоящим адресам -- строка «(по IP)».
+// имя. Подсети идут по настоящим адресам -- строка «(подсети)», поддомены
+// записей списка (в карте их нет) -- «(поддомены)».
 //
 // Рабочие файлы -- в каталоге root (/var/run/byway, 755), а не в общем /tmp:
 // движок от пользователя byway мог подложить туда карту или метку.
@@ -71,7 +72,7 @@ function sa_map(pid, oldpid) {
 	pos = (pos === '' || ltrim(pos, '0123456789') !== '') ? 0 : int(pos);
 	let doms = sa_domains(), n = length(doms);
 	if (!fresh && pos >= n) return;
-	let pool = st_pool(), dns = u('dns_listen') || '127.0.0.42', add = '';
+	let pool = st_pool(), dns = g_dns_listen(false), add = '';
 	for (let i = pos; i < n && i < pos + SA_STEP; i++)
 		for (let l in split(run([ 'nslookup', doms[i], dns ]).out, '\n'))
 			if (substr(l, 0, 8) == 'Address:') {
@@ -97,9 +98,11 @@ function sa_collect(since) {
 	while ((l = f.read('line')) != null && l !== '') {
 		if (index(l, 'tproxy-in -> proxy') < 0 && index(l, 'tproxy-in -> route-') < 0) continue;
 		l = rtrim(l, '\n');
-		// Метка -- ровно 19 знаков времени Xray: строка той же секунды строго
-		// больше неё, а хвост в 50 строк содержит последнюю учтённую.
-		if (since !== '' && !(substr(l, 0, 19) > since)) continue;
+		// Метка -- время Xray той же длины, что в ней: после учёта -- с
+		// долями секунды (последняя учтённая строка), после карты -- 19 знаков.
+		// Срез строки ровно 19 знаков был меньше метки с долями, и строки той
+		// же секунды после отметки терялись (Ф9, п4-6).
+		if (since !== '' && !(substr(l, 0, length(since)) > since)) continue;
 		push(r, l);
 	}
 	f.close();
@@ -107,6 +110,13 @@ function sa_collect(since) {
 	let t = run([ 'tail', '-50', acc ]);
 	if (t.code == 0) fs.writefile(acc, t.out);
 	return r;
+}
+
+// Доменов в учёте: строки «(поддомены)», «(подсети)», «(по IP)» -- не домены.
+function sa_ndom(rows) {
+	let n = 0;
+	for (let r in rows) if (substr(r, 0, 1) != '(') n++;
+	return n;
 }
 
 // Подсчёт по таблице и запись итога; во флеш -- только если итог изменился.
@@ -123,10 +133,17 @@ function sa_count(lines, pid) {
 		cnt[t[0]] = int(t[1] ?? '0');
 		seen[t[0]] = t[2] ?? '';
 	}
+	// Без имени: адрес из пула -- поддомен записи списка (карта знает только
+	// точные имена), вне пула -- подсеть. Прежде оба шли в «(по IP)» и
+	// считались доменом (Ф9, п3-22).
+	// Карта строится порциями (SA_STEP): пока она не дошла до конца списка,
+	// адрес без имени может быть и доменом списка -- тогда «(по IP)» (н1-3).
+	let pool = st_pool(), pos = trim(fs.readfile(SA_POS) ?? '');
+	let sub = (pos !== '' && ltrim(pos, '0123456789') === '' && int(pos) >= length(sa_domains())) ? '(поддомены)' : '(по IP)';
 	for (let l in lines) {
 		let m = match(l, /tcp:([0-9.]+):/) ?? match(l, /udp:([0-9.]+):/);
 		if (!m) continue;
-		let d = name[m[1]] ?? '(по IP)';
+		let d = name[m[1]] ?? (st_in_pool(m[1], pool) ? sub : '(подсети)');
 		cnt[d] = (cnt[d] ?? 0) + 1;
 		seen[d] = today;
 	}
@@ -134,14 +151,16 @@ function sa_count(lines, pid) {
 	for (let d in cnt) push(out, d + '\t' + cnt[d] + '\t' + seen[d]);
 	let s = join('\n', sort(out)) + '\n';
 	if (s != (fs.readfile(file) ?? '')) {
-		let tmp = SA_DIR + '/stat.new';
-		fs.writefile(tmp, s);
-		fs.chmod(tmp, 0600);
-		run([ 'mv', tmp, file ]);
+		// Учёт не записан (нет места) -- отметка стоит на месте: эти
+		// соединения посчитаются в следующий раз, а не пропадут (Ф9, п4-34).
+		// Рядом с учётом, не в /var/run: mv между tmpfs и флешем копирует, и
+		// оборванная нехваткой места копия вставала на место учёта (прогон 5).
+		if (!put_file(file, s, 0600))
+			die('на флеше нет места: учёт не записан, посчитается в следующий раз');
 	}
 	let last = split(lines[length(lines) - 1], ' ');
 	fs.writefile(SA_MARK, pid + '\n' + last[0] + ' ' + (last[1] ?? '') + '\n');
-	sayf('учтено соединений: %s, всего доменов в учёте: %s', length(lines), length(out));
+	sayf('учтено соединений: %s, всего доменов в учёте: %s', length(lines), sa_ndom(out));
 }
 
 // bw_uc stat: учёт за прошедшее (cron раз в час).
@@ -168,6 +187,10 @@ function sa_row(a, b, c) {
 	print(sprintf('  %s%s%8s  %s\n', a, pad, b, c));
 }
 
+// Служебные строки учёта -- на языке интерфейса; в файле -- как записаны.
+// Явными _t: lang-sync сверяет словарь с кодом по ним.
+function sa_tags() { return { '(поддомены)': _t('(поддомены)'), '(подсети)': _t('(подсети)'), '(по IP)': _t('(по IP)') }; }
+
 // bw_uc top [N]: накопленное, N самых частых (по умолчанию 20).
 function cmd_top(n) {
 	let st = fs.stat(sa_file());
@@ -186,7 +209,11 @@ function cmd_top(n) {
 	});
 	n = (n && ltrim(n, '0123456789') === '') ? int(n) : 20;
 	sa_row(_t('домен'), _t('обращений'), _t('последний раз'));
-	for (let i = 0; i < length(rows) && i < n; i++)
-		sa_row(rows[i][1][0] ?? '', rows[i][1][1] ?? '', rows[i][1][2] ?? '');
-	print(_f('\n  всего в учёте %s доменов из %s в списке\n', length(rows), lj_count(getenv('BW_MERGED'))));
+	let names = [], SA_TAGS = sa_tags();
+	for (let i = 0; i < length(rows) && i < n; i++) {
+		let d = rows[i][1][0] ?? '';
+		sa_row(SA_TAGS[d] ?? d, rows[i][1][1] ?? '', rows[i][1][2] ?? '');
+	}
+	for (let r in rows) push(names, r[0]);
+	print(_f('\n  всего в учёте %s доменов из %s в списке\n', sa_ndom(names), lj_count(getenv('BW_MERGED'))));
 }

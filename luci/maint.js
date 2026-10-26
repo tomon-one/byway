@@ -24,6 +24,13 @@
 var _ = function (s) { return lang.tr(s); };
 
 var HOSTNAME = null;
+/* Скрытая опция не стирается при сохранении (как в lists.js, overview.js). */
+function keepHidden(section_id) {
+	if (this.isActive(section_id))
+		return form.Value.prototype.remove.apply(this, arguments);
+	return Promise.resolve();
+}
+
 function setTitle() {
 	if (HOSTNAME === null)
 		HOSTNAME = (document.title.split(/\s[-|—]\s/)[0] || '').trim();
@@ -31,19 +38,23 @@ function setTitle() {
 	lang.tabs();
 }
 
-var IMPORT_TMP = '/tmp/byway-import.txt';
+var IMPORT_TMP = '/var/run/byway-import.txt';
 
 return view.extend({
 	load: function () {
 		return Promise.all([
 			uci.load('byway'),
 			bwui.run([ 'status' ]),
-			fs.read('/etc/byway/health.log').catch(function () { return ''; })
+			fs.read('/etc/byway/health.log').catch(function () { return ''; }),
+			/* Право на ключ -- группа luci-app-byway-key (пакет byway_key):
+			   без неё выгрузка и приём -- только без ключа (н1-11). */
+			L.resolveDefault(uci.load('byway_key'), null).then(function (r) { return r != null; })
 		]);
 	},
 
 	render: function (data) {
 		var impBtn = null;   /* кнопка приёма -- нужна после отрисовки */
+		var HASKEY = !!data[3];
 		setTitle();
 		bwui.afterApply(_('Настройки не приняты — работают прежние.'));
 
@@ -173,15 +184,17 @@ return view.extend({
 		o.default = '0';
 		o.rmempty = false;
 		o.depends('update_check', '1');
+		/* Скрытую снятой проверкой версий LuCI стирал при сохранении (Ф9, п3-33). */
+		o.remove = keepHidden;
 
 		o = ss.option(form.Value, 'auto_update_hour', _('Час обновления'),
 			_('По часам роутера. Его время и пояс — «Система → Система».'));
 		o.datatype = 'range(0,23)';
 		o.placeholder = '04';
 		o.depends('auto_update', '1');
-		/* Спрятанное depends поле LuCI на сохранении стирает -- тот же
-		   keepHidden, что на вкладке списков. */
-		o.remove = function () {};
+		/* Спрятанное depends поле LuCI на сохранении стирает -- keepHidden;
+		   видимое и очищенное -- стирается (заглушка не давала, Ф9, п4-69). */
+		o.remove = keepHidden;
 
 		/* Тот же порядок, что и в приёме: сначала действие, потом ответ. */
 		var updMsg = bwui.output('');
@@ -189,13 +202,9 @@ return view.extend({
 		o.inputstyle = 'action';
 		o.inputtitle = _('Проверить обновление');
 		o.onclick = function () {
-			bwui.say(updMsg, _('идёт проверка…'));
-			return fs.exec(bwui.BYWAY, [ 'update', '--check' ]).then(function (r) {
-				bwui.say(updMsg, bwui.plain((r.stdout || '') + (r.stderr || ''))
-					.replace(/^\[.\]\s*/, '').trim() || _('нет ответа'));
-			}).catch(function () {
-				bwui.say(updMsg, _('Спросить не вышло — byway ничего не ответил.'));
-			});
+			/* Задачей byway job: при мёртвом туннеле проверка дольше 30
+			   секунд, и rpcd обрывал её без ответа (Ф9, п2-15). */
+			return bwui.job([ 'update', '--check' ], updMsg);
 		};
 
 		o = ss.option(form.Button, '_install', _('Установка'));
@@ -221,13 +230,7 @@ return view.extend({
 		o.inputstyle = 'action';
 		o.inputtitle = _('Проверить обновление ядра');
 		o.onclick = function () {
-			bwui.say(engMsg, _('идёт проверка…'));
-			return fs.exec(bwui.BYWAY, [ 'engine', '--check' ]).then(function (r) {
-				bwui.say(engMsg, bwui.plain((r.stdout || '') + (r.stderr || ''))
-					.replace(/^\[.\]\s*/gm, '').trim() || _('нет ответа'));
-			}).catch(function () {
-				bwui.say(engMsg, _('Спросить не вышло — byway ничего не ответил.'));
-			});
+			return bwui.job([ 'engine', '--check' ], engMsg);
 		};
 
 		o = ss.option(form.Button, '_enginst', _('Замена'));
@@ -273,6 +276,7 @@ return view.extend({
 		noKey.default = '1';
 		scratch(noKey);
 		noKey.load = function () { return '1'; };
+		if (!HASKEY) noKey.readonly = true;
 
 		var expOut = ss.option(form.TextValue, '_exported', _('Выгрузка'));
 		expOut.rows = 8;
@@ -292,7 +296,7 @@ return view.extend({
 		o.inputstyle = 'action';
 		o.inputtitle = _('Показать');
 		o.onclick = function () {
-			var noKeyNow = noKey.formvalue('main') === '1';
+			var noKeyNow = !HASKEY || noKey.formvalue('main') === '1';
 			var args = [ 'export' ];
 			if (!noKeyNow) args.push('--with-key');
 			var el = expOut.getUIElement('main');
@@ -351,7 +355,8 @@ return view.extend({
 			_('Принять всё, кроме подключения к VPN. По умолчанию ключ берётся из выгрузки — если он в ней есть.'));
 		impNoKey.default = '0';
 		scratch(impNoKey);
-		impNoKey.load = function () { return '0'; };
+		impNoKey.load = function () { return HASKEY ? '0' : '1'; };
+		if (!HASKEY) impNoKey.readonly = true;
 
 		/* Порядок: вставил текст -> нажал -> прочитал ответ. Прежде «Ответ»
 		   стоял НАД кнопкой, и читалось это как «сначала ответ, потом
@@ -371,28 +376,26 @@ return view.extend({
 			if (!confirm(_('Настройки и списки будут заменены содержимым выгрузки. Продолжить?')))
 				return;
 			bwui.say(impMsg, _('идёт применение…'));
-			var args = [ 'import', IMPORT_TMP ];
-			if (impNoKey.formvalue('main') === '1') args.push('--no-key');
-			/* Зовём fs.exec напрямую, а не через run: там код возврата
-			   теряется, и служба перезапускалась бы даже после отказа --
-			   поверх настроек, которые byway только что откатил. */
-			return fs.write(IMPORT_TMP, txt + '\n').then(function () {
-				return fs.exec(bwui.BYWAY, args);
+			var args = [ 'import' ];
+			if (!HASKEY || impNoKey.formvalue('main') === '1') args.push('--no-key');
+			/* Задачей byway job: прямой вызов rpcd убивает через 30 секунд,
+			   посреди приёма, и непроверенные настройки оставались дельтой
+			   UCI (Ф9, п2-36). По коду возврата: после отказа служба не
+			   перезапускается поверх отката. */
+			/* 600: в файле ключ, а /var/run читает и движок от byway (Ф9, п1-11). */
+			return fs.write(IMPORT_TMP, txt + '\n', 384).then(function () {
+				return bwui.jobRun(args, function (t) { bwui.say(impMsg, t.trim()); });
 			}).then(function (r) {
-				bwui.say(impMsg,
-					bwui.plain((r.stdout || '') + (r.stderr || '')) || _('нет ответа'));
+				bwui.say(impMsg, r.out.trim() || _('нет ответа'));
 				if (r.code !== 0) {
 					ui.addNotification(null,
 						E('p', {}, _('Не принято — осталось как было.')), 'error');
 					return;
 				}
-				/* byway import сам делает uci commit, а дальше службу
-				   перезапускает procd -- и только если конфиг изменился. */
+				/* byway import сам коммитит настройки и, если byway включён, перезапускает
+				   службу; код 0 -- принято (движок мог и не подняться: это предупреждение
+				   в выводе, а не отказ). */
 				ui.addNotification(null, E('p', {}, _('Принято и применено')), 'info');
-			}).catch(function () {
-				/* Обрыв по времени -- не отказ: запрос панели живёт около
-				   двадцати секунд, а приём на роутере идёт своим ходом. */
-				bwui.say(impMsg, _('Приём идёт дольше, чем панель готова ждать. На роутере он продолжается — откройте вкладку заново через минуту и посмотрите «Полное состояние».'));
 			});
 		};
 
@@ -428,7 +431,7 @@ return view.extend({
 			});
 
 			o = ss.option(form.DummyValue, '_usage', _('Записи'),
-				_('Соединения к подсетям идут по адресам и к домену не привязываются — они одной строкой «(по IP)».'));
+				_('Соединения к подсетям идут по адресам и к домену не привязываются — они одной строкой «(подсети)». Поддомены записей списка (www.…) считаются строкой «(поддомены)».'));
 			o.cfgvalue = function () { return usage; };
 
 			o = ss.option(form.Button, '_usageclear', _('Очистить'));

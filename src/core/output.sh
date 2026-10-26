@@ -1,4 +1,4 @@
-# Вывод и журнал: say/warn/die и их формы с подстановками (f), logt/logf
+# Вывод и журнал: say/warn/die и их формы с подстановками (f), logt
 # в syslog. Строка печатается через перевод (_t).
 
 _say()  { printf '\033[1;32m[*]\033[0m %s\n' "$1"; }
@@ -25,4 +25,3 @@ dief()  { _fmt=$(_t "$1"); shift; die_raw "$(printf "$_fmt" "$@")"; }
 # перевод строк logger.
 logt()  { logger -t byway "$(_t "$1")"; }
 
-logf()  { _lfm=$(_t "$1"); shift; logger -t byway "$(printf "$_lfm" "$@")"; }
