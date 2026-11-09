@@ -799,7 +799,7 @@ server that worked before the replacement is gone, the previous one comes back
 by itself. On a router where the service is off or there is no key, the
 tunnel check and the config check are skipped: the engine is replaced without
 them, through memory as well. Any replacement needs at least 40 MB of
-free RAM, a replacement through memory about 55.
+free RAM, a replacement through memory about 45.
 
 A previous engine from the OpenWrt packages is not removed — uninstall it with
 the package manager. If there is no room for a second engine and the previous

@@ -177,16 +177,27 @@ one is there:
    the previous engine is compressed from its own file into memory and the
    replacement goes on with that copy. No room even for it — the replacement
    does not start.
-3. The service stops: the tunnel drops for about a minute. With "Block" the
+3. Before the service stops, byway estimates how much memory there will be
+   after it: what is available now plus what Xray gives back (its anonymous
+   memory; the system already counts the pages of the binary itself as free).
+   It needs the engine size plus 10 MB (about 45 MB). Not enough — the
+   replacement does not start, the tunnel is not touched, and the refusal
+   names both numbers. Memory can be freed by stopping heavy services for a
+   while, zapret for example.
+4. The service stops: the tunnel drops for about a minute. With "Block" the
    block goes up for that time and holds until interception comes up.
-4. Memory is checked: the engine size plus 20 MB (about 55 MB). Too little —
-   the service starts with the previous engine.
-5. The new engine is unpacked to `/tmp` and checked there: does it run, does
+5. Memory is checked again, now for real. Too little — the service starts
+   with the previous engine.
+6. The new engine is unpacked to `/tmp` and checked there: does it run, does
    it accept the config. If not, the service starts with the previous engine.
-6. The previous engine is deleted from flash and the new one is written under
+7. The previous engine is deleted from flash and the new one is written under
    its own name. From this step on, the way back is only through the archive.
-7. The service starts, and byway waits up to 2.5 minutes for the tunnel.
-8. If the tunnel is not up, or the new engine did not fit on flash, the
+8. The path to the new engine is written to `xray_bin`. If it is not saved
+   even on the second try, the previous engine comes back from the archive at
+   once: the service does not start with a path to a deleted file. The reason
+   is in `logread`.
+9. The service starts, and byway waits up to 2.5 minutes for the tunnel.
+10. If the tunnel is not up, or the new engine did not fit on flash, the
    previous one is unpacked from the archive from step 2 and started.
 
 If flash accepted neither the new nor the previous engine, there is no
@@ -539,5 +550,5 @@ reads it from the running process's environment, not from the settings: the
 
 Replacing the engine needs memory of its own, beyond the limit: 40 MB
 available before it starts, and in a swap through memory, the engine size
-plus 20 MB after the service stops. `byway core` without an argument shows
+plus 10 MB after the service stops. `byway core` without an argument shows
 how much is available now.

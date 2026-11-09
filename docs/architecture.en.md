@@ -723,10 +723,14 @@ checked with `byway gen`, written to `xray_bin`, and the service restarts.
 After success the old `/usr/local/bin/xray-*` is deleted; a packaged
 `/usr/bin/xray` stays. With less space the swap goes through RAM, and only if
 the old binary is in `/usr/local/bin/xray-*`; with a packaged one byway
-refuses. The old version's archive is downloaded first for rollback, then the
-service stops for about a minute, and for that time `/var/run/byway-plumb-down`
+refuses. The old version's archive is downloaded first for rollback; byway
+estimates memory after the stop in advance (MemAvailable plus Xray's `RssAnon`
+against the engine size plus 10 MB) and refuses without touching the service if
+it is short. Then the service stops for about a minute, and for that time `/var/run/byway-plumb-down`
 is set so that `byway watch` stays out of the way; the stop runs with
 `BYWAY_KEEP_BLOCK=1`, so under `closed` the block holds for the whole minute.
+If the path to the new engine is not saved to `xray_bin` even on the second
+try, the old engine comes back from the archive before the service starts.
 Either way `up_alive_ok` checks the result and, if the connection through the
 server worked before the replacement, `up_tunnel_ok` too; on failure the old
 engine is put back. With the service off or without a key the tunnel check and

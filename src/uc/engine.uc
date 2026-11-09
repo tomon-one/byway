@@ -17,6 +17,9 @@ const EN_LOCK = '/var/run/byway-engine.lock';
 // каталог не трогает -- там архив прежнего ядра, единственное средство отката.
 const EN_DIRF = '/var/run/byway-engine.dir';
 const EN_RAMF = '/var/run/byway-engine.ram';
+// Запас памяти сверх ядра на замену «через память». Стенд 2026-11-10, условия
+// роутера 256 МБ (после остановки ~41 МБ, ядро 35): без запаса минимум 23 МБ, OOM нет.
+const EN_RAM_SPARE = 10485760;
 
 // Состояние замены: asset, old, ov, nw (версия), new (путь), d (каталог),
 // pkg, sz, free, tun0, orb.
@@ -153,9 +156,17 @@ function en_gen_tail() {
 
 // Без выхода по отказу: на пути «через память» он случается при
 // остановленной службе.
+// Отказ -- в журнал системы с тем, что отказало: 2026-11-10 на BlackWall путь
+// не записался, а причину по выводу было не установить.
 function en_bin_set(p) {
-	if (run([ 'uci', 'set', 'byway.main.xray_bin=' + p ]).code != 0 || !uci_commit('byway'))
-		warnf('путь к движку не записался в настройки: byway set xray_bin %s', p);
+	let r = run([ 'uci', 'set', 'byway.main.xray_bin=' + p ], true), ok = r.code == 0 && uci_commit('byway');
+	if (ok) return true;
+	// Несохранённый путь к удалённому ядру не должен уехать во флеш с чужим commit.
+	run([ 'uci', '-q', 'revert', 'byway' ]);
+	let df = pl_lines(run([ 'df', '-k', '/etc/config' ]).out)[1] ?? '';
+	logf('движок: путь %s не записан: uci set код %s (%s), df: %s', p, r.code, trim(r.out), df);
+	warnf('путь к движку не записался в настройки: byway set xray_bin %s', p);
+	return false;
 }
 
 function en_svc(a) { run([ '/etc/init.d/byway', a ]); }
@@ -256,6 +267,15 @@ function en_ram() {
 				dief('копию прежней версии %s для отката не сделать — замена не начата', E.ov);
 		}
 	}
+	// Прогноз до остановки: отказ после неё стоил бы дому минуты без туннеля.
+	// Остановка возвращает только анонимную память Xray: страницы бинарника
+	// MemAvailable и так считает свободными (стенд 2026-11-10).
+	let xa = match(fs.readfile('/proc/' + (st_xray_pid() ?? '') + '/status') ?? '', /\nRssAnon:[ \t]*([0-9]+)/);
+	let pk = en_mem_kb() + (xa ? int(xa[1]) : 0), need = int(E.sz) + EN_RAM_SPARE;
+	if (pk * 1024 < need) {
+		fs.unlink(E.orb);
+		dief('памяти не хватит: после остановки службы будет около %s МБ, нужно %s МБ — ничего не тронуто. Освободить память можно, остановив на время тяжёлые службы (например, zapret)', en_mb(pk), en_mb(need / 1024));
+	}
 	fs.writefile(E.d + '/ram.json', sprintf('%J', E));
 	fs.writefile(EN_RAMF, '');
 	let rc = sys([ 'sh', '-c', 'trap "" INT HUP; exec "$@"', 'sh', 'ucode', ...split(getenv('BW_UCRUN'), ' '), 'engine-ram', E.d ]);
@@ -314,8 +334,8 @@ function cmd_engine_ram(d) {
 	en_stage(_t('идёт замена — прерывать нельзя'));
 	sys([ 'sleep', '2' ]);
 	let mk = en_mem_kb();
-	if (mk * 1024 < int(E.sz) + 20971520) {
-		warnf('памяти после остановки мало: %s МБ', en_mb(mk));
+	if (mk * 1024 < int(E.sz) + EN_RAM_SPARE) {
+		warnf('памяти после остановки мало: %s МБ, нужно %s МБ', en_mb(mk), en_mb((int(E.sz) + EN_RAM_SPARE) / 1024));
 		en_ram_back();
 	}
 	let t = E.d + '/xray';
@@ -339,7 +359,15 @@ function cmd_engine_ram(d) {
 		en_ram_restore();
 	}
 	fs.unlink(t);
-	en_bin_set(E.new);
+	// Без записанного пути служба искала бы удалённое ядро и 2,5 минуты
+	// проверки шли бы без туннеля (2026-11-10): вторая попытка, иначе откат.
+	if (!en_bin_set(E.new)) {
+		sys([ 'sync' ]); sys([ 'sleep', '2' ]);
+		if (!en_bin_set(E.new)) {
+			fs.unlink(E.new);
+			en_ram_restore();
+		}
+	}
 	en_svc('start');
 	en_stage(_t('проверка туннеля на новом движке (до 2,5 минуты)'));
 	if (up_wait(E.tun0)) {
