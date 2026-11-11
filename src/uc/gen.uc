@@ -389,11 +389,13 @@ function g_dns_route() {
 	G.privnets = [ '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16',
 	               '172.16.0.0/12', '192.168.0.0/16', G.pool, '224.0.0.0/4', '240.0.0.0/4', ...b6 ];
 	// Итоговые правила freedom (26.5.9+) сверяют уже разрешённый адрес: имя
-	// из Host не уведёт direct в домашнюю сеть. blockDelay 0: иначе движок
-	// держит отказанное соединение 30-90 с.
+	// из Host не уведёт direct в домашнюю сеть. Задержка 0: иначе движок
+	// держит отказанное соединение 30-90 с. Поле с 26.11.9 -- delay (blockDelay
+	// там устарело), старшее ядро delay не знает и молча берёт 30-90 с.
 	G.route_strat = 'IPIfNonMatch';
 	G.final = null;
-	if (G.xver >= 260509) G.final = [ { action: 'block', blockDelay: 0, ip: G.privnets } ];
+	if (G.xver >= 261109) G.final = [ { action: 'block', delay: 0, ip: G.privnets } ];
+	else if (G.xver >= 260509) G.final = [ { action: 'block', blockDelay: 0, ip: G.privnets } ];
 	else G.route_strat = 'IPOnDemand';
 	// Запросы встроенного DNS идут через маршрутизацию: своё правило всегда,
 	// меняется цель.

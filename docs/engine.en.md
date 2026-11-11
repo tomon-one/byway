@@ -393,6 +393,7 @@ the config differently or refuses up front:
 | below 26.7.11 | vless and trojan without TLS or reality to a public address: refused, as by the engine from 26.7.11; `allow_insecure 1` lifts it. Private IPv4 addresses pass |
 | below 26.9.30 | hysteria2 port hopping (`mport`, a range in the port): a warning, the connection uses the main port only |
 | 26.9.8 and newer | for the direct outbound, name resolution (`UseIP`) goes into `sockopt`, not `settings`: the engine declared the old field deprecated |
+| 26.11.9 and newer | the block delay in the direct outbound's final rules goes into `delay`, not `blockDelay`: the engine declared the old field deprecated |
 
 A refusal is a message naming the required version and suggesting
 `byway core tested`; the working config is not changed. The refusals over
