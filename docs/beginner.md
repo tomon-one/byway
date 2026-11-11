@@ -45,7 +45,7 @@ byway лишь решает, что через него пустить.
 2. Вставьте строку установки и нажмите Enter:
 
    ```sh
-   sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/install.sh)"
+   sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.4.1/install.sh)"
    ```
 
    Если `raw.githubusercontent.com` недоступен, есть строка через зеркало —

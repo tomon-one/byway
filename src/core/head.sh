@@ -20,7 +20,7 @@ set -e
 # 0.3 Ford, 0.4 Ice Road, 0.5 Trail, 0.6 Bypass, 0.7 Country Lane, 0.8 Old
 # Road.
 # Автообновление ходит только внутри минорной версии (cmd_watch).
-BYWAY_NUM="0.4.0"
+BYWAY_NUM="0.4.1"
 BYWAY_NAME="Ice Road"
 BYWAY_VERSION="$BYWAY_NUM ($BYWAY_NAME)"
 # Откуда берутся обновления; чужая сборка меняет одно место.
@@ -31,20 +31,20 @@ BYWAY_REPO="tomon-one/byway"
 BYWAY_PUBKEY="RWQ9r7vQihS1LvQHytsWrPqBkUalRDrj6JBUInbi7KXlUUPHBMzFmvJl"
 # Версия Xray-core, на которой byway прогнан целиком: её ставит `byway engine
 # tested`. Та же в install.sh (XRAY_TESTED) -- править парой.
-XRAY_TESTED=26.10.21
+XRAY_TESTED=26.11.9
 # Суммы SHA2-256 архивов этой версии по сборкам: .dgst лежит рядом с архивом
 # на GitHub, а эти -- в подписанном выпуске byway. Вписывает
 # scripts/pc/xray-sums.py; тот же блок -- в install.sh.
-XRAY_TESTED_SUMS="linux-32=dde802c3c932aa1b8cdc5010de81b54719ff5e334f7c4800354825ed6c9d68b6
-linux-64=0eec3ed4163c273d8c8bf821f7d219e257921cf584aa3fb970715e458e631978
-linux-arm32-v6=cbc12722c484c022f9e31593bd29d5cd4593c98397514ebfc3289953eeb36a64
-linux-arm32-v7a=89978508fa2ebb4a1e661f2c6ed51d241c4091b3cd17f4c65fdf20baae7dedac
-linux-arm64-v8a=d1304946c486d98e6b886e9b931eaaaebb23835b30e217638037b7f2721d4e9c
-linux-mips32=3de6ee6a5142fb1372334ad1411f61f1b0a3f9d622a748a6080a29dc007ba207
-linux-mips32le=1e9953aecee4024d9da6427a42929817b53d1660f5122ec6b22629e11cab4012
-linux-mips64=b87d3fefa9add100dd9eab8504c1ce81a9f057dfe9dc906f28eb4fb5798833f5
-linux-mips64le=44e45c2fd113d6a96d63872717348b5c29a86fe15a6bd3abb3395f2d8b6ef7c2
-linux-riscv64=3045051037f5f543bd9e4787f331de9e8c83db0a072a26e49ef88512da5bfd48"
+XRAY_TESTED_SUMS="linux-32=225343a01db48e23c1d3091e7fa45971b0d12c20943927846a4a87da374e384d
+linux-64=b651f7e1d9966ee2c1b1ee1bf8b52c72771824d3065dce96bbc8bcc19ed95f82
+linux-arm32-v6=955be2b84854ba566b2afc6c20186967e5a0ce7b2078e0f4e9a99e3aac662f38
+linux-arm32-v7a=19c51e08a6562705fb1cb032a84fd87df21d7e27b194f035be7e754dbe3a97b3
+linux-arm64-v8a=64ed6858982a7f5eb85d88b811089063bd4f17561f4c8f44e0f1dc8e6f6430be
+linux-mips32=4ceb213ad7cd8c1fc9250bb886e730665cddb9dfe891291b09231a204f8ba6ef
+linux-mips32le=793dc40029283eb9ccead188b05abf0d34b64aab16ad1f6eadd204963a54837b
+linux-mips64=5dfa670184e3174e9d1a585116c2abff9049992dec5dfd763b067a53030153ed
+linux-mips64le=bc84f436a76c429e5bab46ef0c2338ee67d049ec5f9b7676611ead2bc0276f77
+linux-riscv64=296884b8601ee95dba31e6664c6121d80e33697382a1f564f05b028e61601a84"
 
 CONF=/etc/config/byway
 LISTS=/etc/byway

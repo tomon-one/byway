@@ -48,7 +48,7 @@ through it.
 2. Paste the install line and press Enter:
 
    ```sh
-   sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/install.sh)"
+   sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.4.1/install.sh)"
    ```
 
    If `raw.githubusercontent.com` is unreachable, there is a line through a

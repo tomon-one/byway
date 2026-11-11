@@ -51,7 +51,7 @@ The installer asks for a version only when there is no engine on the system
 yet. A number can be typed by hand, or one of these picked:
 
 - **the one verified with byway** — the default. byway is verified on it end
-  to end, with the tunnel up and real traffic. Currently `26.10.21`;
+  to end, with the tunnel up and real traffic. Currently `26.11.9`;
   `byway core tested` installs the same.
 - **the newest one, pre-releases included** — the first release in the XTLS
   list (`byway core newest`).

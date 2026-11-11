@@ -20,7 +20,7 @@ Xray-core](https://img.shields.io/badge/%D1%8F%D0%B4%D1%80%D0%BE-Xray--core-333)
 
 > ### ⚠️ Прочитайте до установки
 >
-> **Версия 0.4.0.** byway каждый день работает на
+> **Версия 0.4.1.** byway каждый день работает на
 > одном роутере: около 700 доменов, 300 подсетей, семья, которая сразу замечает
 > поломку. Но всё ещё на **одном** — другого железа у автора не было.
 >
@@ -190,7 +190,7 @@ OpenWrt уже с 22.03, а с GitHub byway ставит его на любую 
 **Способ 1 — одной строкой:**
 
 ```sh
-sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/install.sh)"
+sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.4.1/install.sh)"
 ```
 
 **Способ 2 — через зеркало,** если `raw.githubusercontent.com` недоступен.
@@ -201,7 +201,7 @@ sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/inst
 
 ```sh
 wget -T 10 -O /tmp/byway-install.sh \
-  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.4.0/install.sh" \
+  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.4.1/install.sh" \
   && sh /tmp/byway-install.sh
 ```
 
@@ -215,8 +215,8 @@ wget -T 10 -O /tmp/byway-install.sh \
 
 ```sh
 cd /tmp
-wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.4.0.tar.gz
-tar xzf byway.tar.gz && cd byway-0.4.0
+wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.4.1.tar.gz
+tar xzf byway.tar.gz && cd byway-0.4.1
 sh install.sh
 ```
 
@@ -628,7 +628,7 @@ permitted` — резолвер отдал подставной адрес, а �
 
 ```sh
 sh -c "$(curl -fsSL --proxy http://127.0.0.1:1603 \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/install.sh)"
+  https://raw.githubusercontent.com/tomon-one/byway/v0.4.1/install.sh)"
 ```
 
 **Проверка версии и установка — разные настройки,** но установка работает
@@ -821,7 +821,7 @@ byway-uninstall --help       # аргументы
 
 ```sh
 wget -O /tmp/byway-uninstall \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/uninstall.sh
+  https://raw.githubusercontent.com/tomon-one/byway/v0.4.1/uninstall.sh
 sh /tmp/byway-uninstall
 ```
 

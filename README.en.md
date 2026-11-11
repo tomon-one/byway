@@ -20,7 +20,7 @@ your VPN, the rest goes direct. The engine is
 
 > ### ⚠️ Read this before installing
 >
-> **Version 0.4.0.** byway runs every day on one
+> **Version 0.4.1.** byway runs every day on one
 > router: about 700 domains, 300 subnets, and a family that notices breakage
 > immediately. But still just **one** — the author had no other hardware.
 >
@@ -199,7 +199,7 @@ Worth knowing before installing, not after.
 **Way 1 — one line:**
 
 ```sh
-sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/install.sh)"
+sh -c "$(wget -O - https://raw.githubusercontent.com/tomon-one/byway/v0.4.1/install.sh)"
 ```
 
 **Way 2 — through a mirror,** if `raw.githubusercontent.com` is unreachable.
@@ -211,7 +211,7 @@ first.
 
 ```sh
 wget -T 10 -O /tmp/byway-install.sh \
-  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.4.0/install.sh" \
+  "https://v4.gh-proxy.org/raw.githubusercontent.com/tomon-one/byway/v0.4.1/install.sh" \
   && sh /tmp/byway-install.sh
 ```
 
@@ -226,8 +226,8 @@ the OpenWrt packages.
 
 ```sh
 cd /tmp
-wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.4.0.tar.gz
-tar xzf byway.tar.gz && cd byway-0.4.0
+wget -O byway.tar.gz https://github.com/tomon-one/byway/archive/refs/tags/v0.4.1.tar.gz
+tar xzf byway.tar.gz && cd byway-0.4.1
 sh install.sh
 ```
 
@@ -660,7 +660,7 @@ through a proxy):
 
 ```sh
 sh -c "$(curl -fsSL --proxy http://127.0.0.1:1603 \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/install.sh)"
+  https://raw.githubusercontent.com/tomon-one/byway/v0.4.1/install.sh)"
 ```
 
 **Checking for a version and installing one are separate settings,** but
@@ -865,7 +865,7 @@ installers from 0.1.4 on put it in place. Download it separately:
 
 ```sh
 wget -O /tmp/byway-uninstall \
-  https://raw.githubusercontent.com/tomon-one/byway/v0.4.0/uninstall.sh
+  https://raw.githubusercontent.com/tomon-one/byway/v0.4.1/uninstall.sh
 sh /tmp/byway-uninstall
 ```
 
