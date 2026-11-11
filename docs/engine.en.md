@@ -59,12 +59,15 @@ yet. A number can be typed by hand, or one of these picked:
   (`byway core stable`).
 - **none** — the path to your own engine is set later.
 
-**"Stable" lags behind for Xray-core.** XTLS marks everything newer than
-`26.3.27` as a pre-release, and `releases/latest` skips pre-releases. So
-"stable" is currently `26.3.27`, and the version verified with byway is
-formally a pre-release. The difference is practical: some keys
-(`obfs=salamander` on hysteria2, see the table below) do not build on
-`26.3.27`.
+**"Stable" can lag behind for Xray-core.** `releases/latest` skips
+pre-releases, and from `26.4.17` to `26.9.30` XTLS marked every release as one:
+"stable" stayed `26.3.27` for half a year, and some keys (`obfs=salamander` on
+hysteria2, see the table below) do not build on it. Since `26.10.21` releases
+are stable again, and "stable" now matches the verified version.
+
+**An engine older than `26.10.31` is worth replacing.** It accepts MPTCP by
+default (Go 1.24+ turns it on by itself), and a vulnerability in the Linux kernel
+lets MPTCP give remote root ([XTLS note](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31)). Replace it with `byway core tested`.
 
 The installer picks the source itself: GitHub first, the OpenWrt packages if
 that fails. With less than 25 MB free on flash, GitHub is not tried. In the
@@ -305,7 +308,7 @@ of connections to one address is a reason to block it. Details:
 is in `golang.org/x/net` v0.60.0
 ([golang/go#81646](https://github.com/golang/go/issues/81646)); Xray includes
 it since release 26.10.21 (`x/net` v0.61.0; XTLS withdrew release 26.10.17).
-The simplest way is to install 26.10.21 or a newer one: `byway core 26.10.21`. The build below is only needed
+The simplest way is to install 26.10.21 or a newer one: `byway core tested`. The build below is only needed
 to stay on versions 26.9.8–26.10.10.
 
 Only xhttp keys are affected. With such an engine `byway doctor` warns

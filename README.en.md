@@ -752,10 +752,14 @@ If Xray-core is already installed (from the OpenWrt packages, for example), the
 installer takes it and does not ask about the version. To replace it later —
 `byway core`, below.
 
-⚠️ **"Newest" and "stable" are different things for Xray-core, and the gap is
-wider than it looks.** XTLS marks everything newer than `26.3.27` as a
-pre-release — so "the newest stable one" is months behind, and what runs on
-the developer's router is a pre-release.
+⚠️ **"Newest" and "stable" can be months apart for Xray-core.** From
+`26.4.17` to `26.9.30` XTLS marked every release as a pre-release, and "the
+newest stable one" stayed `26.3.27` all that time. Since `26.10.21` releases are
+stable again: the newest stable one and the one tested with byway are now the same.
+
+⚠️ **An engine older than `26.10.31` is worth replacing.** It accepts MPTCP by
+default, and a vulnerability in the Linux kernel lets MPTCP give remote root
+([XTLS note](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31)). Replace it with `byway core tested`.
 
 ⚠️ **On MIPS without a floating-point unit there is no GitHub engine at all** —
 and that is almost every inexpensive MIPS router. XTLS publishes `mips32le` and
